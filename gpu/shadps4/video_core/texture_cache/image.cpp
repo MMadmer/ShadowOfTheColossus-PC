@@ -103,12 +103,54 @@ void UniqueImage::Destroy() {
     }
 }
 
+// sotc: on small cards the sparse buffer arena (VRAM only on NVIDIA, never released) needs room
+// that images would otherwise take first. Once video memory use passes the budget minus this
+// reserve, new images go to system memory. SOTC_VRAM_RESERVE_MB sets it (0 = off); by default
+// 900 MB on cards with at most 3 GB of video memory, off on bigger ones.
+static bool ImageShouldAvoidVram(VmaAllocator allocator) {
+    static const s64 reserve = [allocator]() -> s64 {
+        const VkPhysicalDeviceMemoryProperties* props{};
+        vmaGetMemoryProperties(allocator, &props);
+        u64 vram = 0;
+        for (u32 i = 0; i < props->memoryHeapCount; ++i) {
+            if (props->memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) {
+                vram = std::max<u64>(vram, props->memoryHeaps[i].size);
+            }
+        }
+        s64 mb = vram <= (3ULL << 30) ? 900 : 0;
+        if (const char* v = std::getenv("SOTC_VRAM_RESERVE_MB")) {
+            mb = std::strtoll(v, nullptr, 10);
+        }
+        if (mb > 0) {
+            LOG_WARNING(Render_Vulkan, "sotc: keeping {} MB of video memory for buffers; "
+                        "images past that go to system memory", mb);
+        }
+        return mb << 20;
+    }();
+    if (reserve <= 0) {
+        return false;
+    }
+    const VkPhysicalDeviceMemoryProperties* props{};
+    vmaGetMemoryProperties(allocator, &props);
+    VmaBudget budgets[VK_MAX_MEMORY_HEAPS]{};
+    vmaGetHeapBudgets(allocator, budgets);
+    for (u32 i = 0; i < props->memoryHeapCount; ++i) {
+        if ((props->memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) &&
+            props->memoryHeaps[i].size > (512ULL << 20) &&
+            static_cast<s64>(budgets[i].usage) + reserve > static_cast<s64>(budgets[i].budget)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void UniqueImage::Create(const vk::ImageCreateInfo& image_ci) {
     this->image_ci = image_ci;
     ASSERT(!image);
+    const bool avoid_vram = ImageShouldAvoidVram(allocator);
     const VmaAllocationCreateInfo alloc_ci = {
         .flags = VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT,
-        .usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+        .usage = avoid_vram ? VMA_MEMORY_USAGE_AUTO_PREFER_HOST : VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
         .requiredFlags = 0,
         .preferredFlags = 0,
         .pool = VK_NULL_HANDLE,
