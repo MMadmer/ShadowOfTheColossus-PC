@@ -432,6 +432,10 @@ void LoadRenderDoc() {
         const auto get_api = reinterpret_cast<pRENDERDOC_GetAPI>(GetProcAddress(mod, "RENDERDOC_GetAPI"));
         if (get_api && get_api(eRENDERDOC_API_Version_1_6_0, reinterpret_cast<void**>(&rdoc_api)) == 1) {
             rdoc_api->SetCaptureKeys(nullptr, 0);
+            // sotc: SOTC_RDOC_PATH=<template>: where the captures go (default: RenderDoc's temp).
+            if (const char* path = std::getenv("SOTC_RDOC_PATH")) {
+                rdoc_api->SetCaptureFilePathTemplate(path);
+            }
             std::fprintf(stderr, "sotc: RenderDoc attached (SOTC_RDOC_TRIGGER captures a submission)\n");
         }
     }

@@ -379,7 +379,47 @@ void EmitContext::DefineInputs() {
             sample_mask_in = DefineVariable(TypeArray(U32[1], u32_one_value),
                                             spv::BuiltIn::SampleMask, spv::StorageClass::Input);
         }
-        if (info.loads.GetAny(IR::Attribute::BaryCoordSmooth)) {
+        // sotc: Profile::barycentric_via_gs: the inputs are packed from location 0 (a per-vertex
+        // attribute takes three locations), then the emulated clip distances and the two
+        // barycentric vectors. The pipeline's geometry shader writes them; it finds them by name
+        // (gsb_pv<param>, gsb_in<param>, cldist_attr0, gsb_bary, gsb_bary_np).
+        const bool via_gs = profile.barycentric_via_gs;
+        std::array<u32, IR::NumParams> gs_location{};
+        u32 gs_clip_location = 0;
+        if (via_gs) {
+            const bool clip_inputs = runtime_info.hw.fs.clip_distance_emulation;
+            const auto count = runtime_info.hw.fs.num_inputs - (clip_inputs ? 1 : 0);
+            u32 next = 0;
+            for (u32 i = 0; i < count; i++) {
+                if (runtime_info.hw.fs.inputs[i].IsDefault()) {
+                    continue;
+                }
+                gs_location[i] = next;
+                next += info.fs_interpolation[i].primary == Qualifier::PerVertex ? 3 : 1;
+            }
+            gs_clip_location = next;
+            next += clip_inputs ? 1 : 0;
+            const u32 bary_location = next;
+            const u32 bary_np_location = next + 1;
+            if (info.loads.GetAny(IR::Attribute::BaryCoordSmooth) ||
+                info.loads.GetAny(IR::Attribute::BaryCoordPullModel) ||
+                info.loads.GetAny(IR::Attribute::BaryCoordSmoothCentroid) ||
+                info.loads.GetAny(IR::Attribute::BaryCoordSmoothSample)) {
+                bary_coord = Name(DefineInput(F32[3], bary_location), "gsb_bary");
+            }
+            if (info.loads.GetAny(IR::Attribute::BaryCoordSmoothSample) && !ValidId(sample_index)) {
+                sample_index =
+                    DefineVariable(U32[1], spv::BuiltIn::SampleId, spv::StorageClass::Input);
+                Decorate(sample_index, spv::Decoration::Flat);
+            }
+            if (info.loads.GetAny(IR::Attribute::BaryCoordNoPersp) ||
+                info.loads.GetAny(IR::Attribute::BaryCoordNoPerspSample)) {
+                bary_coord_nopersp = Name(DefineInput(F32[3], bary_np_location), "gsb_bary_np");
+                Decorate(bary_coord_nopersp, spv::Decoration::NoPerspective);
+                bary_coord_nopersp_sample = bary_coord_nopersp;
+            }
+        }
+        if (info.loads.GetAny(IR::Attribute::BaryCoordSmooth) && !via_gs) {
             if (profile.supports_amd_shader_explicit_vertex_parameter) {
                 bary_coord_smooth = DefineVariable(F32[2], spv::BuiltIn::BaryCoordSmoothAMD,
                                                    spv::StorageClass::Input);
@@ -388,7 +428,7 @@ void EmitContext::DefineInputs() {
                     DefineVariable(F32[3], spv::BuiltIn::BaryCoordKHR, spv::StorageClass::Input);
             }
         }
-        if (info.loads.GetAny(IR::Attribute::BaryCoordPullModel)) {
+        if (info.loads.GetAny(IR::Attribute::BaryCoordPullModel) && !via_gs) {
             if (profile.supports_amd_shader_explicit_vertex_parameter) {
                 bary_coord_pull_model = DefineVariable(F32[3], spv::BuiltIn::BaryCoordPullModelAMD,
                                                        spv::StorageClass::Input);
@@ -397,7 +437,7 @@ void EmitContext::DefineInputs() {
                     DefineVariable(F32[3], spv::BuiltIn::BaryCoordKHR, spv::StorageClass::Input);
             }
         }
-        if (info.loads.GetAny(IR::Attribute::BaryCoordSmoothCentroid)) {
+        if (info.loads.GetAny(IR::Attribute::BaryCoordSmoothCentroid) && !via_gs) {
             if (profile.supports_amd_shader_explicit_vertex_parameter) {
                 bary_coord_smooth_centroid = DefineVariable(
                     F32[2], spv::BuiltIn::BaryCoordSmoothCentroidAMD, spv::StorageClass::Input);
@@ -406,7 +446,7 @@ void EmitContext::DefineInputs() {
                     DefineVariable(F32[3], spv::BuiltIn::BaryCoordKHR, spv::StorageClass::Input);
             }
         }
-        if (info.loads.GetAny(IR::Attribute::BaryCoordSmoothSample)) {
+        if (info.loads.GetAny(IR::Attribute::BaryCoordSmoothSample) && !via_gs) {
             if (profile.supports_amd_shader_explicit_vertex_parameter) {
                 bary_coord_smooth_sample = DefineVariable(
                     F32[2], spv::BuiltIn::BaryCoordSmoothSampleAMD, spv::StorageClass::Input);
@@ -423,7 +463,7 @@ void EmitContext::DefineInputs() {
                 }
             }
         }
-        if (info.loads.GetAny(IR::Attribute::BaryCoordNoPersp)) {
+        if (info.loads.GetAny(IR::Attribute::BaryCoordNoPersp) && !via_gs) {
             if (profile.supports_amd_shader_explicit_vertex_parameter) {
                 bary_coord_nopersp = DefineVariable(F32[2], spv::BuiltIn::BaryCoordNoPerspAMD,
                                                     spv::StorageClass::Input);
@@ -432,7 +472,7 @@ void EmitContext::DefineInputs() {
                                                     spv::StorageClass::Input);
             }
         }
-        if (info.loads.GetAny(IR::Attribute::BaryCoordNoPerspSample)) {
+        if (info.loads.GetAny(IR::Attribute::BaryCoordNoPerspSample) && !via_gs) {
             if (profile.supports_amd_shader_explicit_vertex_parameter) {
                 bary_coord_nopersp_sample = DefineVariable(
                     F32[2], spv::BuiltIn::BaryCoordNoPerspSampleAMD, spv::StorageClass::Input);
@@ -457,6 +497,14 @@ void EmitContext::DefineInputs() {
             const auto [primary, auxiliary] = info.fs_interpolation[i];
             const Id type = F32[num_components];
             const Id attr_id = [&] {
+                if (via_gs) {
+                    if (primary == Qualifier::PerVertex) {
+                        return Name(DefineInput(TypeArray(type, ConstU32(3U)), gs_location[i]),
+                                    fmt::format("gsb_pv{}", input.param_index));
+                    }
+                    return Name(DefineInput(type, gs_location[i]),
+                                fmt::format("gsb_in{}", input.param_index));
+                }
                 const auto bind_location = input.param_index + (has_clip_distance_inputs ? 1 : 0);
                 if (primary == Qualifier::PerVertex &&
                     profile.supports_fragment_shader_barycentric) {
@@ -465,7 +513,10 @@ void EmitContext::DefineInputs() {
                 }
                 return Name(DefineInput(type, bind_location), fmt::format("fs_in_attr{}", i));
             }();
-            if (primary == Qualifier::PerVertex) {
+            if (primary == Qualifier::PerVertex && via_gs) {
+                // The three vertex values, the same at every vertex of the primitive.
+                Decorate(attr_id, spv::Decoration::Flat);
+            } else if (primary == Qualifier::PerVertex) {
                 Decorate(attr_id, profile.supports_amd_shader_explicit_vertex_parameter
                                       ? spv::Decoration::ExplicitInterpAMD
                                       : spv::Decoration::PerVertexKHR);
@@ -483,7 +534,8 @@ void EmitContext::DefineInputs() {
 
         if (has_clip_distance_inputs) {
             const auto type = F32[MaxEmulatedClipDistances];
-            const auto attr_id = Name(DefineInput(type, 0), fmt::format("cldist_attr{}", 0));
+            const auto attr_id =
+                Name(DefineInput(type, via_gs ? gs_clip_location : 0), fmt::format("cldist_attr{}", 0));
             input_params[num_inputs] = GetAttributeInfo(AmdGpu::NumberFormat::Float, attr_id,
                                                         MaxEmulatedClipDistances, false);
         }

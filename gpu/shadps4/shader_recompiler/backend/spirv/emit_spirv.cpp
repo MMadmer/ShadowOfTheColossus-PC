@@ -431,6 +431,10 @@ void SetupCapabilities(const Info& info, const Profile& profile, const RuntimeIn
     if (info.hw_stage == HwStage::Fragment) {
         if (profile.supports_amd_shader_explicit_vertex_parameter) {
             ctx.AddExtension("SPV_AMD_shader_explicit_vertex_parameter");
+        } else if (profile.barycentric_via_gs) {
+            // sotc: barycentrics are a plain input (geometry shader), sampled at the centroid or
+            // a sample with the GLSL interpolation functions.
+            ctx.AddCapability(spv::Capability::InterpolationFunction);
         } else if (profile.supports_fragment_shader_barycentric) {
             ctx.AddExtension("SPV_KHR_fragment_shader_barycentric");
             ctx.AddCapability(spv::Capability::FragmentBarycentricKHR);

@@ -2,6 +2,11 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <atomic>
+#include <vector>
+#include <string>
+#include <chrono>
+#include <algorithm>
+#include <unordered_map>
 #include <utility>
 #include <cstdlib>
 #include <boost/preprocessor/stringize.hpp>
@@ -102,6 +107,53 @@ Liverpool::~Liverpool() {
         back_thread.request_stop();
         back_thread.join();
     }
+}
+
+// sotc: SOTC_CMD_HIST=1: draws and dispatches per pipeline, the 24 most frequent every 10 s
+// (stage hashes, kind, count per second): which shaders the command count comes from.
+static void NoteCommandHistogram(const Vulkan::Pipeline* pipeline, int kind) {
+    static const bool enabled = std::getenv("SOTC_CMD_HIST") != nullptr;
+    if (!enabled) {
+        return;
+    }
+    struct Entry {
+        u64 count;
+        int kind;
+        std::string hashes;
+    };
+    static std::unordered_map<const Vulkan::Pipeline*, Entry> counts;
+    static auto last = std::chrono::steady_clock::now();
+    auto [it, is_new] = counts.try_emplace(pipeline, Entry{0, kind, {}});
+    if (is_new && pipeline) {
+        for (const Shader::Info* info : pipeline->GetStages()) {
+            if (info) {
+                it->second.hashes += fmt::format("{}:{:08x} ", u32(info->sw_stage), info->pgm_hash);
+            }
+        }
+    }
+    ++it->second.count;
+    const auto now = std::chrono::steady_clock::now();
+    const double seconds = std::chrono::duration<double>(now - last).count();
+    if (seconds < 10.0) {
+        return;
+    }
+    last = now;
+    std::vector<std::pair<u64, const Entry*>> sorted;
+    u64 total = 0;
+    for (const auto& [p, e] : counts) {
+        sorted.emplace_back(e.count, &e);
+        total += e.count;
+    }
+    std::sort(sorted.begin(), sorted.end(), [](auto& a, auto& b) { return a.first > b.first; });
+    std::string report = fmt::format("SOTC cmd hist: {:.0f}/s in {} pipelines\n",
+                                     total / seconds, counts.size());
+    static constexpr const char* kinds[] = {"draw", "draw-ind", "dispatch", "disp-ind"};
+    for (size_t i = 0; i < std::min<size_t>(24, sorted.size()); ++i) {
+        report += fmt::format("  {:7.0f}/s {:9} {}\n", sorted[i].first / seconds,
+                              kinds[sorted[i].second->kind], sorted[i].second->hashes);
+    }
+    std::fputs(report.c_str(), stderr);
+    counts.clear();
 }
 
 static inline void CpuRelax() {
@@ -333,6 +385,7 @@ void Liverpool::SubmitDraw(bool is_indexed, u32 index_offset) {
     }
     WaitBackWrites();
     const auto* pipeline = rasterizer->LookupGraphicsPipeline(0, 0);
+    NoteCommandHistogram(pipeline, 0);
     BackOp& op = BackAlloc();
     op.kind = BackOp::Kind::Draw;
     op.is_indexed = is_indexed;
@@ -352,6 +405,7 @@ void Liverpool::SubmitDrawIndirect(bool is_indexed, VAddr address, u32 offset, u
     WaitBackWrites();
     const auto* pipeline =
         rasterizer->LookupGraphicsPipeline(vertex_sgpr_offset, instance_sgpr_offset);
+    NoteCommandHistogram(pipeline, 1);
     BackOp& op = BackAlloc();
     op.kind = BackOp::Kind::DrawIndirect;
     op.is_indexed = is_indexed;
@@ -377,6 +431,7 @@ void Liverpool::SubmitDispatch(bool indirect, VAddr address, u32 offset, u32 siz
     }
     WaitBackWrites();
     const auto* pipeline = rasterizer->LookupComputePipeline();
+    NoteCommandHistogram(pipeline, indirect ? 3 : 2);
     BackOp& op = BackAlloc();
     op.kind = indirect ? BackOp::Kind::DispatchIndirect : BackOp::Kind::Dispatch;
     op.address = address;

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <cstdlib>
+#include <cstring>
 #include <ranges>
 #include <xxhash.h>
 
@@ -300,21 +301,35 @@ void PipelineCache::ApplyPortableProfile(Shader::Profile& p, vk::DriverId driver
     if ((v && v[0] == '0') || driver != vk::DriverId::eNvidiaProprietary) {
         return;
     }
+    // SOTC_PORTABLE_ONLY=<groups>: caps only these groups (debugging): f16, denorm, atomics,
+    // bary, stencil.
+    const char* only = std::getenv("SOTC_PORTABLE_ONLY");
+    const auto group = [only](const char* name) { return !only || std::strstr(only, name); };
     p.max_viewport_width = std::min(p.max_viewport_width, 32768u);
     p.max_viewport_height = std::min(p.max_viewport_height, 32768u);
     p.max_shared_memory_size = std::min(p.max_shared_memory_size, 49152u);
-    p.support_float16 = false;
-    p.support_fp16_denorm_flush = false;
-    p.support_fp16_round_to_zero = false;
-    p.support_fp32_denorm_preserve = false;
-    p.support_fp32_denorm_flush = false;
-    p.support_fp64_denorm_preserve = false;
-    p.support_fp64_denorm_flush = false;
-    p.supports_buffer_fp32_atomic_min_max = false;
-    p.supports_image_fp32_atomic_min_max = false;
-    p.supports_fragment_shader_barycentric = false;
-    p.needs_manual_interpolation = false;
-    p.supports_shader_stencil_export = false;
+    if (group("f16")) {
+        p.support_float16 = false;
+        p.support_fp16_denorm_flush = false;
+        p.support_fp16_round_to_zero = false;
+    }
+    if (group("denorm")) {
+        p.support_fp32_denorm_preserve = false;
+        p.support_fp32_denorm_flush = false;
+        p.support_fp64_denorm_preserve = false;
+        p.support_fp64_denorm_flush = false;
+    }
+    if (group("atomics")) {
+        p.supports_buffer_fp32_atomic_min_max = false;
+        p.supports_image_fp32_atomic_min_max = false;
+    }
+    if (group("bary")) {
+        p.supports_fragment_shader_barycentric = false;
+        p.needs_manual_interpolation = false;
+    }
+    if (group("stencil")) {
+        p.supports_shader_stencil_export = false;
+    }
     LOG_INFO(Render_Vulkan, "sotc: portable NVIDIA shader profile (SOTC_PORTABLE_SHADERS=0 turns "
                             "it off)");
 }
@@ -397,6 +412,19 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
         .supports_shader_stencil_export = instance_.IsShaderStencilExportSupported(),
     };
     ApplyPortableProfile(profile, instance.GetDriverID());
+    // sotc: NVIDIA before Turing has no fragment shader barycentrics, which nearly every SotC
+    // pixel shader needs (it reads the three vertex values of packed attributes): a geometry
+    // shader provides them (emit_spirv_bary_gs.h). SOTC_GS_BARY=0 turns it off (flat textures).
+    if (const char* v = std::getenv("SOTC_GS_BARY");
+        !(v && v[0] == '0') && instance.GetDriverID() == vk::DriverId::eNvidiaProprietary &&
+        !profile.supports_fragment_shader_barycentric &&
+        !profile.supports_amd_shader_explicit_vertex_parameter &&
+        instance.IsGeometryStageSupported()) {
+        profile.supports_fragment_shader_barycentric = true;
+        profile.needs_manual_interpolation = true;
+        profile.barycentric_via_gs = true;
+        LOG_INFO(Render_Vulkan, "sotc: barycentrics through a geometry shader");
+    }
     WarmUp();
     LoadDriverCache(); // sotc: when the warm-up did not (no or a fresh shader cache)
     driver_cache_saver = std::jthread([this](std::stop_token token) { DriverCacheSaver(token); });
@@ -411,6 +439,31 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
 }
 
 PipelineCache::~PipelineCache() = default;
+
+void PipelineCache::NoteModuleIo(vk::ShaderModule module, std::span<const u32> spirv) {
+    if (!profile.barycentric_via_gs || !module) {
+        return;
+    }
+    auto io = Shader::Backend::SPIRV::ParseShaderIo(spirv);
+    std::scoped_lock lock{module_io_mutex};
+    module_io.insert_or_assign(static_cast<VkShaderModule>(module), std::move(io));
+}
+
+std::array<const Shader::Backend::SPIRV::ShaderIo*, MaxShaderStages> PipelineCache::ModuleIos(
+    const std::array<vk::ShaderModule, MaxShaderStages>& stage_modules) {
+    std::array<const Shader::Backend::SPIRV::ShaderIo*, MaxShaderStages> ios{};
+    if (!profile.barycentric_via_gs) {
+        return ios;
+    }
+    std::scoped_lock lock{module_io_mutex};
+    for (size_t i = 0; i < MaxShaderStages; ++i) {
+        if (const auto it = module_io.find(static_cast<VkShaderModule>(stage_modules[i]));
+            it != module_io.end()) {
+            ios[i] = &it->second;
+        }
+    }
+    return ios;
+}
 
 // sotc: pipelines built during the game are added to the stored driver cache at most once a
 // minute, off the GPU threads.
@@ -463,6 +516,7 @@ void PipelineCache::QueueAsyncPipeline(u64 hash) {
         job->fetch_shader = *fetch_shader;
     }
     job->modules = modules;
+    job->ios = ModuleIos(modules);
     {
         std::scoped_lock lock{async_mutex};
         async_queue.push_back(std::move(job));
@@ -486,7 +540,7 @@ void PipelineCache::AsyncPipelineWorker(std::stop_token token) {
         job->pipeline = std::make_unique<GraphicsPipeline>(
             instance, scheduler, desc_heap, profile, job->key, *pipeline_cache, job->infos,
             job->runtime_infos, job->fetch_shader ? &*job->fetch_shader : nullptr, job->modules,
-            job->sdata, false, true);
+            job->sdata, false, true, &job->ios);
         SotcStats::frame_compiles.fetch_add(1, std::memory_order_relaxed);
         std::scoped_lock lock{async_mutex};
         async_done.push_back(std::move(job));
@@ -551,9 +605,10 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
         const SotcStats::FrameTimer frame_timer{SotcStats::FramePipeline};
         SotcStats::frame_compiles.fetch_add(1, std::memory_order_relaxed);
         GraphicsPipeline::SerializationSupport sdata{};
+        const auto ios = ModuleIos(modules);
         it.value() = std::make_unique<GraphicsPipeline>(
             instance, scheduler, desc_heap, profile, graphics_key, *pipeline_cache, infos,
-            runtime_infos, fetch_shader, modules, sdata, false);
+            runtime_infos, fetch_shader, modules, sdata, false, false, &ios);
 
         RegisterPipelineData(graphics_key, pipeline_hash, sdata);
         ++num_new_pipelines;
@@ -862,8 +917,10 @@ vk::ShaderModule PipelineCache::CompileModule(Shader::Info& info, Shader::Runtim
     if (is_patched) {
         LOG_INFO(Loader, "Loaded patch for {} shader {:#x}", info.hw_stage, info.pgm_hash);
         module = CompileSPV(*patch, instance.GetDevice());
+        NoteModuleIo(module, *patch);
     } else {
         module = CompileSPV(spv, instance.GetDevice());
+        NoteModuleIo(module, spv);
     }
     phase(3);
 

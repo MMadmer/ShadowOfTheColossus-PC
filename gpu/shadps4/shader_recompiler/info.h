@@ -149,6 +149,9 @@ struct Info : InfoPersistent {
     bool translation_failed{};
 
     std::array<Interpolation, IR::NumParams> fs_interpolation{};
+    /// sotc: Profile::barycentric_via_gs: the attributes read per vertex (V_INTERP_MOV of P10 or
+    /// P20, or P0 of an interpolated attribute); only these are interpolated by hand.
+    u64 fs_pervertex_mask{};
 
     Info() = default;
     Info(HwStage stage_, SwStage l_stage_, ShaderParams params)

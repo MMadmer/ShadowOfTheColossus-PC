@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "shader_recompiler/backend/spirv/emit_spirv_bary_gs.h"
+
 #include <boost/container/static_vector.hpp>
 #include <xxhash.h>
 
@@ -90,8 +92,15 @@ public:
                      std::span<const Shader::RuntimeInfo, MaxShaderStages> runtime_infos,
                      const Shader::Gcn::FetchShaderData* fetch_shader,
                      std::span<const vk::ShaderModule> modules, SerializationSupport& sdata,
-                     bool preloading, bool async_build = false);
+                     bool preloading, bool async_build = false,
+                     const std::array<const Shader::Backend::SPIRV::ShaderIo*, MaxShaderStages>*
+                         ios = nullptr);
     ~GraphicsPipeline();
+
+    /// sotc: the geometry shader of Profile::barycentric_via_gs (null when it cannot be made).
+    vk::ShaderModule BuildBarycentricGs(
+        const std::array<const Shader::Backend::SPIRV::ShaderIo*, MaxShaderStages>& ios,
+        bool aux_tessellation);
 
     const Shader::Gcn::FetchShaderData& GetFetchShader() const noexcept {
         return fetch_shader;

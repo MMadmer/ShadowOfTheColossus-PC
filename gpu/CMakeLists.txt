@@ -10,6 +10,12 @@ if (NOT CMAKE_BUILD_TYPE)
 endif()
 # Frame pointers keep the loader's thread dumps (watchdog, SIGUSR2 sampling) walkable.
 add_compile_options(-fno-omit-frame-pointer)
+# sotc: the port already requires a Haswell / Zen CPU (BMI1/LZCNT/MOVBE check in probe.c), which
+# all have x86-64-v3 (AVX2, BMI2, FMA): use it. BB_MARCH="" builds for any x86-64.
+set(BB_MARCH "x86-64-v3" CACHE STRING "-march for the port (empty: none)")
+if (BB_MARCH)
+    add_compile_options(-march=${BB_MARCH} -mtune=skylake)
+endif()
 
 # bbport: link-time optimization (BB_LTO, default on) and profile-guided optimization
 # (BB_PGO: off, generate = instrumented build writing into BB_PGO_DIR, use = build with that

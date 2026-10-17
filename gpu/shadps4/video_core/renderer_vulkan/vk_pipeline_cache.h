@@ -10,6 +10,7 @@
 #include <mutex>
 #include <optional>
 #include <thread>
+#include <unordered_map>
 #include <variant>
 #include <tsl/robin_map.h>
 #include "shader_recompiler/profile.h"
@@ -145,6 +146,7 @@ private:
         std::array<vk::ShaderModule, MaxShaderStages> modules{};
         GraphicsPipeline::SerializationSupport sdata{};
         std::unique_ptr<GraphicsPipeline> pipeline;
+        std::array<const Shader::Backend::SPIRV::ShaderIo*, MaxShaderStages> ios{};
     };
     bool AsyncPipelineEligible() const;
     void QueueAsyncPipeline(u64 hash);
@@ -158,6 +160,14 @@ private:
         std::function<bool()> install;
     };
     std::vector<PreloadJob>* preload_jobs{};
+
+    /// sotc: Profile::barycentric_via_gs: the interface of every shader module (its fragment
+    /// inputs say which geometry shader the pipeline needs). Entries are never removed.
+    void NoteModuleIo(vk::ShaderModule module, std::span<const u32> spirv);
+    std::array<const Shader::Backend::SPIRV::ShaderIo*, MaxShaderStages> ModuleIos(
+        const std::array<vk::ShaderModule, MaxShaderStages>& stage_modules);
+    std::mutex module_io_mutex;
+    std::unordered_map<VkShaderModule, Shader::Backend::SPIRV::ShaderIo> module_io;
 
     /// sotc: the driver's pipeline cache, kept with the shader cache (see LoadDriverCache).
     void LoadDriverCache();

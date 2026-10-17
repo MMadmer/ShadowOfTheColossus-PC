@@ -23,7 +23,7 @@
 namespace Serialization {
 /* You should increment versions below once corresponding serialization scheme is changed. */
 // Above both lines before the upstream merge: generation changed, so old caches are dropped.
-static constexpr u32 ShaderBinaryVersion = 31u;
+static constexpr u32 ShaderBinaryVersion = 33u; // sotc: 33 = barycentrics through a geometry shader
 static constexpr u32 ShaderMetaVersion = 20u;
 static constexpr u32 PipelineKeyVersion = 3u;
 } // namespace Serialization
@@ -368,19 +368,21 @@ bool PipelineCache::LoadGraphicsPipeline(Serialization::Archive& ar) {
             std::array<vk::ShaderModule, MaxShaderStages> modules;
             GraphicsPipeline::SerializationSupport sdata;
             std::unique_ptr<GraphicsPipeline> pipeline;
+            std::array<const Shader::Backend::SPIRV::ShaderIo*, MaxShaderStages> ios;
         };
         std::optional<Shader::Gcn::FetchShaderData> fetch;
         if (fetch_shader) {
             fetch = *fetch_shader;
         }
-        auto state = std::make_shared<State>(
-            State{graphics_key, infos, runtime_infos, std::move(fetch), modules, sdata, {}});
+        auto state = std::make_shared<State>(State{graphics_key, infos, runtime_infos,
+                                                   std::move(fetch), modules, sdata, {},
+                                                   ModuleIos(modules)});
         preload_jobs->push_back({
             [this, state] {
                 state->pipeline = std::make_unique<GraphicsPipeline>(
                     instance, scheduler, desc_heap, profile, state->key, *pipeline_cache,
                     state->infos, state->runtime_infos, state->fetch ? &*state->fetch : nullptr,
-                    state->modules, state->sdata, true);
+                    state->modules, state->sdata, true, false, &state->ios);
             },
             [this, state] {
                 if (!state->pipeline || !state->pipeline->Handle()) {
@@ -399,9 +401,10 @@ bool PipelineCache::LoadGraphicsPipeline(Serialization::Archive& ar) {
 
     {
         WarmUpTimer timer{warmup_times.pipelines};
+        const auto ios = ModuleIos(modules);
         it.value() = std::make_unique<GraphicsPipeline>(
             instance, scheduler, desc_heap, profile, graphics_key, *pipeline_cache, infos,
-            runtime_infos, fetch_shader, modules, sdata, true);
+            runtime_infos, fetch_shader, modules, sdata, true, false, &ios);
     }
 
     infos.fill(nullptr);
@@ -456,6 +459,7 @@ bool PipelineCache::LoadPipelineStage(Serialization::Archive& ar, size_t stage) 
             WarmUpTimer timer{warmup_times.modules};
             module = CompileSPV(spv, instance.GetDevice());
         }
+        NoteModuleIo(module, spv);
         it_pgm.value() = std::move(program);
     } else {
         const auto& it = std::ranges::find(it_pgm.value()->modules, spec, &Program::Module::spec);
@@ -475,6 +479,7 @@ bool PipelineCache::LoadPipelineStage(Serialization::Archive& ar, size_t stage) 
         } else {
             WarmUpTimer timer{warmup_times.modules};
             module = CompileSPV(spv, instance.GetDevice());
+            NoteModuleIo(module, spv);
         }
     }
     // The specialization must reference the cached program's info, not the temporary one.

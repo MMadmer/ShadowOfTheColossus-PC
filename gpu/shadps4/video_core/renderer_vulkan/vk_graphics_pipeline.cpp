@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <atomic>
 #include <utility>
 #include <boost/container/small_vector.hpp>
 
@@ -33,7 +34,8 @@ GraphicsPipeline::GraphicsPipeline(
     vk::PipelineCache pipeline_cache, std::span<const Shader::Info*, MaxShaderStages> infos,
     std::span<const Shader::RuntimeInfo, MaxShaderStages> runtime_infos,
     const Shader::Gcn::FetchShaderData* fetch_shader_, std::span<const vk::ShaderModule> modules,
-    SerializationSupport& sdata, bool preloading, bool async_build)
+    SerializationSupport& sdata, bool preloading, bool async_build,
+    const std::array<const Shader::Backend::SPIRV::ShaderIo*, MaxShaderStages>* ios)
     : Pipeline{instance, scheduler, desc_heap, profile, pipeline_cache}, key{key_} {
     if (fetch_shader_) {
         fetch_shader = *fetch_shader_;
@@ -247,6 +249,21 @@ GraphicsPipeline::GraphicsPipeline(
         });
     }
 
+    // sotc: Profile::barycentric_via_gs: a fragment shader made for it gets the geometry shader
+    // that hands it the three vertex values and the barycentrics.
+    vk::ShaderModule bary_gs_module{};
+    if (profile.barycentric_via_gs && ios && (*ios)[u32(Shader::SwStage::Fragment)] &&
+        (*ios)[u32(Shader::SwStage::Fragment)]->NeedsBarycentricGs()) {
+        bary_gs_module = BuildBarycentricGs(*ios, is_rect_list || is_quad_list);
+        if (bary_gs_module) {
+            shader_stages.emplace_back(vk::PipelineShaderStageCreateInfo{
+                .stage = vk::ShaderStageFlagBits::eGeometry,
+                .module = bary_gs_module,
+                .pName = "main",
+            });
+        }
+    }
+
     const vk::PipelineShaderStageRequiredSubgroupSizeCreateInfo subgroup_size_ci = {
         .requiredSubgroupSize = 64,
     };
@@ -430,6 +447,9 @@ GraphicsPipeline::GraphicsPipeline(
 
     auto [pipeline_result, pipe] =
         device.createGraphicsPipelineUnique(pipeline_cache, pipeline_info);
+    if (bary_gs_module) {
+        device.destroyShaderModule(bary_gs_module);
+    }
     if (pipeline_result != vk::Result::eSuccess && preloading) {
         // sotc: the driver can refuse a pipeline rebuilt from the cache (ErrorUnknown on AMD).
         // Left without a handle, the preload drops it and the game compiles it when it is drawn.
@@ -441,6 +461,77 @@ GraphicsPipeline::GraphicsPipeline(
                vk::to_string(pipeline_result));
     pipeline = std::move(pipe);
     SetObjectName(device, *pipeline, "Graphics Pipeline {}", debug_str);
+}
+
+vk::ShaderModule GraphicsPipeline::BuildBarycentricGs(
+    const std::array<const Shader::Backend::SPIRV::ShaderIo*, MaxShaderStages>& ios,
+    bool aux_tessellation) {
+    using namespace Shader::Backend::SPIRV;
+    static std::atomic<u32> reported{0};
+    const auto refuse = [&](const char* why) {
+        if (reported.fetch_add(1, std::memory_order_relaxed) < 8) {
+            LOG_WARNING(Render_Vulkan, "sotc: no barycentric geometry shader for {}: {}",
+                        GetDebugString(), why);
+        }
+        return vk::ShaderModule{};
+    };
+    if (stages[u32(Shader::SwStage::Geometry)]) {
+        return refuse("the pipeline has a geometry shader");
+    }
+    BaryGsSource source;
+    GsInputPrimitive primitive = GsInputPrimitive::Triangles;
+    const ShaderIo* tes_io = ios[u32(Shader::SwStage::TessellationEval)];
+    if (aux_tessellation) {
+        // The rect/quad list tessellation passes every parameter on at its own location.
+        for (u32 p = 0; p < 32; ++p) {
+            source.param_location[p] = static_cast<s32>(p);
+        }
+    } else {
+        const ShaderIo* last = stages[u32(Shader::SwStage::TessellationEval)]
+                                   ? tes_io
+                                   : ios[u32(Shader::SwStage::Vertex)];
+        if (!last) {
+            return refuse("no vertex stage interface");
+        }
+        constexpr s32 BuiltInPointSize = 1, BuiltInClipDistance = 3, BuiltInCullDistance = 4,
+                      BuiltInLayer = 9, BuiltInViewportIndex = 10;
+        if (last->HasOutputBuiltin(BuiltInClipDistance) ||
+            last->HasOutputBuiltin(BuiltInCullDistance) || last->HasOutputBuiltin(BuiltInLayer) ||
+            last->HasOutputBuiltin(BuiltInViewportIndex)) {
+            return refuse("the vertex stage writes clip distances, a layer or a viewport");
+        }
+        for (u32 p = 0; p < 32; ++p) {
+            if (const auto* var = last->FindOutput(fmt::format("out_attr{}", p))) {
+                source.param_location[p] = var->location;
+            }
+        }
+        if (const auto* var = last->FindOutput("cldist_attr0")) {
+            source.clip_location = var->location;
+        }
+        if (!stages[u32(Shader::SwStage::TessellationEval)]) {
+            switch (key.prim_type) {
+            case AmdGpu::PrimitiveType::PointList:
+                if (last->HasOutputBuiltin(BuiltInPointSize)) {
+                    return refuse("points with a point size");
+                }
+                primitive = GsInputPrimitive::Points;
+                break;
+            case AmdGpu::PrimitiveType::LineList:
+            case AmdGpu::PrimitiveType::LineStrip:
+                primitive = GsInputPrimitive::Lines;
+                break;
+            default:
+                primitive = GsInputPrimitive::Triangles;
+                break;
+            }
+        }
+    }
+    const auto words =
+        EmitBarycentricGeometryShader(source, *ios[u32(Shader::SwStage::Fragment)], primitive);
+    if (words.empty()) {
+        return refuse("an unknown fragment shader input");
+    }
+    return CompileSPV(words, instance.GetDevice());
 }
 
 GraphicsPipeline::~GraphicsPipeline() = default;

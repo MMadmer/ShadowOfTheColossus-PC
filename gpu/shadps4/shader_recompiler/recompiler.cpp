@@ -78,6 +78,32 @@ IR::Program TranslateProgram(const std::span<const u32>& code, Pools& pools, Inf
         program.ins_list.emplace_back(decoder.decodeInstruction(slice));
     }
 
+    // sotc: Profile::barycentric_via_gs: which attributes need their three vertex values.
+    if (info.sw_stage == SwStage::Fragment && profile.barycentric_via_gs) {
+        u64 interpolated = 0;
+        u64 mov_p0 = 0;
+        u64 per_vertex = 0;
+        for (const auto& inst : program.ins_list) {
+            const u32 attr = inst.control.vintrp.attr;
+            switch (inst.opcode) {
+            case Gcn::Opcode::V_INTERP_P1_F32:
+            case Gcn::Opcode::V_INTERP_P2_F32:
+                interpolated |= 1ULL << attr;
+                break;
+            case Gcn::Opcode::V_INTERP_MOV_F32:
+                if (inst.src[0].code == 2) {
+                    mov_p0 |= 1ULL << attr;
+                } else {
+                    per_vertex |= 1ULL << attr;
+                }
+                break;
+            default:
+                break;
+            }
+        }
+        info.fs_pervertex_mask = per_vertex | (mov_p0 & interpolated);
+    }
+
     // Clear any previous pooled data.
     pools.ReleaseContents();
 
