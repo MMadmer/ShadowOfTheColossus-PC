@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.57-opt6 — 2026-10-18
+- **PCs de 4 núcleos:** os quatro workers do jogo ficavam consultando a fila de tarefas sem parar
+  (no PS4 cada um tem o seu núcleo) e tomavam os núcleos das threads do render. Agora, depois de
+  uma sequência de consultas vazias, eles dormem 0,1 ms (`SOTC_POLL_NAP_US`, 0 desliga). Os
+  mutexes do PS4 usam SRW locks do Windows. Santuário: 7 → 3,5 núcleos ocupados, 27,4 → 29,9 FPS.
+  Em até 4 núcleos as threads de comandos e de desenho rodam com prioridade alta, e o mixer de som
+  também (`SOTC_GPU_PRIORITY`).
+- **GTX 10 (Pascal):** as barycentrics que os shaders de pixel do jogo leem passam por um geometry
+  shader *passthrough* (VK_NV_geometry_shader_passthrough): o shader de pixel resolve as
+  barycentrics a partir da posição. Santuário: GPU 16,1 → 13,8 ms no perfil Pascal
+  (`SOTC_GS_PASSTHROUGH=0` volta ao anterior). O cache de shaders é refeito na primeira abertura.
+- **Resolução de render** (launcher, modos `res900`/`res810`/`res720`/`res960`): o jogo renderiza
+  abaixo de 1080p e amplia para 1080p ele mesmo, como o PS4 Pro faz de 1440p para 4K. Texturas e
+  névoa iguais.
+- **Shaders compilados uma vez:** a pasta `shaderpack` traz o cache de pipelines gravado no jogo;
+  na primeira abertura ele vira o cache do jogador e todas as pipelines são montadas na tela de
+  carregamento, sem compilar durante o jogo.
+- **O launcher desempacota dumps .pkg:** jogo, atualização e todas as DLC encontradas viram as
+  pastas `CUSA08809`, `CUSA08809-UPDATE` e `CUSA08809-DLC` ao lado dos pacotes (PkgTool, do
+  LibOrbisPkg, LGPL-3.0, em `tools/PkgTool`). DLC que só liberam conteúdo (licença) também.
+- **Menos trabalho por desenho:** dois terços dos binds repetem o anterior e reaproveitam os
+  descritores (`SOTC_BIND_REUSE=0` desliga); a pesquisa da permutação de shader é memorizada; a
+  proteção do heap do jogo nas leituras da GPU percorre a árvore livre no máximo a cada 250 ms.
+- **Placas com menos de 3 GB:** a memória de buffers fica em ~45% do orçamento (blocos parados há
+  8 s voltam). `SOTC_VRAM_LIMIT_MB` (placa emulada) não recusa mais alocações: a linha `SOTC VRAM`
+  mostra quanto passou do tamanho emulado.
+- O idioma do sistema segue o idioma do Windows quando o launcher deixa "Automático"; russo na
+  lista.
+- Testado (4 núcleos sem SMT + orçamento de 2 GB emulados, RTX 3070 Laptop): santuário 30 FPS
+  (limite do jogo), demo da tela de título 30,0 FPS (mínimo 29,9).
+
 ## 0.57-opt5 — 2026-10-17 (fork Oussama268)
 - **Sessões longas sem a memória de vídeo crescer:** o jogo mantém mapeado o seu bloco de 4 GB
   de memória e reaproveita os endereços o tempo todo, então a memória de buffers na GPU só
