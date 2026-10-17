@@ -365,10 +365,14 @@ static int replay_armed;      /* 1 while a BB_PAD_REPLAY recording plays, 2 once
  * at the same point a later replay will start (F9 still stops it). 1: asked, 2: done. */
 static int record_requested;
 static uint64_t replay_start; /* 0: (re)start at the next sample */
+/* sotc: a state read from BB_PAD_FILE is held until the game has read it a few times, so a short
+ * press is not lost while the game stalls (shader compiles, loads). */
+static int inject_reads=1000;
 static void read_inject(void) {
     static const char *path; static int checked; static uint64_t last_check; static struct timespec mtime;
     if (!checked) { path=getenv("BB_PAD_FILE"); checked=1; }
     if (!path || !*path) return;
+    if (inject_reads<4) return;
     uint64_t now=now_us();
     if (now-last_check<20000) return;
     last_check=now;
@@ -406,6 +410,7 @@ static void read_inject(void) {
         for (int i=0;i<4;++i) if (!strncmp(token,sticks[i],3)) { int v=atoi(token+3); injected.stick[i]=v<0 ? 0 : v>255 ? 255 : v; }
     }
     fclose(f);
+    inject_reads=0;
     printf("Runtime: pad file: buttons 0x%x sticks %d %d %d %d\n",injected.buttons,
            injected.stick[0],injected.stick[1],injected.stick[2],injected.stick[3]);
 }
@@ -501,6 +506,7 @@ static void sample(PadData *d) {
     read_inject();
     replay_sample(d);
     d->buttons|=injected.buttons;
+    if (inject_reads<1000) ++inject_reads;
     if (injected.touch_side>=0) touch_click(d,injected.touch_side);
     else if ((d->buttons & BTN_TOUCHPAD) && !d->touch_count) touch_click(d,0);
     if (injected.buttons & BTN_L2) d->l2=255;

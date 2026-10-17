@@ -185,53 +185,19 @@ static ABI int32_t http_uri_escape(char *out, uint64_t *require, uint64_t prepar
 }
 static ABI int32_t net_unavailable(void) { return (int32_t)0x80410101; }
 
-/* --- Silent audio (temporary): libSceNgs2 renders silence, libSceAudio3d accepts objects and
- * paces the audio thread. Real sound will come from the user's own firmware modules. --- */
-typedef struct { uint32_t magic, kind; uint64_t rack_id; } AudioHandle;
-static AudioHandle *audio_handle(uint32_t kind, uint64_t rack_id) {
-    AudioHandle *h=calloc(1,sizeof(*h));
-    if (h) { h->magic=0x4e475332; h->kind=kind; h->rack_id=rack_id; }
-    return h;
-}
-#define NGS2_ERROR_INVALID ((int32_t)UINT32_C(0x804a0230))
-static ABI int32_t ngs2_system_create(const void *option, const void *allocator, void **out) {
-    (void)option; (void)allocator;
-    if (!out) return NGS2_ERROR_INVALID;
-    *out=audio_handle(1,0);
-    puts("Runtime: Ngs2 system created (silent audio)");
-    return 0;
-}
-typedef struct { void *buffer; uint64_t size; uint32_t waveform, channels; } Ngs2RenderBuffer;
-static ABI int32_t ngs2_system_render(void *system, Ngs2RenderBuffer *buffers, uint32_t count) {
-    (void)system;
-    for (uint32_t i=0;buffers && i<count;++i) if (buffers[i].buffer) memset(buffers[i].buffer,0,buffers[i].size);
-    return 0;
-}
-typedef struct { void *host_buffer; uint64_t host_buffer_size; uintptr_t reserved[5], user_data; } Ngs2ContextBuffer;
-static ABI int32_t ngs2_rack_query_buffer_size(uint32_t rack_id, const void *option, Ngs2ContextBuffer *info) {
-    (void)rack_id; (void)option;
-    if (!info) return NGS2_ERROR_INVALID;
-    info->host_buffer_size=0x1000;
-    return 0;
-}
-static ABI int32_t ngs2_rack_create(void *system, uint32_t rack_id, const void *option, const void *buffer, void **out) {
-    (void)system; (void)option; (void)buffer;
-    if (!out) return NGS2_ERROR_INVALID;
-    *out=audio_handle(2,rack_id);
-    return 0;
-}
-static ABI int32_t ngs2_rack_voice(void *rack, uint32_t index, void **out) {
-    (void)rack; (void)index;
-    if (!out) return NGS2_ERROR_INVALID;
-    *out=audio_handle(3,index);
-    return 0;
-}
-static ABI int32_t ngs2_voice_state(void *voice, void *state, uint64_t size) {
-    (void)voice;
-    if (state && size) memset(state,0,size);
-    return 0;
-}
-static ABI int32_t ngs2_voice_flags(void *voice, uint32_t *flags) { (void)voice; if (flags) *flags=0; return 0; }
+/* --- Sound: libSceNgs2 is the port's own (gpu/shim/ngs2/ngs2_hle.cpp; SOTC_NGS2_HLE=0 renders
+ * silence). With the user's own firmware modules linked, their native code is used instead
+ * (probe.c prefer_native). libSceAudio3d accepts objects and paces the audio thread. --- */
+ABI int32_t sotc_ngs2_system_create(const void *option, const void *allocator, uintptr_t *out);
+ABI int32_t sotc_ngs2_system_destroy(uintptr_t system, void *out_info);
+ABI int32_t sotc_ngs2_system_render(uintptr_t system, const void *buffers, uint32_t count);
+ABI int32_t sotc_ngs2_rack_query_buffer_size(uint32_t rack_id, const void *option, void *info);
+ABI int32_t sotc_ngs2_rack_create(uintptr_t system, uint32_t rack_id, const void *option, const void *buffer, uintptr_t *out);
+ABI int32_t sotc_ngs2_rack_destroy(uintptr_t rack, void *out_info);
+ABI int32_t sotc_ngs2_rack_get_voice_handle(uintptr_t rack, uint32_t index, uintptr_t *out);
+ABI int32_t sotc_ngs2_voice_control(uintptr_t voice, const void *params);
+ABI int32_t sotc_ngs2_voice_get_state(uintptr_t voice, void *state, uint64_t size);
+ABI int32_t sotc_ngs2_voice_get_state_flags(uintptr_t voice, uint32_t *flags);
 static ABI int32_t audio3d_port_open(int32_t user, const void *params, uint32_t *port) {
     (void)user; (void)params;
     if (!port) return (int32_t)0x80ec0004;
@@ -466,12 +432,12 @@ static const RuntimeExport exports[]={
     {"scePngEncDelete",ok_args}, {"scePngEncEncode",png_encode},
     {"sceHttpUriEscape",http_uri_escape}, {"sceHttpGetAllResponseHeaders",net_unavailable},
     {"sceNetGetSockInfo",net_unavailable},
-    {"sceNgs2SystemCreateWithAllocator",ngs2_system_create}, {"sceNgs2SystemDestroy",ok_args},
-    {"sceNgs2SystemRender",ngs2_system_render}, {"sceNgs2RackQueryBufferSize",ngs2_rack_query_buffer_size},
-    {"sceNgs2RackCreate",ngs2_rack_create}, {"sceNgs2RackCreateWithAllocator",ngs2_rack_create},
-    {"sceNgs2RackDestroy",ok_args}, {"sceNgs2RackGetVoiceHandle",ngs2_rack_voice},
-    {"sceNgs2VoiceControl",ok_args}, {"sceNgs2VoiceGetState",ngs2_voice_state},
-    {"sceNgs2VoiceGetStateFlags",ngs2_voice_flags},
+    {"sceNgs2SystemCreateWithAllocator",sotc_ngs2_system_create}, {"sceNgs2SystemDestroy",sotc_ngs2_system_destroy},
+    {"sceNgs2SystemRender",sotc_ngs2_system_render}, {"sceNgs2RackQueryBufferSize",sotc_ngs2_rack_query_buffer_size},
+    {"sceNgs2RackCreate",sotc_ngs2_rack_create}, {"sceNgs2RackCreateWithAllocator",sotc_ngs2_rack_create},
+    {"sceNgs2RackDestroy",sotc_ngs2_rack_destroy}, {"sceNgs2RackGetVoiceHandle",sotc_ngs2_rack_get_voice_handle},
+    {"sceNgs2VoiceControl",sotc_ngs2_voice_control}, {"sceNgs2VoiceGetState",sotc_ngs2_voice_get_state},
+    {"sceNgs2VoiceGetStateFlags",sotc_ngs2_voice_get_state_flags},
     {"sceAudio3dInitialize",ok_args}, {"sceAudio3dTerminate",ok_ignored},
     {"sceAudio3dPortOpen",audio3d_port_open}, {"sceAudio3dPortClose",ok_args},
     {"sceAudio3dObjectReserve",audio3d_object_reserve}, {"sceAudio3dObjectUnreserve",ok_args},

@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2025-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "sotc_progress.h"
 #include <chrono>
 #include "common/serdes.h"
 #include "core/emulator_settings.h"
@@ -396,6 +397,9 @@ void PipelineCache::WarmUp() {
     u32 num_pipelines{};
     u32 num_total_pipelines{};
     const auto warmup_start = std::chrono::steady_clock::now();
+    // sotc: a window with a progress bar while the cached pipelines are built.
+    SotcProgress::Begin(static_cast<u32>(
+        Storage::DataBase::Instance().CountBlobs(Storage::BlobType::PipelineKey)));
 
     Storage::DataBase::Instance().ForEachBlob(
         Storage::BlobType::PipelineKey, [&](std::vector<u8>&& data) {
@@ -430,9 +434,11 @@ void PipelineCache::WarmUp() {
             if (result) {
                 ++num_pipelines;
             }
+            SotcProgress::Update(num_total_pipelines);
         });
+    SotcProgress::End();
 
-    LOG_INFO(Render,
+    LOG_WARNING(Render,
              "Preloaded {} pipelines in {} ms (SPIR-V reads {} ms, shader modules {} ms, "
              "pipeline creation {} ms)",
              num_pipelines, Ms(std::chrono::steady_clock::now() - warmup_start),
