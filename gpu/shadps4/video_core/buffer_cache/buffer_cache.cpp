@@ -1137,17 +1137,18 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
     // ~0.2 ms and ran ~15 times a second while the game streamed (5,300 in a 6-minute attract run,
     // 1 s in total, up to 70 ms within one frame). Large requests, and slabs the driver refuses
     // under memory pressure, take the exact allocation below with its emergency collections.
-    static const u64 slab_bytes = [] {
-        const char* v = std::getenv("SOTC_ARENA_SLAB_MB");
-        return (v ? std::strtoull(v, nullptr, 10) : 4ull) << 20;
+    // sotc: MaybeEvictCold frees whole allocations; on small cards (budget under 3 GiB) 1 MiB
+    // slabs mix fewer hot blocks into cold ones, so more of the cold arena can go back.
+    static const u64 slab_bytes = [this] {
+        if (const char* v = std::getenv("SOTC_ARENA_SLAB_MB")) {
+            return std::strtoull(v, nullptr, 10) << 20;
+        }
+        const u64 budget = instance.GetTotalMemoryBudget();
+        const bool small_card = budget != 0 && budget < (3ull << 30);
+        return small_card ? 1ull << 20 : 4ull << 20;
     }();
     const u64 want_bytes = u64{resident_blocks} << block_shift;
-    // sotc: device-local arena memory respects SOTC_VRAM_LIMIT_MB (emulated small cards).
     const auto allocate_memory = [&](const vk::MemoryAllocateInfo& info) {
-        if (info.memoryTypeIndex == arena_memory_type_index &&
-            !instance.EmulatedVramAllows(info.allocationSize)) {
-            return vk::ResultValue<vk::DeviceMemory>{vk::Result::eErrorOutOfDeviceMemory, {}};
-        }
         return instance.GetDevice().allocateMemory(info);
     };
     vk::DeviceMemory device_memory{};

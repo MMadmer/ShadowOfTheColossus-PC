@@ -1158,7 +1158,16 @@ class Launcher:
                     games = scan(seconds=25, extra_roots=[str(PORT_DIR.parent)])['games']
                 except Exception:  # never stop the launcher over a search problem
                     games = []
+                packed = None
+                if not games:
+                    try:
+                        from sotc_pkg import find_packages
+                        packed = next((str(Path(p['path']).parent) for p in find_packages(PORT_DIR.parent, 2)
+                                       if p['kind'] == 'game'), None)
+                    except Exception:
+                        packed = None
                 self.ui_calls.put(lambda: self.offer_game(games[0]['path']) if games else
+                                  self.offer_packages(packed) if packed else
                                   self.setup_hint.configure(text=''))
             threading.Thread(target=work, daemon=True).start()
 
@@ -1170,6 +1179,60 @@ class Launcher:
                                   .format(path), fg=GOLD)
         self.setup_hint.bind('<Button-1>', lambda _e: self.configure_from_game(path))
 
+    def offer_packages(self, folder):
+        if not getattr(self, 'setup_hint', None) or not self.setup_hint.winfo_exists():
+            return
+        self.setup_hint.configure(text=_('Dump empacotado (.pkg) em {}   —   clique aqui para desempacotar',
+                                         'Packed dump (.pkg) in {}   —   click here to unpack it').format(folder),
+                                  fg=GOLD)
+        self.setup_hint.bind('<Button-1>', lambda _e: self.unpack_for_setup(folder))
+
+    def unpack_for_setup(self, folder):
+        """The game's packages in folder (game, update, every DLC) unpacked next to them (sotc_pkg),
+        then the setup goes on with the unpacked game."""
+        from sotc_pkg import find_packages, needed_bytes, targets, pkgtool_path
+        packages = find_packages(folder, 2)
+        if not any(p['kind'] == 'game' for p in packages):
+            return False
+        if not pkgtool_path(PORT_DIR):
+            self.messagebox.showerror('Shadow of the Colossus', _(
+                'Falta tools\\PkgTool\\PkgTool.exe na pasta do port.',
+                'tools\\PkgTool\\PkgTool.exe is missing from the port folder.'))
+            return True
+        counts = {kind: sum(p['kind'] == kind for p in packages) for kind in ('game', 'update', 'dlc')}
+        size = needed_bytes(packages, folder)
+        if size and not self.messagebox.askyesno('Shadow of the Colossus', _(
+                'Encontrei o jogo empacotado (.pkg) em\n{}\n(jogo: {}, atualizações: {}, DLC: {}).\n\n'
+                'Desempacotar para {}? Precisa de {:.1f} GB livres e leva alguns minutos.',
+                'Found the packed game (.pkg) in\n{}\n(game: {}, updates: {}, DLC: {}).\n\n'
+                'Unpack it into {}? It needs {:.1f} GB free and takes a few minutes.').format(
+                    folder, counts['game'], counts['update'], counts['dlc'], folder, size / 2 ** 30)):
+            return True
+        self.setup_button.configure(state='disabled')
+        self.setup_hint.unbind('<Button-1>')
+        self.setup_hint.configure(text=_('Desempacotando…', 'Unpacking…'), fg=MUTED)
+
+        def progress(done, total):
+            text = _('Desempacotando o jogo: {:.0f}% ({:.1f} de {:.1f} GB)', 'Unpacking the game: {:.0f}% ({:.1f} of {:.1f} GB)')
+            message = text.format(100 * done / max(total, 1), done / 2 ** 30, total / 2 ** 30)
+            self.ui_calls.put(lambda: self.setup_hint.configure(text=message))
+
+        def work():
+            from sotc_pkg import unpack
+            try:
+                places = unpack(packages, folder, PORT_DIR, progress)
+            except Exception as error:  # shown to the player, the setup stays open
+                message = str(error)
+                self.ui_calls.put(lambda: (self.setup_button.configure(state='normal'),
+                                           self.setup_hint.configure(text='', fg=MUTED),
+                                           self.messagebox.showerror('Shadow of the Colossus', _(
+                                               'Não consegui desempacotar:\n{}', 'Could not unpack:\n{}').format(message))))
+                return
+            game = places.get('game') or str(targets(folder)['game'])
+            self.ui_calls.put(lambda: self.configure_from_game(game, folder))
+        threading.Thread(target=work, daemon=True).start()
+        return True
+
     def choose_game_for_setup(self):
         chosen = self.filedialog.askdirectory(title=_('Pasta do jogo Shadow of the Colossus', 'Shadow of the Colossus game folder'),
                                               initialdir=self.setup_found_game or str(PORT_DIR.parent))
@@ -1177,6 +1240,8 @@ class Launcher:
             return
         from sotc_discovery import find_game_in
         game = find_game_in(chosen)
+        if not game and self.unpack_for_setup(chosen):
+            return
         if not game:
             self.messagebox.showerror('Shadow of the Colossus', _(
                 'Não achei o jogo (eboot.bin do CUSA08809) em\n{}\n\nEscolha a pasta do seu dump.',
@@ -1193,8 +1258,18 @@ class Launcher:
 
         def work():
             from sotc_discovery import find_dlc_root, find_update, dlc_count, scan, SYS_MODULES as modules
-            result = {'game': game, 'dlc': find_dlc_root(game, chosen), 'update': find_update(game), 'sound': None,
-                      'save': None}
+            dlc_root = ''
+            try:
+                from sotc_pkg import find_packages, targets, unpack
+                packages = [p for p in find_packages(chosen or Path(game).parent, 2) if p['kind'] == 'dlc']
+                if packages:
+                    folder = Path(game).parent
+                    unpack(packages, folder, PORT_DIR)
+                    dlc_root = str(targets(folder)['dlc'])
+            except Exception:  # the packages stay usable as they are (the runtime reads them)
+                dlc_root = ''
+            result = {'game': game, 'dlc': dlc_root or find_dlc_root(game, chosen), 'update': find_update(game),
+                      'sound': None, 'save': None}
             result['dlc_count'] = dlc_count(result['dlc'])
             sound_ready = self.app.get('sys_modules') and all(
                 (Path(self.app['sys_modules']) / m).is_file() for m in modules)

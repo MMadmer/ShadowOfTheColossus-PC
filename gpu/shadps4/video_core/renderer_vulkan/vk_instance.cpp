@@ -736,18 +736,12 @@ void Instance::CreateAllocator() {
             SotcStats::sys_vk_frees.fetch_add(1, std::memory_order_relaxed);
         },
     };
-    // sotc: SOTC_VRAM_LIMIT_MB caps the device-local heaps for VMA (its budget follows).
-    std::array<VkDeviceSize, VK_MAX_MEMORY_HEAPS> heap_limits;
-    heap_limits.fill(VK_WHOLE_SIZE);
+    // sotc: SOTC_VRAM_LIMIT_MB emulates a smaller card through the budget the caches plan for
+    // (CollectPhysicalMemoryInfo). Allocations are never refused: a real card pages memory past
+    // its size to system RAM instead (the refusals made the caches collect in loops: corrupted
+    // images, black frames). The SOTC VRAM line shows how far usage went past the emulated size.
     const u64 vram_limit = EmulatedVramLimit();
     if (vram_limit) {
-        for (u32 i = 0; i < memory_properties.memoryHeapCount; ++i) {
-            if (memory_properties.memoryHeaps[i].flags & vk::MemoryHeapFlagBits::eDeviceLocal) {
-                // The driver budget of a real card is ~80% of its heap; past it, allocations of
-                // VMA move to system memory as on a real card under pressure.
-                heap_limits[i] = vram_limit * 8 / 10;
-            }
-        }
         LOG_WARNING(Render_Vulkan, "sotc: emulating {} MB of video memory", vram_limit >> 20);
     }
     const VmaAllocatorCreateInfo allocator_info = {
@@ -760,7 +754,6 @@ void Instance::CreateAllocator() {
         .device = *device,
         .preferredLargeHeapBlockSize = block_size,
         .pDeviceMemoryCallbacks = SotcStats::kCmdStats ? &memory_callbacks : nullptr,
-        .pHeapSizeLimit = vram_limit ? heap_limits.data() : nullptr,
         .pVulkanFunctions = &functions,
         .instance = *instance,
         .vulkanApiVersion = TargetVulkanApiVersion,
@@ -908,11 +901,6 @@ u64 Instance::EmulatedVramLimit() {
         return v ? static_cast<u64>(std::strtoull(v, nullptr, 10)) << 20 : u64{0};
     }();
     return limit;
-}
-
-bool Instance::EmulatedVramAllows(u64 bytes) const {
-    const u64 limit = EmulatedVramLimit();
-    return !limit || GetDeviceMemoryUsage() + bytes <= limit;
 }
 
 u64 Instance::GetDeviceMemoryUsage() const {

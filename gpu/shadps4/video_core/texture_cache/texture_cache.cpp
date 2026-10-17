@@ -1317,6 +1317,12 @@ void TextureCache::GarbageCollectImages() {
         total_used_memory = instance.GetDeviceMemoryUsage();
         // sotc: shown with the frame rate (SOTC_FPS=1).
         SotcStats::vram_used.store(total_used_memory, std::memory_order_relaxed);
+        if (const u64 limit = instance.EmulatedVramLimit(); limit && total_used_memory > limit) {
+            const u64 over = total_used_memory - limit;
+            if (over > SotcStats::vram_over_emulated.load(std::memory_order_relaxed)) {
+                SotcStats::vram_over_emulated.store(over, std::memory_order_relaxed);
+            }
+        }
         SotcStats::vram_budget.store(instance.GetTotalMemoryBudget(), std::memory_order_relaxed);
         // What VMA holds in device-local heaps: its blocks against the allocations in them
         // (the difference is free space VMA keeps, i.e. fragmentation).

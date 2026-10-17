@@ -494,9 +494,6 @@ public:
     /// sotc: SOTC_VRAM_LIMIT_MB emulates a card with that much video memory (0: off).
     [[nodiscard]] static u64 EmulatedVramLimit();
 
-    /// sotc: false when a device-local allocation of `bytes` made outside VMA would pass the
-    /// emulated video memory limit (it then fails as ErrorOutOfDeviceMemory would).
-    [[nodiscard]] bool EmulatedVramAllows(u64 bytes) const;
 
     /// Determines if a format is supported for a set of feature flags.
     [[nodiscard]] bool IsFormatSupported(vk::Format format, vk::FormatFeatureFlags2 flags) const;

@@ -37,6 +37,19 @@ done
 cp scripts/prepare.py scripts/link_libc.py scripts/link_modules.py scripts/content_profile.py \
    scripts/sotc_cpu.py scripts/sotc_modes.py "$dest/scripts/"
 cp sotc.py SotC.bat LICENSE CHANGELOG.md "$dest/"
+# sotc: PkgTool (LibOrbisPkg, LGPL-3.0, with its license) unpacks the player's .pkg dumps
+# (launcher/sotc_pkg.py); PKGTOOL_DIR, default tools/PkgTool next to the repository.
+pkgtool=${PKGTOOL_DIR:-../tools/PkgTool}
+if [[ -f $pkgtool/PkgTool.exe ]]; then
+    mkdir -p "$dest/tools/PkgTool"
+    cp "$pkgtool/PkgTool.exe" "$pkgtool/LibOrbisPkg.dll" "$pkgtool/LICENSE.txt" "$dest/tools/PkgTool/"
+else
+    echo "warning: no PkgTool in $pkgtool, the launcher will not unpack .pkg dumps" >&2
+fi
+# sotc: the shader pack (SHADER_PACK_DIR) is seeded into the player's cache at the first boot.
+if [[ -d ${SHADER_PACK_DIR:-} ]]; then
+    cp -r "$SHADER_PACK_DIR" "$dest/shaderpack"
+fi
 cp docs/sotc/README-SotC.md "$dest/README.md"
 cat > "$dest/sotc.ini" <<'EOF'
 # Shadow of the Colossus PC - settings (see README.md)
@@ -58,6 +71,8 @@ python -c 'import shutil, sys; shutil.make_archive("dist/SotC-PC", "zip", "out/s
 # The playable copy keeps its settings and saves.
 mkdir -p dist/SotC-PC
 cp -r "$dest/bin" "$dest/scripts" "$dest/launcher" "$dest/_internal" dist/SotC-PC/
+[[ -d $dest/tools ]] && cp -r "$dest/tools" dist/SotC-PC/
+[[ -d $dest/shaderpack ]] && cp -r "$dest/shaderpack" dist/SotC-PC/
 cp "$dest/SotC.exe" "$dest/sotc.py" "$dest/SotC.bat" "$dest/README.md" "$dest/LICENSE" "$dest/CHANGELOG.md" dist/SotC-PC/
 [[ -f dist/SotC-PC/sotc.ini ]] || cp "$dest/sotc.ini" dist/SotC-PC/
 echo "dist/SotC-PC.zip ($(du -h dist/SotC-PC.zip | cut -f1)) and dist/SotC-PC/"

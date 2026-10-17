@@ -489,7 +489,7 @@ void VideoOutDriver::Flip(const Request& req) {
                 std::fprintf(stderr,
                              "SOTC VRAM %llu/%llu MiB (VMA blocks %llu MiB holding %llu MiB, "
                              "buffer arenas %llu MiB (%llu hot), images %llu MiB in "
-                             "%llu; GC freed %llu, kept tiled %llu), emergency collections %llu\n",
+                             "%llu; GC freed %llu, kept tiled %llu), emergency collections %llu, peak over emulated size %llu MiB\n",
                              static_cast<unsigned long long>(
                                  SotcStats::vram_used.load(std::memory_order_relaxed) >> 20),
                              static_cast<unsigned long long>(budget >> 20),
@@ -509,7 +509,10 @@ void VideoOutDriver::Flip(const Request& req) {
                              static_cast<unsigned long long>(SotcStats::gc_freed.exchange(0)),
                              static_cast<unsigned long long>(SotcStats::gc_kept_tiled.exchange(0)),
                              static_cast<unsigned long long>(
-                                 SotcStats::vram_emergency.exchange(0)));
+                                 SotcStats::vram_emergency.exchange(0)),
+                             static_cast<unsigned long long>(
+                                 SotcStats::vram_over_emulated.load(std::memory_order_relaxed) >>
+                                 20));
             }
             if (const uint64_t waits = SotcStats::cp_waits.exchange(0)) {
                 std::fprintf(stderr, "SOTC CP waits for the draw thread %.0f/s\n", waits / seconds);
