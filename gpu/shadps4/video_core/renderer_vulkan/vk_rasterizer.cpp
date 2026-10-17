@@ -689,32 +689,8 @@ bool Rasterizer::BindResources(const Pipeline* pipeline) {
     }
     FinishBindMemo(pipeline, uses_dma);
 
-    // sotc: how often a bind repeats the previous one (same pipeline, user data and flat
-    // buffers): what a binding reuse could skip (SOTC_FPS line).
     if (SotcStats::kFpsLog) {
-        static const Pipeline* last_pipeline = nullptr;
-        static u64 last_hash = 0;
-        u64 hash = 0xcbf29ce484222325ull;
-        const auto mix = [&hash](std::span<const u32> words) {
-            for (const u32 word : words) {
-                hash = (hash ^ word) * 0x100000001b3ull;
-            }
-        };
-        for (const auto* stage : pipeline->GetStages()) {
-            if (stage) {
-                mix(stage->UserData());
-                mix(stage->FlatBuf());
-            }
-        }
         SotcStats::bind_calls.fetch_add(1, std::memory_order_relaxed);
-        if (pipeline == last_pipeline) {
-            SotcStats::bind_same_pipeline.fetch_add(1, std::memory_order_relaxed);
-            if (hash == last_hash) {
-                SotcStats::bind_repeats.fetch_add(1, std::memory_order_relaxed);
-            }
-        }
-        last_pipeline = pipeline;
-        last_hash = hash;
     }
 
     return true;
@@ -1384,18 +1360,9 @@ void Rasterizer::FinishBindMemo(const Pipeline* pipeline, bool uses_dma) {
         return;
     }
     memo.recording = false;
-    // The user data and flat buffers of every stage in one vector (sizes first): one copy into
-    // kept capacity per full bind.
-    memo.words.clear();
-    for (const auto* stage : pipeline->GetStages()) {
-        if (stage) {
-            const auto user_data = stage->UserData();
-            const auto& flat = stage->FlatBuf();
-            memo.words.push_back(static_cast<u32>(user_data.size()));
-            memo.words.insert(memo.words.end(), user_data.begin(), user_data.end());
-            memo.words.push_back(static_cast<u32>(flat.size()));
-            memo.words.insert(memo.words.end(), flat.begin(), flat.end());
-        }
+    memo.bind_key = liverpool->DrawBindKey();
+    if (memo.bind_key == 0) {
+        return; // not on the draw thread: no key, no reuse
     }
     memo.pipeline = pipeline;
     memo.uses_dma = uses_dma;
@@ -1426,20 +1393,9 @@ bool Rasterizer::TryReuseBindings(const Pipeline* pipeline) {
     if (memo.pipeline != pipeline) {
         return reject(1);
     }
-    size_t at = 0;
-    const auto same = [&](std::span<const u32> now) {
-        if (at >= memo.words.size() || memo.words[at] != now.size() ||
-            at + 1 + now.size() > memo.words.size() ||
-            std::memcmp(memo.words.data() + at + 1, now.data(), now.size_bytes()) != 0) {
-            return false;
-        }
-        at += 1 + now.size();
-        return true;
-    };
-    for (const auto* stage : pipeline->GetStages()) {
-        if (stage && (!same(stage->UserData()) || !same(stage->FlatBuf()))) {
-            return reject(2);
-        }
+    // The command processor found the same pipeline, user data and flat buffers (bind key).
+    if (memo.bind_key != liverpool->DrawBindKey()) {
+        return reject(2);
     }
     const auto& regs = liverpool->DrawRegs();
     if (memo.ta_bc_base != regs.ta_bc_base.Address()) {
@@ -1502,8 +1458,6 @@ bool Rasterizer::TryReuseBindings(const Pipeline* pipeline) {
     }
     if (SotcStats::kFpsLog) {
         SotcStats::bind_calls.fetch_add(1, std::memory_order_relaxed);
-        SotcStats::bind_same_pipeline.fetch_add(1, std::memory_order_relaxed);
-        SotcStats::bind_repeats.fetch_add(1, std::memory_order_relaxed);
         SotcStats::bind_reused.fetch_add(1, std::memory_order_relaxed);
     }
     return true;

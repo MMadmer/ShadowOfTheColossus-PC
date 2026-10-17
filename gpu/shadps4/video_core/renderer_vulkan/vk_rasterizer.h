@@ -254,7 +254,7 @@ private:
         u64 image_generation{};
         u64 binding_epoch{};
         u64 ta_bc_base{};
-        std::vector<u32> words;
+        u64 bind_key{};
         std::array<u8, Shader::NUM_BUFFERS> buf_offsets{};
         boost::container::small_vector<MemoBuffer, 16> buffers;
         boost::container::small_vector<MemoSpecial, 4> specials;

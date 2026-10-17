@@ -223,6 +223,10 @@ public:
     const CbDbExtent& DrawDbExtent() const noexcept {
         return OnBackThread() ? back_db_extent : last_db_extent;
     }
+    /// sotc: the bind key of the op the draw thread runs (0 elsewhere: no reuse).
+    u64 DrawBindKey() const noexcept {
+        return OnBackThread() ? back_bind_key : 0;
+    }
     /// Command processor: waits until the draw thread ran everything queued.
     void DrainBack();
     /// True on the command processor thread while the draw thread does the GPU work.
@@ -366,6 +370,9 @@ private:
         ComputeProgram cs{};
         std::array<BackStage, 5> stages{};
         u32 num_stages{};
+        /// sotc: equal for consecutive ops that bind the same pipeline, user data and flat
+        /// buffers (0: never reused); see CaptureBackOp and Rasterizer::TryReuseBindings.
+        u64 bind_key{};
         Common::UniqueFunction<void> func;
     };
     static constexpr u32 RegChunkDwords = 64;
@@ -441,6 +448,14 @@ private:
     u64 back_write_seq{0};
     Regs back_regs{};
     ComputeProgram back_cs{};
+    u64 back_bind_key{};
+    /// sotc: what the last keyed op bound (command processor), see CaptureBackOp.
+    struct LastBind {
+        const Vulkan::Pipeline* pipeline{};
+        u32 num_stages{};
+        std::array<BackStage, 5> stages{};
+        u64 key{};
+    } last_bind;
     std::array<CbDbExtent, NUM_COLOR_BUFFERS> back_cb_extent{};
     CbDbExtent back_db_extent{};
     std::array<u64, (NumRegChunks + 63) / 64> dirty_chunks{};

@@ -325,6 +325,7 @@ void Liverpool::QueueBackFunc(Common::UniqueFunction<void>&& func, bool writes_m
 void Liverpool::CaptureBackOp(BackOp& op, const Vulkan::Pipeline* pipeline) {
     op.pipeline = pipeline;
     op.num_stages = 0;
+    op.bind_key = 0;
     if (!pipeline) {
         return;
     }
@@ -345,6 +346,35 @@ void Liverpool::CaptureBackOp(BackOp& op, const Vulkan::Pipeline* pipeline) {
         stage.pgm_base = rt.pgm_base;
         stage.flat.assign(rt.flattened_ud_buf.begin(), rt.flattened_ud_buf.end());
     }
+    // sotc: an op binding exactly what the previous keyed op bound gets its key: the draw thread
+    // keeps that bind's descriptors after one comparison (Rasterizer::TryReuseBindings). Compared
+    // here, where the data was just copied; only a new bind is copied once more.
+    bool same = pipeline == last_bind.pipeline && op.num_stages == last_bind.num_stages;
+    for (u32 i = 0; same && i < op.num_stages; ++i) {
+        const BackStage& now = op.stages[i];
+        const BackStage& before = last_bind.stages[i];
+        same = now.info == before.info && now.num_user_data == before.num_user_data &&
+               now.pgm_base == before.pgm_base && now.flat.size() == before.flat.size() &&
+               (now.num_user_data == ~0u ||
+                std::memcmp(now.user_data.data(), before.user_data.data(),
+                            now.num_user_data * sizeof(u32)) == 0) &&
+               std::memcmp(now.flat.data(), before.flat.data(), now.flat.size() * sizeof(u32)) == 0;
+    }
+    if (!same) {
+        last_bind.pipeline = pipeline;
+        last_bind.num_stages = op.num_stages;
+        for (u32 i = 0; i < op.num_stages; ++i) {
+            BackStage& before = last_bind.stages[i];
+            const BackStage& now = op.stages[i];
+            before.info = now.info;
+            before.num_user_data = now.num_user_data;
+            before.user_data = now.user_data;
+            before.pgm_base = now.pgm_base;
+            before.flat.assign(now.flat.begin(), now.flat.end());
+        }
+        ++last_bind.key;
+    }
+    op.bind_key = last_bind.key;
 }
 
 /// A draw or dispatch with this pipeline may write guest memory (storage buffers or images).
@@ -389,9 +419,12 @@ void Liverpool::ExecuteBackOp(BackOp& op) {
         rt.user_data = stage.num_user_data == ~0u
                            ? std::span<const u32>{}
                            : std::span<const u32>{stage.user_data.data(), stage.num_user_data};
-        rt.flattened_ud_buf.assign(stage.flat.begin(), stage.flat.end());
+        // sotc: the op's copy becomes the stage's (its vector keeps the old capacity for the
+        // command processor's next capture into this ring slot): no second copy.
+        rt.flattened_ud_buf.swap(stage.flat);
         rt.pgm_base = stage.pgm_base;
     }
+    back_bind_key = op.kind == BackOp::Kind::Func ? 0 : op.bind_key;
     switch (op.kind) {
     case BackOp::Kind::Func:
         op.func();
