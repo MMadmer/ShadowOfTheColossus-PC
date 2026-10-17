@@ -15,6 +15,7 @@ import json
 import os
 from pathlib import Path
 import queue
+import re
 import runpy
 import shutil
 import subprocess
@@ -179,6 +180,22 @@ RENDER_RES = [('', ('1080p (nativa, como no PS4)', '1080p (native, as on PS4)'))
               ('res900', ('900p (GPUs fracas)', '900p (weak GPUs)')),
               ('res810', ('810p', '810p')),
               ('res720', ('720p (GPU muito fraca)', '720p (very weak GPU)'))]
+
+
+def weak_gpu_render_res(gpu_line):
+    """The render resolution a card starts with ('' = native 1080p), from bb-gpu-capabilities'
+    "GPU: <name>, <kind>, <N> MiB" line: GTX 1050 class or up to 3 GB: 900p; integrated or under
+    1.5 GB: 720p. Textures, fog and effects stay the same; only the 3D scene renders smaller."""
+    found = re.match(r'(.*), (discrete|integrated or other), (\d+) MiB', gpu_line)
+    if not found:
+        return ''
+    name, kind, mib = found[1], found[2], int(found[3])
+    if kind != 'discrete' or mib < 1536:
+        return 'res720'
+    weak = mib <= 3072 or re.search(r'GTX (7\d\d|9[0-6]0|10[35]0)|GT \d{3,4}\b|MX ?\d{3}|RX (46|5[45])0', name)
+    return 'res900' if weak else ''
+
+
 UPSCALERS = [('fsr1', ('FSR 1 (AMD, qualquer placa)', 'FSR 1 (AMD, any GPU)')),
              ('bilinear', ('Bilinear (simples)', 'Bilinear (plain)'))]
 SHARPNESS = [('0', ('Alta', 'High')), ('250', ('Média (padrão)', 'Medium (default)')), ('600', ('Baixa', 'Low')),
@@ -1063,19 +1080,36 @@ class Launcher:
             clang64 = Path(os.environ.get('MSYS2_ROOT', r'C:\msys64')) / 'clang64' / 'bin'
             env['PATH'] = f'{clang64}{os.pathsep}{env.get("PATH", "")}'
         text = _('• Placa de vídeo: não verificada', '• Graphics card: not checked')
+        gpu_line = ''
         try:
             result = subprocess.run([str(exe), '--live-resolution'], capture_output=True, text=True, timeout=30,
                                     env=env, creationflags=NO_WINDOW)
             names = [line[5:].split(':')[0] for line in result.stderr.splitlines() if line.startswith('GPU: ')]
             if names:
                 text = _('✓ Placa de vídeo: {}', '✓ Graphics card: {}').format(names[0])
+                gpu_line = names[0]
             elif result.returncode:
                 text = _('✗ Nenhuma placa com Vulkan 1.3 (atualize o driver)',
                          '✗ No Vulkan 1.3 graphics card found (update the driver)')
         except (OSError, subprocess.TimeoutExpired):
             pass
         self.gpu_text = text
-        self.ui_calls.put(self.refresh_status)
+        self.ui_calls.put(lambda: self.tune_for_gpu(gpu_line) if gpu_line else self.refresh_status())
+
+    def tune_for_gpu(self, gpu_line):
+        """Once per graphics card: a weak one starts at a lower render resolution (the settings
+        keep any choice made later, and a resolution chosen before is not replaced)."""
+        name = gpu_line.split(',')[0]
+        if self.app.get('gpu_tuned') == name:
+            return
+        self.app['gpu_tuned'] = name
+        render = weak_gpu_render_res(gpu_line)
+        if render and not self.var('render_res').get():
+            self.var('render_res').set(render)
+            self.gpu_text += _(' — render {} escolhido para esta placa (Gráficos)',
+                               ' — {} render chosen for this card (Graphics)').format(render[3:] + 'p')
+        self.collect()
+        self.refresh_status()
 
     def collect(self):
         for key, var in self.vars.items():

@@ -13,7 +13,9 @@
   (`SOTC_GS_PASSTHROUGH=0` volta ao anterior). O cache de shaders é refeito na primeira abertura.
 - **Resolução de render** (launcher, modos `res900`/`res810`/`res720`/`res960`): o jogo renderiza
   abaixo de 1080p e amplia para 1080p ele mesmo, como o PS4 Pro faz de 1440p para 4K. Texturas e
-  névoa iguais.
+  névoa iguais. Na primeira abertura com uma placa da classe GTX 1050 (ou com até 3 GB) o launcher
+  já escolhe 900p (integradas ou menos de 1,5 GB: 720p), uma vez por placa; a escolha feita em
+  Gráficos fica.
 - **Shaders compilados uma vez:** a pasta `shaderpack` traz o cache de pipelines gravado no jogo;
   na primeira abertura ele vira o cache do jogador e todas as pipelines são montadas na tela de
   carregamento, sem compilar durante o jogo.
