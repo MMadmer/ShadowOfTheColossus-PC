@@ -37,6 +37,11 @@ struct VideoOutPort;
 
 namespace AmdGpu {
 
+/// sotc: the GPU thread this one is, set by the thread itself: 1 = command processor, 2 = draw
+/// thread. std::this_thread::get_id() is a winpthreads call, and the register getters run the
+/// check thousands of times a frame (~2.5% of the draw thread).
+inline thread_local u8 g_gpu_thread = 0;
+
 struct Liverpool {
     static constexpr u32 GfxQueueId = 0u;
     static constexpr u32 NumGfxRings = 1u;     // actually 2, but HP is reserved by system software
@@ -112,7 +117,7 @@ public:
     template <bool wait_done = false>
     void SendCommand(auto&& func) {
         // sotc: from the command processor itself (it forwards the queue to the draw thread).
-        if (back_threaded && std::this_thread::get_id() == gpu_id) {
+        if (back_threaded && g_gpu_thread == 1) {
             QueueBackFunc(Common::UniqueFunction<void>{std::move(func)}, true);
             if constexpr (wait_done) {
                 DrainBack();
@@ -196,17 +201,16 @@ public:
         return back_threaded;
     }
     bool OnBackThread() const noexcept {
-        return back_threaded && std::this_thread::get_id() == back_id;
+        return back_threaded && g_gpu_thread == 2;
     }
     /// The command processor or the draw thread: both work on the GPU state.
     bool IsGpuSideThread() const noexcept {
-        const auto id = std::this_thread::get_id();
-        return id == gpu_id || (back_threaded && id == back_id);
+        return g_gpu_thread == 1 || (back_threaded && g_gpu_thread == 2);
     }
     /// A fault on the command processor thread: the draw thread must be idle before the fault
     /// handler touches the GPU state (it may also produce what the faulting read wants).
     void PrepareGpuSideFault() {
-        if (back_threaded && std::this_thread::get_id() == gpu_id) {
+        if (back_threaded && g_gpu_thread == 1) {
             DrainBack();
         }
     }
@@ -231,7 +235,7 @@ public:
     void DrainBack();
     /// True on the command processor thread while the draw thread does the GPU work.
     bool RunsGpuWorkElsewhere() const noexcept {
-        return back_threaded && std::this_thread::get_id() == gpu_id;
+        return back_threaded && g_gpu_thread == 1;
     }
     /// Command processor: runs func on the draw thread after what is queued, and waits for it.
     void RunOnBackThread(Common::UniqueFunction<void>&& func) {
@@ -373,6 +377,7 @@ private:
         /// sotc: equal for consecutive ops that bind the same pipeline, user data and flat
         /// buffers (0: never reused); see CaptureBackOp and Rasterizer::TryReuseBindings.
         u64 bind_key{};
+        bool writes_memory{}; ///< sotc: published as writing guest memory (BackPublish)
         Common::UniqueFunction<void> func;
     };
     static constexpr u32 RegChunkDwords = 64;
@@ -407,6 +412,8 @@ private:
         }
     }
     void WaitBackTail(u64 target);
+    /// sotc: a whole round over the queues processed no packet (every task waits).
+    void IdleBackoff(u32 rounds);
     void MarkRegs(u32 first_dword, u32 num_dwords) {
         if (!back_threaded || num_dwords == 0) {
             return;
@@ -442,10 +449,15 @@ private:
     std::atomic<u64> back_tail{0};
     std::atomic<bool> back_sleeping{false};
     std::atomic<bool> drain_waiting{false};
+    /// sotc: the tail the (single, command processor) drain waiter needs before a wake-up; ops
+    /// that write guest memory wake it too.
+    std::atomic<u64> drain_target{0};
     std::mutex back_mutex;
     std::condition_variable back_cv;
     std::condition_variable drain_cv;
     u64 back_write_seq{0};
+    /// sotc: PM4 packets the command processor took (Process: rounds without progress back off).
+    u64 cp_packets{0};
     Regs back_regs{};
     ComputeProgram back_cs{};
     u64 back_bind_key{};

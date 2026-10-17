@@ -249,6 +249,17 @@ private:
     StreamBuffer stream_buffer;
     Buffer gds_buffer;
     RangeSet gpu_modified_ranges;
+    /// sotc: every subtraction from gpu_modified_ranges (callers hold its lock as before).
+    void SubtractGpuModified(VAddr addr, u64 size) {
+        gpu_modified_ranges.Subtract(addr, size);
+        ++gpu_modified_version;
+    }
+    /// sotc: ranges AddGpuModified found in or added to gpu_modified_ranges, valid while nothing
+    /// was subtracted since (gpu_modified_version): a draw marking them again skips the lock.
+    std::array<std::pair<VAddr, VAddr>, 8> gpu_modified_recent{};
+    u32 gpu_modified_recent_next{};
+    u64 gpu_modified_version{};
+    u64 gpu_modified_recent_version{};
     /// sotc: gpu_modified_ranges is changed on the GPU side (the draw thread, see
     /// Liverpool::IsBackThreaded) and read by the command processor's SRT walkers (ReadClean).
     std::shared_mutex gpu_modified_mutex;

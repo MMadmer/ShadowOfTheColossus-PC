@@ -18,12 +18,17 @@
 #include "common/perf_stats.h"
 #include "common/thread.h"
 #include "video_core/renderer_vulkan/vk_recorder.h"
+#include "video_core/sotc_stats.h"
 
 #if defined(_M_X64) || defined(__x86_64__)
 #include <immintrin.h>
 #define RECORDER_PAUSE() _mm_pause()
 #else
 #define RECORDER_PAUSE()
+#endif
+
+#ifdef _WIN32
+extern "C" void compat_sleep_ns(uint64_t ns); // src/compat_win.c (0: SwitchToThread)
 #endif
 
 namespace Vulkan {
@@ -218,6 +223,120 @@ size_t ArrayBytes(const VkWriteDescriptorSet& write) {
     return 0;
 }
 
+/// sotc: the last push descriptor set (per bind point) and push constants recorded into the
+/// current fake command buffer (producer side). A push equal to the last one repeats state the
+/// command buffer already has (pipeline binds do not disturb it), so it is dropped: draws that
+/// keep their bindings (Rasterizer::TryReuseBindings) push the same descriptors again. Reset for
+/// every new command buffer (NewFakeHandle) and by descriptor set binds. SOTC_PUSH_DEDUPE=0 keeps
+/// every push.
+struct LastPushSet {
+    bool valid{};
+    VkCommandBuffer cmdbuf{}; // a session records a primary and an upload command buffer
+    VkPipelineLayout layout{};
+    u32 set{};
+    std::vector<VkWriteDescriptorSet> writes;
+    std::vector<VkDescriptorImageInfo> images;
+    std::vector<VkDescriptorBufferInfo> buffers;
+    std::vector<VkBufferView> views;
+};
+struct LastPushConstants {
+    bool valid{};
+    VkCommandBuffer cmdbuf{};
+    VkPipelineLayout layout{};
+    VkShaderStageFlags stages{};
+    u32 offset{};
+    std::vector<u8> bytes;
+};
+LastPushSet g_last_sets[2]; // graphics, compute
+LastPushConstants g_last_constants;
+
+bool PushDedupeEnabled() {
+    static const bool enabled = [] {
+        const char* v = std::getenv("SOTC_PUSH_DEDUPE");
+        return !v || v[0] != '0';
+    }();
+    return enabled;
+}
+
+LastPushSet* LastSetFor(VkPipelineBindPoint bind_point) {
+    return bind_point == VK_PIPELINE_BIND_POINT_GRAPHICS  ? &g_last_sets[0]
+           : bind_point == VK_PIPELINE_BIND_POINT_COMPUTE ? &g_last_sets[1]
+                                                          : nullptr;
+}
+
+/// Whether the push equals the last one (field by field: the info structs may hold padding).
+bool SamePush(const LastPushSet& last, VkCommandBuffer cmdbuf, VkPipelineLayout layout, u32 set,
+              u32 num_writes, const VkWriteDescriptorSet* writes) {
+    if (!last.valid || last.cmdbuf != cmdbuf || last.layout != layout || last.set != set ||
+        last.writes.size() != num_writes) {
+        return false;
+    }
+    size_t image = 0, buffer = 0, view = 0;
+    for (u32 i = 0; i < num_writes; ++i) {
+        const auto& a = writes[i];
+        const auto& b = last.writes[i];
+        if (a.dstBinding != b.dstBinding || a.dstArrayElement != b.dstArrayElement ||
+            a.descriptorCount != b.descriptorCount || a.descriptorType != b.descriptorType) {
+            return false;
+        }
+        for (u32 k = 0; k < a.descriptorCount; ++k) {
+            switch (ArrayOf(a.descriptorType)) {
+            case WriteArray::Image: {
+                const auto& x = a.pImageInfo[k];
+                const auto& y = last.images[image++];
+                if (x.sampler != y.sampler || x.imageView != y.imageView ||
+                    x.imageLayout != y.imageLayout) {
+                    return false;
+                }
+                break;
+            }
+            case WriteArray::Buffer: {
+                const auto& x = a.pBufferInfo[k];
+                const auto& y = last.buffers[buffer++];
+                if (x.buffer != y.buffer || x.offset != y.offset || x.range != y.range) {
+                    return false;
+                }
+                break;
+            }
+            case WriteArray::TexelView:
+                if (a.pTexelBufferView[k] != last.views[view++]) {
+                    return false;
+                }
+                break;
+            }
+        }
+    }
+    return true;
+}
+
+void SavePush(LastPushSet& last, VkCommandBuffer cmdbuf, VkPipelineLayout layout, u32 set,
+              u32 num_writes, const VkWriteDescriptorSet* writes) {
+    last.valid = true;
+    last.cmdbuf = cmdbuf;
+    last.layout = layout;
+    last.set = set;
+    last.writes.assign(writes, writes + num_writes);
+    last.images.clear();
+    last.buffers.clear();
+    last.views.clear();
+    for (u32 i = 0; i < num_writes; ++i) {
+        const auto& w = writes[i];
+        switch (ArrayOf(w.descriptorType)) {
+        case WriteArray::Image:
+            last.images.insert(last.images.end(), w.pImageInfo, w.pImageInfo + w.descriptorCount);
+            break;
+        case WriteArray::Buffer:
+            last.buffers.insert(last.buffers.end(), w.pBufferInfo,
+                                w.pBufferInfo + w.descriptorCount);
+            break;
+        case WriteArray::TexelView:
+            last.views.insert(last.views.end(), w.pTexelBufferView,
+                              w.pTexelBufferView + w.descriptorCount);
+            break;
+        }
+    }
+}
+
 template <auto Member>
 void InvokePushDescriptorSet(void* payload) {
     const auto* push = static_cast<const PushDescriptorPayload*>(payload);
@@ -232,6 +351,20 @@ void VKAPI_CALL CmdPushDescriptorSet(VkCommandBuffer cmdbuf, VkPipelineBindPoint
                                      const VkWriteDescriptorSet* writes) {
     if (!CommandRecorder::IsFake(cmdbuf)) {
         return RealOf<Member>()(cmdbuf, bind_point, layout, set, num_writes, writes);
+    }
+    if (PushDedupeEnabled()) {
+        if (auto* last = LastSetFor(bind_point)) {
+            if (SotcStats::kFpsLog) {
+                SotcStats::push_sets.fetch_add(1, std::memory_order_relaxed);
+            }
+            if (SamePush(*last, cmdbuf, layout, set, num_writes, writes)) {
+                if (SotcStats::kFpsLog) {
+                    SotcStats::push_sets_dropped.fetch_add(1, std::memory_order_relaxed);
+                }
+                return;
+            }
+            SavePush(*last, cmdbuf, layout, set, num_writes, writes);
+        }
     }
     size_t bytes = sizeof(PushDescriptorPayload) + num_writes * sizeof(VkWriteDescriptorSet);
     for (u32 i = 0; i < num_writes; ++i) {
@@ -273,6 +406,26 @@ void VKAPI_CALL CmdPushConstants(VkCommandBuffer cmdbuf, VkPipelineLayout layout
                                  const void* values) {
     if (!CommandRecorder::IsFake(cmdbuf)) {
         return RealOf<Member>()(cmdbuf, layout, stages, offset, size, values);
+    }
+    if (PushDedupeEnabled()) {
+        auto& last = g_last_constants;
+        if (SotcStats::kFpsLog) {
+            SotcStats::push_consts.fetch_add(1, std::memory_order_relaxed);
+        }
+        if (last.valid && last.cmdbuf == cmdbuf && last.layout == layout && last.stages == stages &&
+            last.offset == offset && last.bytes.size() == size &&
+            std::memcmp(last.bytes.data(), values, size) == 0) {
+            if (SotcStats::kFpsLog) {
+                SotcStats::push_consts_dropped.fetch_add(1, std::memory_order_relaxed);
+            }
+            return;
+        }
+        last.valid = true;
+        last.cmdbuf = cmdbuf;
+        last.layout = layout;
+        last.stages = stages;
+        last.offset = offset;
+        last.bytes.assign(static_cast<const u8*>(values), static_cast<const u8*>(values) + size);
     }
     auto& rec = *g_recorder;
     rec.Reserve(size + 256);
@@ -490,6 +643,9 @@ void VKAPI_CALL CmdBindDescriptorSets(VkCommandBuffer cmdbuf, VkPipelineBindPoin
         return RealOf<Member>()(cmdbuf, bind_point, layout, first, count, sets, num_dynamic,
                                 dynamic_offsets);
     }
+    if (auto* last = LastSetFor(bind_point); last && last->cmdbuf == cmdbuf) {
+        last->valid = false; // sotc: may replace the pushed set (push dedupe)
+    }
     auto& rec = *g_recorder;
     rec.Reserve(count * sizeof(VkDescriptorSet) + num_dynamic * sizeof(u32) + 256);
     const auto* sets_copy = rec.Copy(sets, count);
@@ -670,6 +826,8 @@ vk::CommandBuffer CommandRecorder::NewFakeHandle() {
         std::this_thread::yield();
     }
     const u32 index = static_cast<u32>(handles_issued++ % NumFakeHandles);
+    // sotc: a new command buffer starts without pushed state (push dedupe).
+    g_last_sets[0].valid = g_last_sets[1].valid = g_last_constants.valid = false;
     return vk::CommandBuffer{reinterpret_cast<VkCommandBuffer>(&g_fake_handles[index])};
 }
 
@@ -880,9 +1038,25 @@ void CommandRecorder::ConsumerLoop(std::stop_token stoken) {
         if (pos == committed) {
             // When there is no work, spin briefly before sleeping until the producer kicks the
             // queue or the short timeout expires
+            // sotc: with four hardware threads or fewer the spin hands the core to any ready thread
+            // (SwitchToThread, across priorities: this thread runs above the game's): the producer
+            // publishes every few microseconds, so the spin otherwise never ended there and took a
+            // whole core. SOTC_REC_POLITE=0/1 forces it off/on.
+            static const bool polite = [] {
+                if (const char* v = std::getenv("SOTC_REC_POLITE")) {
+                    return v[0] != '0';
+                }
+                return Common::UsableCpuCount() <= 4;
+            }();
             const auto spin_end = Clock::now() + SpinTime;
             while ((committed = chunk->committed.load(std::memory_order_acquire)) == pos &&
                    Clock::now() < spin_end && !stoken.stop_requested()) {
+#ifdef _WIN32
+                if (polite) {
+                    compat_sleep_ns(0);
+                    continue;
+                }
+#endif
                 RECORDER_PAUSE();
             }
             if (committed == pos) {

@@ -22,6 +22,8 @@ inline const bool kCmdStats = std::getenv("SOTC_CMD_STATS") != nullptr;
 inline std::atomic<uint64_t> readbacks{0};    ///< BufferCache::DownloadMemory calls
 inline std::atomic<uint64_t> bind_calls{0};   ///< Rasterizer::BindResources (SOTC_FPS)
 inline std::atomic<uint64_t> bind_reused{0};  ///< binds served by TryReuseBindings
+inline std::atomic<uint64_t> push_sets{0}, push_sets_dropped{0};   ///< recorded push descriptors
+inline std::atomic<uint64_t> push_consts{0}, push_consts_dropped{0}; ///< ... push constants
 inline std::atomic<uint64_t> bind_reject[9]{}; ///< ... refused, by reason
 inline std::atomic<uint64_t> bind_unrecorded[8]{}; ///< full binds not reusable, by reason
 inline std::atomic<uint64_t> readback_ns{0};  ///< time spent in them (copy and wait)

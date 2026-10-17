@@ -346,37 +346,70 @@ static DWORD WINAPI profiler(void *name) {
     Describe describe=(Describe)(void *)GetProcAddress(GetModuleHandleA("kernel32.dll"),"GetThreadDescription");
     const char *delay=getenv("SOTC_PROFILE_DELAY"), *seconds=getenv("SOTC_PROFILE_SECONDS");
     Sleep((delay ? atoi(delay) : 20)*1000);
-    wchar_t wanted[128];
-    MultiByteToWideChar(CP_UTF8,0,(const char *)name,-1,wanted,128);
-    DWORD target=0;
+    /* sotc: SOTC_PROFILE="A|B|C" samples several threads in turn; the summary below is of the
+     * first. SOTC_PROFILE_STACKS=<file>: every sample's whole stack, one line each ("<thread
+     * index> <rip> <return addresses...>", absolute hex; header "base <exe base>" and "thread
+     * <index> <name>"), for call trees offline (tools/profile_tree.py). */
+    enum { MAX_TARGETS=4 };
+    wchar_t wanted[MAX_TARGETS][64];
+    char wanted_utf8[MAX_TARGETS][64];
+    int wanted_count=0;
+    for (const char *at=(const char *)name; *at && wanted_count<MAX_TARGETS;) {
+        const char *bar=strchr(at,'|');
+        const size_t len=bar ? (size_t)(bar-at) : strlen(at);
+        snprintf(wanted_utf8[wanted_count],64,"%.*s",(int)len,at);
+        MultiByteToWideChar(CP_UTF8,0,wanted_utf8[wanted_count],-1,wanted[wanted_count],64);
+        ++wanted_count;
+        at+=len+(bar ? 1 : 0);
+    }
+    DWORD targets[MAX_TARGETS]={0};
     HANDLE snapshot=CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD,0);
     THREADENTRY32 te={.dwSize=sizeof(te)};
-    for (BOOL ok=Thread32First(snapshot,&te); ok && !target; ok=Thread32Next(snapshot,&te)) {
+    for (BOOL ok=Thread32First(snapshot,&te); ok; ok=Thread32Next(snapshot,&te)) {
         if (te.th32OwnerProcessID!=GetCurrentProcessId()) continue;
         HANDLE t=OpenThread(THREAD_QUERY_LIMITED_INFORMATION,FALSE,te.th32ThreadID);
         PWSTR text=NULL;
         if (t && describe && SUCCEEDED(describe(t,&text)) && text) {
-            if (wcsstr(text,wanted)) target=te.th32ThreadID;
+            for (int i=0;i<wanted_count;++i)
+                if (!targets[i] && wcsstr(text,wanted[i])) targets[i]=te.th32ThreadID;
             LocalFree(text);
         }
         if (t) CloseHandle(t);
     }
     CloseHandle(snapshot);
-    if (!target) { fprintf(stderr,"SOTC profile: no thread named like %s\n",(const char *)name); return 0; }
-    HANDLE thread=OpenThread(THREAD_SUSPEND_RESUME|THREAD_GET_CONTEXT|THREAD_QUERY_INFORMATION,FALSE,target);
+    if (!targets[0]) { fprintf(stderr,"SOTC profile: no thread named like %s\n",wanted_utf8[0]); return 0; }
+    HANDLE threads[MAX_TARGETS]={0};
+    for (int i=0;i<wanted_count;++i)
+        if (targets[i])
+            threads[i]=OpenThread(THREAD_SUSPEND_RESUME|THREAD_GET_CONTEXT|THREAD_QUERY_INFORMATION,FALSE,targets[i]);
     profile_slots=calloc(PROFILE_SLOTS,sizeof(*profile_slots));
-    if (!thread || !profile_slots) return 0;
+    if (!threads[0] || !profile_slots) return 0;
+    FILE *stacks=getenv("SOTC_PROFILE_STACKS") ? fopen(getenv("SOTC_PROFILE_STACKS"),"w") : NULL;
+    if (stacks) {
+        fprintf(stacks,"base %llx\n",(unsigned long long)(uintptr_t)GetModuleHandleA(NULL));
+        for (int i=0;i<wanted_count;++i)
+            if (threads[i]) fprintf(stacks,"thread %d %s\n",i,wanted_utf8[i]);
+    }
     const ULONGLONG end=GetTickCount64()+(ULONGLONG)(seconds ? atoi(seconds) : 15)*1000;
     unsigned samples=0;
     timeBeginPeriod(1);
     while (GetTickCount64()<end) {
+      for (int k=0;k<wanted_count;++k) {
+        HANDLE thread=threads[k];
+        if (!thread) continue;
         if (SuspendThread(thread)!=(DWORD)-1) {
             CONTEXT c={.ContextFlags=CONTEXT_CONTROL|CONTEXT_INTEGER};
             if (GetThreadContext(thread,&c)) {
-                ++samples;
-                profile_add((uintptr_t)c.Rip,1);
+                const int summary=k==0;
+                uintptr_t frames[33];
+                volatile int frame_count=0; /* read after a recovery jump too */
+                frames[frame_count++]=(uintptr_t)c.Rip;
+                if (summary) {
+                    ++samples;
+                    profile_add((uintptr_t)c.Rip,1);
+                }
                 const uintptr_t leaf=(uintptr_t)c.Rip;
-                int first_own=1;
+                int first_own=summary;
                 /* sotc: RtlVirtualUnwind on a snapshot taken mid-prologue can read a garbage
                  * address; that fault ended the whole game (ntdll, "not ours", unhandled). The
                  * handler's recovery point resumes here instead and the rest of the stack is
@@ -398,6 +431,8 @@ static DWORD WINAPI profiler(void *name) {
                         c.Rip=ret; c.Rsp+=8;
                     }
                     if (!c.Rip) break;
+                    frames[frame_count++]=(uintptr_t)c.Rip;
+                    if (!summary) continue;
                     profile_add((uintptr_t)c.Rip,0);
                     /* The first frame in the loader/GPU library that leads to a system leaf:
                      * who waits, locks or calls the driver. */
@@ -408,14 +443,24 @@ static DWORD WINAPI profiler(void *name) {
                     }
                 }
                 runtime_fault_recover=NULL;
+                ResumeThread(thread);
+                /* Written once the thread runs again: it may hold the CRT's file lock. */
+                if (stacks) {
+                    fprintf(stacks,"%d",k);
+                    for (int f=0;f<frame_count;++f) fprintf(stacks," %llx",(unsigned long long)frames[f]);
+                    fputc('\n',stacks);
+                }
+                continue;
             }
             ResumeThread(thread);
         }
+      }
         Sleep(1);
     }
     timeEndPeriod(1);
+    if (stacks) fclose(stacks);
     char where[MAX_PATH+64];
-    fprintf(stderr,"SOTC profile of %s: %u samples\n",(const char *)name,samples);
+    fprintf(stderr,"SOTC profile of %s: %u samples\n",wanted_utf8[0],samples);
     /* SOTC_PROFILE_OUT=<file>: every sampled address (module offset, leaf, inclusive), for
      * per-function totals offline (tools/profile_sym.py --functions). */
     if (getenv("SOTC_PROFILE_OUT")) {

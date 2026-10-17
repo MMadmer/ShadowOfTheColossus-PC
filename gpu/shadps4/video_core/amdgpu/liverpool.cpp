@@ -32,6 +32,9 @@
 #include "video_core/sotc_stats.h"
 
 // sotc: writes guest memory through the backing view (runtime_memory.c).
+#ifdef _WIN32
+extern "C" void compat_sleep_ns(uint64_t ns); // src/compat_win.c (0: SwitchToThread)
+#endif
 extern "C" int runtime_memory_write_backing(unsigned long long address, const void* data,
                                             unsigned long long size);
 
@@ -201,6 +204,7 @@ static void RaiseGpuThreadPriority() {
 void Liverpool::BackLoop(std::stop_token stoken) {
     Common::SetCurrentThreadName("shadPS4:GpuDraw");
     RaiseGpuThreadPriority();
+    g_gpu_thread = 2;
     Shader::g_info_slot = 1;
     u64 tail = back_tail.load(std::memory_order_relaxed);
     while (!stoken.stop_requested()) {
@@ -238,11 +242,15 @@ void Liverpool::BackLoop(std::stop_token stoken) {
             continue;
         }
         BackOp& op = back_ring[tail % BackRingSize];
+        const bool wrote = op.writes_memory;
         ExecuteBackOp(op);
         op.func = {};
         ++tail;
         back_tail.store(tail, std::memory_order_seq_cst);
-        if (drain_waiting.load(std::memory_order_seq_cst)) {
+        // sotc: a waiter is woken by what it can wait for: its tail, or a guest memory write (a
+        // fence a waiting packet may test); no lock and notify for every other op.
+        if (drain_waiting.load(std::memory_order_seq_cst) &&
+            (wrote || tail >= drain_target.load(std::memory_order_relaxed))) {
             std::scoped_lock lk{back_mutex};
             drain_cv.notify_all();
         }
@@ -250,7 +258,7 @@ void Liverpool::BackLoop(std::stop_token stoken) {
 }
 
 void Liverpool::DrainBack() {
-    if (!back_threaded || std::this_thread::get_id() == back_id) {
+    if (!back_threaded || g_gpu_thread == 2) {
         return;
     }
     WaitBackTail(back_head.load(std::memory_order_acquire));
@@ -264,12 +272,56 @@ void Liverpool::WaitBackTail(u64 head) {
             continue;
         }
         std::unique_lock lk{back_mutex};
+        drain_target.store(head, std::memory_order_relaxed);
         drain_waiting.store(true, std::memory_order_seq_cst);
         drain_cv.wait_for(lk, std::chrono::milliseconds(1), [&] {
             return back_tail.load(std::memory_order_seq_cst) >= head;
         });
         drain_waiting.store(false, std::memory_order_relaxed);
     }
+}
+
+void Liverpool::IdleBackoff(u32 rounds) {
+    // sotc: when every queued task waits (WAIT_REG_MEM, memory semaphores, CE/DE counters), the
+    // rounds spun the command processor at 100%: a third of its time went to the clock reads and
+    // the queue lock of empty resumes. On 4-core CPUs that is a core the game's threads need, and
+    // there the thread runs above them. A few short spins first; then, with draw work queued, a
+    // wait until the draw thread ran an op; with none, the core goes to other threads
+    // (SwitchToThread works across priorities), and after a longer wait the thread naps.
+    // SOTC_CP_IDLE=0 spins as before.
+    static const bool enabled = [] {
+        const char* v = std::getenv("SOTC_CP_IDLE");
+        return !v || v[0] != '0';
+    }();
+    if (!enabled || rounds <= 8) {
+        for (u32 i = 0; i < 16; ++i) {
+            CpuRelax();
+        }
+        return;
+    }
+    // With draw work queued, the next op it runs: fences are written by the GPU-completion
+    // callbacks the draw thread runs inside any op (Scheduler::PopPendingOperations), so waiting
+    // for writing ops only (or the last one) woke too late (27.5 instead of 30 FPS).
+    const u64 tail = back_tail.load(std::memory_order_acquire);
+    if (back_threaded && back_head.load(std::memory_order_relaxed) != tail) {
+        std::unique_lock lk{back_mutex};
+        drain_target.store(tail + 1, std::memory_order_relaxed);
+        drain_waiting.store(true, std::memory_order_seq_cst);
+        drain_cv.wait_for(lk, std::chrono::milliseconds(1), [&] {
+            return back_tail.load(std::memory_order_seq_cst) != tail;
+        });
+        drain_waiting.store(false, std::memory_order_relaxed);
+        return;
+    }
+#ifdef _WIN32
+    compat_sleep_ns(rounds <= 64 ? 0 : 50'000);
+#else
+    if (rounds <= 64) {
+        std::this_thread::yield();
+    } else {
+        std::this_thread::sleep_for(std::chrono::microseconds(50));
+    }
+#endif
 }
 
 Liverpool::BackOp& Liverpool::BackAlloc() {
@@ -280,6 +332,7 @@ Liverpool::BackOp& Liverpool::BackAlloc() {
             continue;
         }
         std::unique_lock lk{back_mutex};
+        drain_target.store(head - BackRingSize + 1, std::memory_order_relaxed);
         drain_waiting.store(true, std::memory_order_seq_cst);
         drain_cv.wait_for(lk, std::chrono::milliseconds(1), [&] {
             return head - back_tail.load(std::memory_order_seq_cst) < BackRingSize;
@@ -305,6 +358,7 @@ Liverpool::BackOp& Liverpool::BackAlloc() {
 
 void Liverpool::BackPublish(bool writes_memory) {
     const u64 head = back_head.load(std::memory_order_relaxed) + 1;
+    back_ring[(head - 1) % BackRingSize].writes_memory = writes_memory;
     back_head.store(head, std::memory_order_seq_cst);
     if (writes_memory) {
         back_write_seq = head;
@@ -529,7 +583,7 @@ void Liverpool::ProcessCommands() {
     // threads waiting for a readback do not wait for the queue), and the ordered ones are queued
     // here, at this point of the command stream.
     if (back_threaded) {
-        if (std::this_thread::get_id() == back_id) {
+        if (g_gpu_thread == 2) {
             while (num_commands) {
                 Common::UniqueFunction<void> callback{};
                 {
@@ -571,6 +625,7 @@ void Liverpool::Process(std::stop_token stoken) {
     Common::SetCurrentThreadName("shadPS4:GpuCommandProcessor");
     RaiseGpuThreadPriority();
     gpu_id = std::this_thread::get_id();
+    g_gpu_thread = 1;
 #ifdef __linux__
     gpu_tid = gettid();
 #endif
@@ -592,11 +647,21 @@ void Liverpool::Process(std::stop_token stoken) {
         VideoCore::StartCapture();
 
         curr_qid = -1;
+        u64 round_packets = cp_packets;
+        u32 idle_rounds = 0;
 
         while (num_submits || (num_commands && !back_threaded) || num_ordered) {
             ProcessCommands();
 
             curr_qid = (curr_qid + 1) % num_mapped_queues;
+            if (curr_qid == 0) {
+                if (cp_packets == round_packets) {
+                    IdleBackoff(++idle_rounds);
+                } else {
+                    idle_rounds = 0;
+                    round_packets = cp_packets;
+                }
+            }
 
             auto& queue = mapped_queues[curr_qid];
 
@@ -615,6 +680,7 @@ void Liverpool::Process(std::stop_token stoken) {
 
             if (task.done()) {
                 task.destroy();
+                ++cp_packets;
 
                 std::scoped_lock lock{queue.m_access};
                 queue.submits.pop();
@@ -648,6 +714,7 @@ Liverpool::Task Liverpool::ProcessCeUpdate(std::span<const u32> ccb) {
 
     while (!ccb.empty()) {
         ProcessCommands();
+        ++cp_packets;
 
         const auto* header = reinterpret_cast<const PM4Header*>(ccb.data());
         const u32 type = header->type;
@@ -729,6 +796,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
     const auto base_addr = reinterpret_cast<uintptr_t>(dcb.data());
     while (!dcb.empty()) {
         ProcessCommands();
+        ++cp_packets;
 
         const auto* header = reinterpret_cast<const PM4Header*>(dcb.data());
         const u32 type = header->type;
@@ -1490,6 +1558,7 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
     size_t acb_size = acb.size_bytes();
     while (!acb.empty()) {
         ProcessCommands();
+        ++cp_packets;
 
         auto* header = reinterpret_cast<const PM4Header*>(acb.data());
         // Type-2 padding is a single dword; its count bits are meaningless. Sizing it as type-3

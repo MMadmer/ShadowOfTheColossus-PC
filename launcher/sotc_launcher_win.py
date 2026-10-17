@@ -30,7 +30,7 @@ CONFIG_DIR = Path(os.environ.get('APPDATA', Path.home())) / 'sotc-launcher'
 CONFIG_FILE = CONFIG_DIR / 'settings.json'
 GAME_ID, GAME_VERSION = 'CUSA08809', '01.01'
 SYS_MODULES = ('libSceUlt.sprx', 'libSceNgs2.sprx')
-VERSION = '0.57-opt6'
+VERSION = '0.57-opt7'
 MAX_LOG_LINES = 6000
 NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 
@@ -184,16 +184,21 @@ RENDER_RES = [('', ('1080p (nativa, como no PS4)', '1080p (native, as on PS4)'))
 
 def weak_gpu_render_res(gpu_line):
     """The render resolution a card starts with ('' = native 1080p), from bb-gpu-capabilities'
-    "GPU: <name>, <kind>, <N> MiB" line: GTX 1050 class or up to 3 GB: 900p; integrated or under
-    1.5 GB: 720p. Textures, fog and effects stay the same; only the 3D scene renders smaller."""
+    "GPU: <name>, <kind>, <N> MiB" line. A GTX 1050 is ~4.5x slower than the RTX 3070 Laptop the
+    port is measured on (11.3 ms of GPU at 1080p in the shrine): 810p for it, the MX cards and
+    other 2 GB cards; 900p for the 1050 Ti class and cards up to 3 GB; 720p for integrated
+    graphics and cards under 1.5 GB. Textures, fog and effects stay; only the 3D scene is smaller."""
     found = re.match(r'(.*), (discrete|integrated or other), (\d+) MiB', gpu_line)
     if not found:
         return ''
     name, kind, mib = found[1], found[2], int(found[3])
     if kind != 'discrete' or mib < 1536:
         return 'res720'
-    weak = mib <= 3072 or re.search(r'GTX (7\d\d|9[0-6]0|10[35]0)|GT \d{3,4}\b|MX ?\d{3}|RX (46|5[45])0', name)
-    return 'res900' if weak else ''
+    if mib <= 2560 or re.search(r'GTX 10[35]0(?! Ti)|GT \d{3,4}\b|MX ?\d{3}|RX (46|5[45])0', name):
+        return 'res810'
+    if mib <= 3072 or re.search(r'GTX (7\d\d|9[0-6]0|10[35]0)', name):
+        return 'res900'
+    return ''
 
 
 UPSCALERS = [('fsr1', ('FSR 1 (AMD, qualquer placa)', 'FSR 1 (AMD, any GPU)')),

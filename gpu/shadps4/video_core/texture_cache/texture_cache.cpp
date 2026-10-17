@@ -1467,12 +1467,48 @@ void TextureCache::Census() {
     u64 rebased = 0, rebased_count = 0, dropped = 0, projected = 0, projected_hwcnt = 0;
     const u64 current_tick = scheduler.CurrentTick();
     std::scoped_lock lock{mutex};
+    // sotc: SOTC_CENSUS_DUMP=<file>: every cached image, once, the first census after
+    // SOTC_CENSUS_DUMP_AT (default 70) s: where VRAM goes, offline (aliases, targets).
+    static const char* dump_path = std::getenv("SOTC_CENSUS_DUMP");
+    static const auto dump_at = [] {
+        const char* v = std::getenv("SOTC_CENSUS_DUMP_AT");
+        return std::chrono::steady_clock::now() + std::chrono::seconds{v ? std::atoi(v) : 70};
+    }();
+    static bool dumped = false;
+    std::FILE* dump = nullptr;
+    if (dump_path && !dumped && now >= dump_at) {
+        dumped = true;
+        dump = std::fopen(dump_path, "w");
+        if (dump) {
+            std::fprintf(dump, "id addr guest_size host_size backings w h d layers levels fmt "
+                               "tiled flags usage age samples\n");
+        }
+    }
     lru_cache.ForEachItemBelow(gc_tick, [&](ImageId image_id) {
         const Image& image = slot_images[image_id];
         if (!image.backing) {
             return;
         }
         const u64 host = image.GetHostImageSize();
+        if (dump) {
+            u64 all = 0;
+            for (const auto& b : image.backing_images) {
+                all += b.image.size_bytes;
+            }
+            const u32 usage = image.usage.texture | image.usage.storage << 1 |
+                              image.usage.render_target << 2 | image.usage.depth_target << 3 |
+                              image.usage.vo_surface << 4;
+            std::fprintf(dump, "%u %llx %u %llu %zu %u %u %u %u %u %d %d %x %x %llu %u\n",
+                         image_id.index, static_cast<unsigned long long>(image.info.guest_address),
+                         image.info.guest_size, static_cast<unsigned long long>(all),
+                         image.backing_images.size(), image.info.size.width,
+                         image.info.size.height, image.info.size.depth,
+                         image.info.resources.layers, image.info.resources.levels,
+                         static_cast<int>(image.info.pixel_format), image.info.IsTiled() ? 1 : 0,
+                         static_cast<u32>(image.flags), usage,
+                         static_cast<unsigned long long>(current_tick - image.tick_accessed_last),
+                         image.info.num_samples);
+        }
         ++count;
         if (current_tick - image.tick_accessed_last <= NumFramesBeforeRemoval) {
             live += host;
@@ -1515,6 +1551,9 @@ void TextureCache::Census() {
     SotcStats::census_dropped.store(dropped, std::memory_order_relaxed);
     SotcStats::census_projected.store(projected, std::memory_order_relaxed);
     SotcStats::census_projected_hwcnt.store(projected_hwcnt, std::memory_order_relaxed);
+    if (dump) {
+        std::fclose(dump);
+    }
 }
 
 bool TextureCache::IsSafeToDelete(const Image& image) const {

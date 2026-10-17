@@ -373,8 +373,15 @@ void VideoOutDriver::Flip(const Request& req) {
                 slow_frames = 0;
             }
             if (const uint64_t binds = SotcStats::bind_calls.exchange(0)) {
-                std::fprintf(stderr, "SOTC binds %.0f/s: reused %.1f%%\n", binds / seconds,
-                             100.0 * SotcStats::bind_reused.exchange(0) / binds);
+                const uint64_t sets = SotcStats::push_sets.exchange(0);
+                const uint64_t consts = SotcStats::push_consts.exchange(0);
+                std::fprintf(stderr,
+                             "SOTC binds %.0f/s: reused %.1f%%; repeated pushes dropped: "
+                             "descriptors %.1f%%, constants %.1f%%\n",
+                             binds / seconds, 100.0 * SotcStats::bind_reused.exchange(0) / binds,
+                             sets ? 100.0 * SotcStats::push_sets_dropped.exchange(0) / sets : 0.0,
+                             consts ? 100.0 * SotcStats::push_consts_dropped.exchange(0) / consts
+                                    : 0.0);
                 std::string reasons;
                 for (auto& count : SotcStats::bind_unrecorded) {
                     reasons += fmt::format(" u{:.1f}", 100.0 * count.exchange(0) / binds);

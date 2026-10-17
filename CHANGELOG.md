@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.57-opt7 — 2026-10-18
+- **Processador de comandos sem espera ativa:** quando todos os pacotes esperam (WAIT_REG_MEM,
+  semáforos, contadores CE/DE), ele girava a 100% (relógio e lock a cada volta: um terço do seu
+  tempo). Agora, depois de poucas voltas, ele dorme até o thread de desenho executar a próxima
+  operação, ou cede o núcleo (SwitchToThread) e cochila quando não há desenho na fila
+  (`SOTC_CP_IDLE=0` volta ao anterior). Santuário: 17,6 → 14,3 ms de parse por quadro.
+- **Thread de desenho:** os render targets de um desenho com os mesmos registros de alvo e o mesmo
+  conjunto de imagens são reaproveitados sem nova busca (`SOTC_RT_MEMO=0` desliga); o teste de
+  thread nas leituras de registros não chama mais o winpthreads (~2,5% do thread); marcar de novo
+  um buffer já escrito pela GPU não pega o lock.
+- **Push descriptors repetidos descartados:** um bind reaproveitado mantém a cópia do flat buffer no
+  mesmo command buffer, e o gravador descarta push descriptors e push constants iguais aos últimos
+  (`SOTC_PUSH_DEDUPE=0` desliga). Menos chamadas ao driver no thread de gravação.
+- **Até 4 núcleos:** o gravador cede o núcleo enquanto espera trabalho (`SOTC_REC_POLITE`) em vez
+  de girar com prioridade alta.
+- **Som:** o reverb do mixer NGS2 mantém o estado dos filtros em registradores e não aloca buffers a
+  cada bloco (mesmo resultado, bit a bit).
+- **Resolução de render automática:** na primeira abertura com uma placa o launcher escolhe 810p para
+  GTX 1050, MX e placas de 2 GB, 900p para GTX 1050 Ti e placas de até 3 GB, 720p para integradas;
+  uma vez por placa, e a escolha feita em Gráficos fica.
+- Um T# inválido lido para compilar um shader (escrita via FMask) não encerra mais o jogo.
+- Testado (4 núcleos sem SMT + orçamento de 2 GB emulados, RTX 3070 Laptop): santuário 30 FPS
+  parado, 29,6 de média andando (antes 29,0); colosso 13 a 810p com corrida e câmera girando
+  30,0 FPS (mínimo 30,0), 1,85 núcleos ocupados (antes 2,1), GPU 5,1 ms a 2100 MHz e 1,77 GB de
+  VRAM; 62% dos push descriptors do santuário descartados.
+- Diagnóstico: `SOTC_PROFILE="A|B|C"` amostra vários threads e `SOTC_PROFILE_STACKS=<arquivo>`
+  grava as pilhas inteiras (`tools/profile_tree.py` monta a árvore de chamadas);
+  `SOTC_CENSUS_DUMP=<arquivo>` lista as imagens do cache.
+
 ## 0.57-opt6 — 2026-10-18
 - **PCs de 4 núcleos:** os quatro workers do jogo ficavam consultando a fila de tarefas sem parar
   (no PS4 cada um tem o seu núcleo) e tomavam os núcleos das threads do render. Agora, depois de
@@ -13,9 +42,7 @@
   (`SOTC_GS_PASSTHROUGH=0` volta ao anterior). O cache de shaders é refeito na primeira abertura.
 - **Resolução de render** (launcher, modos `res900`/`res810`/`res720`/`res960`): o jogo renderiza
   abaixo de 1080p e amplia para 1080p ele mesmo, como o PS4 Pro faz de 1440p para 4K. Texturas e
-  névoa iguais. Na primeira abertura com uma placa da classe GTX 1050 (ou com até 3 GB) o launcher
-  já escolhe 900p (integradas ou menos de 1,5 GB: 720p), uma vez por placa; a escolha feita em
-  Gráficos fica.
+  névoa iguais.
 - **Shaders compilados uma vez:** a pasta `shaderpack` traz o cache de pipelines gravado no jogo;
   na primeira abertura ele vira o cache do jogador e todas as pipelines são montadas na tela de
   carregamento, sem compilar durante o jogo.

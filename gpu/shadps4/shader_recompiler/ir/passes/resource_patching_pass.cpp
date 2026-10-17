@@ -501,7 +501,21 @@ void PatchImageSharp(const ResourceDiscovery& resource, Info& info, Descriptors&
 
     // Patch image instruction if image is FMask.
     if (AmdGpu::IsFmask(image.GetDataFmt())) {
-        ASSERT_MSG(!is_written, "FMask storage instructions are not supported");
+        // sotc: a store through an FMask T# only comes from a garbage T# read for the compile
+        // (BindTextures rejects such a T# at bind time too): the store is dropped instead of
+        // ending the game. Valid shaders compile as before.
+        if (is_written) {
+            LOG_WARNING(Render_Recompiler, "Dropping a store through an FMask T# (invalid T#)");
+            if (is_atomic) {
+                // An atomic returns the old value: zero, as from a null image.
+                inst.ReplaceUsesWith(IR::IREmitter{*inst.GetParent(),
+                                                   IR::Block::InstructionList::s_iterator_to(inst)}
+                                         .Imm32(0));
+            } else {
+                inst.Invalidate();
+            }
+            return;
+        }
 
         IR::IREmitter ir{*inst.GetParent(), IR::Block::InstructionList::s_iterator_to(inst)};
         switch (inst.GetOpcode()) {

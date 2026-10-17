@@ -141,7 +141,7 @@ void BufferCache::DropGpuModified(VAddr device_addr, u64 size) {
     liverpool->SendCommand<true>([this, device_addr, size] {
         {
             std::unique_lock gpu_modified_lock{gpu_modified_mutex};
-            gpu_modified_ranges.Subtract(device_addr, size);
+            SubtractGpuModified(device_addr, size);
         }
         memory_tracker->UnmarkRegionAsGpuModified(device_addr, size, false);
         MarkInflightReadbacksDirty(device_addr, size);
@@ -343,7 +343,7 @@ void BufferCache::FinishAsyncReadback(AsyncReadback& readback) {
         for (const auto& item : readback.pending) {
             std::unique_lock gpu_modified_lock{gpu_modified_mutex};
             for (const auto& [address, range_size] : item.gpu_ranges) {
-                gpu_modified_ranges.Subtract(address, range_size);
+                SubtractGpuModified(address, range_size);
             }
         }
         ApplyDownloads(readback.pending, download.mapped, download.offset);
@@ -519,7 +519,7 @@ u64 BufferCache::GatherDownloads(const Buffer* arena, VAddr device_addr, u64 siz
                 gpu_modified_ranges.ForEachInRange(address, range_size, add_download);
                 if (subtract) {
                     std::unique_lock gpu_modified_lock{gpu_modified_mutex};
-                    gpu_modified_ranges.Subtract(address, range_size);
+                    SubtractGpuModified(address, range_size);
                 } else {
                     item.gpu_ranges.emplace_back(address, range_size);
                 }
@@ -712,11 +712,25 @@ void BufferCache::AddGpuModified(VAddr addr, u64 size) {
         const char* v = std::getenv("SOTC_GPUMOD_NOGROW_SKIP");
         return !v || v[0] != '0';
     }();
+    const VAddr end = addr + size;
+    if (gpu_modified_recent_version != gpu_modified_version) {
+        gpu_modified_recent.fill({});
+        gpu_modified_recent_version = gpu_modified_version;
+    }
+    if (nogrow_skip) {
+        for (const auto& [start, stop] : gpu_modified_recent) {
+            if (start <= addr && end <= stop && start < stop) {
+                return; // contained: the set does not grow (as below)
+            }
+        }
+    }
     bool grew;
     {
         std::unique_lock gpu_modified_lock{gpu_modified_mutex};
         grew = gpu_modified_ranges.Add(addr, size);
     }
+    gpu_modified_recent[gpu_modified_recent_next] = {addr, end};
+    gpu_modified_recent_next = (gpu_modified_recent_next + 1) % gpu_modified_recent.size();
     if (!clean_pages_used || size == 0 || (!grew && nogrow_skip)) {
         return;
     }
@@ -857,7 +871,7 @@ bool BufferCache::TryReplaceFromCpu(VAddr addr, const void* data, u64 size) {
     }
     {
         std::unique_lock gpu_modified_lock{gpu_modified_mutex};
-        gpu_modified_ranges.Subtract(addr, size);
+        SubtractGpuModified(addr, size);
     }
     memory_tracker->UnmarkRegionAsGpuModified(addr, size, false);
     MarkInflightReadbacksDirty(addr, size);
@@ -894,7 +908,7 @@ bool BufferCache::TryWriteThroughFromCpu(VAddr addr, const void* data, u64 size)
     if (foreign) {
         return false;
     }
-    gpu_modified_ranges.Subtract(addr, size);
+    SubtractGpuModified(addr, size);
     memory_tracker->UnmarkRegionAsGpuModified(addr, size, false);
     MarkInflightReadbacksDirty(addr, size);
     if (!memory->TryWriteBacking(std::bit_cast<void*>(addr), data, size, 10)) {
@@ -1431,7 +1445,7 @@ void BufferCache::ReleaseMemory(VAddr device_addr, u64 size) {
     ++resident_version; // sotc: invalidates the merged DMA runs
     {
         std::unique_lock gpu_modified_lock{gpu_modified_mutex};
-        gpu_modified_ranges.Subtract(first_block << block_shift,
+        SubtractGpuModified(first_block << block_shift,
                                      (end_block - first_block) << block_shift);
     }
     // sotc: a bind of the same blocks (the guest maps them again) must not share the unbind's

@@ -125,6 +125,55 @@ void Rasterizer::PrepareRenderState(const GraphicsPipeline* pipeline) {
         LOG_WARNING(Render_Vulkan, "Color buffers require gamma correction");
     }
 
+    // sotc: consecutive draws mostly keep their targets. With the same target registers and
+    // extents, and no image registered or unregistered since (FindImage resolves overlaps only by
+    // creating or freeing images; the GPU-write epoch guards its mip-tail writer memos), the
+    // lookups would return the same images: only their bookkeeping is repeated. SOTC_RT_MEMO=0
+    // looks the targets up for every draw.
+    static const bool rt_memo = [] {
+        const char* v = std::getenv("SOTC_RT_MEMO");
+        return !v || v[0] != '0';
+    }();
+    std::array<u8, TargetKeySize> target_key;
+    if (rt_memo) {
+        size_t n = 0;
+        const auto put = [&](const auto& value) {
+            std::memcpy(target_key.data() + n, &value, sizeof(value));
+            n += sizeof(value);
+        };
+        put(regs.color_control);
+        put(regs.color_target_mask);
+        put(regs.color_buffers);
+        put(regs.depth_control);
+        put(regs.depth_buffer);
+        put(regs.depth_view);
+        put(regs.depth_htile_data_base);
+        put(liverpool->DrawCbExtent());
+        put(liverpool->DrawDbExtent());
+    }
+    const u64 generation = texture_cache.ImageSetGeneration();
+    const u64 gpu_epoch = VideoCore::gpu_modified_epoch.load(std::memory_order_relaxed);
+    auto& memo = target_memo;
+    if (rt_memo && memo.valid && memo.mrt_mask == key.mrt_mask && memo.generation == generation &&
+        memo.gpu_epoch == gpu_epoch &&
+        std::memcmp(memo.key.data(), target_key.data(), TargetKeySize) == 0) {
+        const u64 tick = scheduler.CurrentTick();
+        const auto rebind = [&](VideoCore::ImageId image_id) {
+            if (image_id) {
+                bound_images.emplace_back(image_id);
+                auto& image = texture_cache.GetImage(image_id); // touches the LRU (lock held)
+                image.tick_accessed_last = tick;
+                image.binding.is_target = 1u;
+            }
+        };
+        for (s32 cb = 0; cb < std::bit_width(key.mrt_mask); ++cb) {
+            rebind(cb_descs[cb].first);
+        }
+        rebind(db_desc.first);
+        return;
+    }
+    memo.valid = false;
+
     const bool skip_cb_binding =
         regs.color_control.mode == AmdGpu::ColorControl::OperationMode::Disable;
     for (s32 cb = 0; cb < std::bit_width(key.mrt_mask); ++cb) {
@@ -154,6 +203,15 @@ void Rasterizer::PrepareRenderState(const GraphicsPipeline* pipeline) {
         image.binding.is_target = 1u;
     } else {
         db_desc.first = {};
+    }
+    // Kept only when the lookups changed no image: then the next ones would find the same.
+    if (rt_memo && texture_cache.ImageSetGeneration() == generation &&
+        VideoCore::gpu_modified_epoch.load(std::memory_order_relaxed) == gpu_epoch) {
+        memo.valid = true;
+        memo.mrt_mask = key.mrt_mask;
+        memo.generation = generation;
+        memo.gpu_epoch = gpu_epoch;
+        memo.key = target_key;
     }
 }
 
@@ -1208,14 +1266,14 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, Shader::Backend::Binding
                     vk_buffer.Copy(stage.FlatBuf().data(), ubo_size, alignment);
                 buffer_infos.emplace_back(vk_buffer.Handle(), offset, ubo_size);
                 bind_memo.specials.push_back({static_cast<u32>(buffer_infos.size() - 1),
-                                              desc.buffer_type, &stage});
+                                              desc.buffer_type, &stage, scheduler.CurrentTick()});
             } else if (desc.buffer_type == Shader::BufferType::ClipPlanes) {
                 // Permutations compiled without enabled planes never read the buffer, so the
                 // declared binding is satisfied with a null descriptor instead of a copy.
                 if (liverpool->DrawRegs().clipper_control.user_clip_plane_enable == 0) {
                     buffer_infos.emplace_back(VK_NULL_HANDLE, 0, VK_WHOLE_SIZE);
                     bind_memo.specials.push_back({static_cast<u32>(buffer_infos.size() - 1),
-                                                  desc.buffer_type, &stage});
+                                                  desc.buffer_type, &stage, 0});
                 } else {
                     NoBindMemo(1);
                     auto& vk_buffer = buffer_cache.GetStreamBuffer();
@@ -1442,13 +1500,18 @@ bool Rasterizer::TryReuseBindings(const Pipeline* pipeline) {
         bound_buffers.emplace_back(buffer.buffer, buffer.offset, buffer.size, false);
     }
     const u64 alignment = instance.StorageMinAlignment();
-    for (const auto& special : memo.specials) {
-        if (special.type == Shader::BufferType::Flatbuf) {
+    // sotc: an equal bind key means equal flat buffers: in the command buffer that holds the
+    // last copy (same tick), its descriptor stays (no copy, and the recorder drops the repeated
+    // push). A later command buffer copies again: the stream buffer may reuse older ranges.
+    const u64 tick = scheduler.CurrentTick();
+    for (auto& special : bind_memo.specials) {
+        if (special.type == Shader::BufferType::Flatbuf && special.tick != tick) {
             auto& vk_buffer = buffer_cache.GetStreamBuffer();
             const u32 ubo_size = special.stage->FlatBuf().size() * sizeof(u32);
             const u64 offset = vk_buffer.Copy(special.stage->FlatBuf().data(), ubo_size, alignment);
             buffer_infos[special.info_index] =
                 vk::DescriptorBufferInfo{vk_buffer.Handle(), offset, ubo_size};
+            special.tick = tick;
         }
     }
     push_data = MakeUserData(regs);
@@ -1762,6 +1825,7 @@ RenderState Rasterizer::BeginRendering(const GraphicsPipeline* pipeline) {
         }
         auto* image = &texture_cache.GetImage(image_id);
         if (image->binding.needs_rebind) {
+            target_memo.valid = false; // sotc: the target changed (PrepareRenderState memo)
             image_id = bound_images.emplace_back(texture_cache.FindImage(desc));
             image = &texture_cache.GetImage(image_id);
         }

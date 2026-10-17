@@ -7,6 +7,7 @@
 
 #include "common/recursive_lock.h"
 #include "common/shared_first_mutex.h"
+#include "video_core/amdgpu/regs.h"
 #include "video_core/buffer_cache/buffer_cache.h"
 #include "video_core/page_manager.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
@@ -190,6 +191,21 @@ private:
     using RenderTargetInfo = std::pair<VideoCore::ImageId, VideoCore::TextureCache::ImageDesc>;
     std::array<RenderTargetInfo, AmdGpu::NUM_COLOR_BUFFERS> cb_descs;
     std::pair<VideoCore::ImageId, VideoCore::TextureCache::ImageDesc> db_desc;
+    /// sotc: what PrepareRenderState looked its targets up from (registers, extents and the
+    /// image set), so a draw with the same targets keeps cb_descs/db_desc (see there).
+    static constexpr size_t TargetKeySize =
+        sizeof(AmdGpu::Regs::color_control) + sizeof(AmdGpu::Regs::color_target_mask) +
+        sizeof(AmdGpu::Regs::color_buffers) + sizeof(AmdGpu::Regs::depth_control) +
+        sizeof(AmdGpu::Regs::depth_buffer) + sizeof(AmdGpu::Regs::depth_view) +
+        sizeof(AmdGpu::Regs::depth_htile_data_base) +
+        sizeof(AmdGpu::CbDbExtent) * (AmdGpu::NUM_COLOR_BUFFERS + 1);
+    struct TargetMemo {
+        bool valid{};
+        u32 mrt_mask{};
+        u64 generation{};
+        u64 gpu_epoch{};
+        std::array<u8, TargetKeySize> key;
+    } target_memo;
     boost::container::static_vector<vk::DescriptorImageInfo, Shader::NUM_IMAGES> image_infos;
     boost::container::static_vector<vk::DescriptorBufferInfo, Shader::NUM_BUFFERS> buffer_infos;
     boost::container::static_vector<VideoCore::ImageId, Shader::NUM_IMAGES> bound_images;
@@ -237,6 +253,7 @@ private:
         u32 info_index;
         Shader::BufferType type;
         const Shader::Info* stage;
+        u64 tick; ///< command buffer of the flat buffer copy buffer_infos holds
     };
     struct MemoImage {
         VideoCore::ImageId id;

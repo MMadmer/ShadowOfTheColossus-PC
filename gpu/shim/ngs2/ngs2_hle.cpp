@@ -531,29 +531,61 @@ void UpdateRoomFilter(Reverb& r, float rate) {
     r.roomA2 = pole * -pole;
 }
 
+// sotc: the filter state lives in locals while a grain runs (stores into the float buffer may
+// alias the float members, so every sample reloaded and stored them), and the delay line wraps
+// once per run instead of a test per sample. Same operations in the same order (~a fifth of the
+// sound thread went to the reverb).
 void RunComb(Comb& comb, const float* input, float* output, u32 grain) {
     const auto length = static_cast<u32>(comb.buffer.size());
-    for (u32 i = 0; i < grain; i++) {
-        const float emphasized = input[i] * comb.emphasis + comb.previous * comb.emphasisBack;
-        comb.previous = input[i];
-        const float delayed = comb.buffer[comb.cursor];
-        comb.lowpass = delayed * comb.lowpassIn + comb.lowpass * comb.lowpassBack;
-        const float back = (delayed * comb.direct + comb.lowpass * comb.filtered) * comb.feedback;
-        comb.buffer[comb.cursor] = emphasized + back;
-        output[i] = back;
-        comb.cursor = comb.cursor + 1 == length ? 0 : comb.cursor + 1;
+    if (length == 0) {
+        return;
     }
+    float* const buffer = comb.buffer.data();
+    const float emphasis = comb.emphasis, emphasis_back = comb.emphasisBack;
+    const float lowpass_in = comb.lowpassIn, lowpass_back = comb.lowpassBack;
+    const float direct = comb.direct, filtered = comb.filtered, feedback = comb.feedback;
+    float previous = comb.previous, lowpass = comb.lowpass;
+    u32 cursor = comb.cursor;
+    for (u32 i = 0; i < grain;) {
+        const u32 end = i + std::min(grain - i, length - cursor);
+        for (; i < end; i++, cursor++) {
+            const float emphasized = input[i] * emphasis + previous * emphasis_back;
+            previous = input[i];
+            const float delayed = buffer[cursor];
+            lowpass = delayed * lowpass_in + lowpass * lowpass_back;
+            const float back = (delayed * direct + lowpass * filtered) * feedback;
+            buffer[cursor] = emphasized + back;
+            output[i] = back;
+        }
+        if (cursor == length) {
+            cursor = 0;
+        }
+    }
+    comb.previous = previous;
+    comb.lowpass = lowpass;
+    comb.cursor = cursor;
 }
 
 void RunAllpass(Allpass& ap, float gain, float* samples, u32 grain) {
     const auto length = static_cast<u32>(ap.buffer.size());
-    for (u32 i = 0; i < grain; i++) {
-        const float delayed = ap.buffer[ap.cursor];
-        const float stored = delayed * gain + samples[i];
-        ap.buffer[ap.cursor] = stored;
-        samples[i] = delayed - gain * stored;
-        ap.cursor = ap.cursor + 1 == length ? 0 : ap.cursor + 1;
+    if (length == 0) {
+        return;
     }
+    float* const buffer = ap.buffer.data();
+    u32 cursor = ap.cursor;
+    for (u32 i = 0; i < grain;) {
+        const u32 end = i + std::min(grain - i, length - cursor);
+        for (; i < end; i++, cursor++) {
+            const float delayed = buffer[cursor];
+            const float stored = delayed * gain + samples[i];
+            buffer[cursor] = stored;
+            samples[i] = delayed - gain * stored;
+        }
+        if (cursor == length) {
+            cursor = 0;
+        }
+    }
+    ap.cursor = cursor;
 }
 
 void MixDownMono(const float* input, u32 channels, u32 grain, float* mono) {
@@ -592,11 +624,16 @@ bool ProcessReverb(Reverb& r, std::vector<float>& samples, u32 channels, u32 gra
         ResetReverb(r);
         r.changed = true;
     }
-    const std::vector<float> input = samples;
-    std::vector<float> mono(grain), early(grain), late(grain);
+    // sotc: scratch buffers kept between calls (every one is written before it is read).
+    thread_local std::vector<float> input, mono, early, late, oldEarly, oldLate, combs, tail;
+    input.assign(samples.begin(), samples.end());
+    mono.resize(grain);
+    early.resize(grain);
+    late.resize(grain);
     MixDownMono(input.data(), channels, grain, mono.data());
     if (r.changed) {
-        std::vector<float> oldEarly(grain), oldLate(grain);
+        oldEarly.resize(grain);
+        oldLate.resize(grain);
         RunTaps(r, r.taps, mono.data(), grain, oldEarly.data(), oldLate.data());
         if (!ApplyReverbParams(r, rate)) {
             r.bad = true;
@@ -615,14 +652,14 @@ bool ProcessReverb(Reverb& r, std::vector<float>& samples, u32 channels, u32 gra
         r.ring[r.ringCursor] = mono[i];
         r.ringCursor = r.ringCursor + 1 == r.ring.size() ? 0 : r.ringCursor + 1;
     }
-    std::vector<float> combs(static_cast<size_t>(COMBS) * grain);
+    combs.resize(static_cast<size_t>(COMBS) * grain);
     for (u32 i = 0; i < COMBS; i++) {
         RunComb(r.combs[i], late.data(), combs.data() + static_cast<size_t>(i) * grain, grain);
     }
     UpdateRoomFilter(r, rate);
     const auto& p = r.params;
     bool audible = false;
-    std::vector<float> tail(grain);
+    tail.resize(grain);
     for (u32 channel = 0; channel < channels && channel < 8; channel++) {
         auto& state = r.channels[channel];
         float* out = samples.data() + static_cast<size_t>(channel) * grain;
@@ -1788,7 +1825,9 @@ void WriteOutput(const RenderBufferInfo& out, const std::vector<float>& mix) {
 
 void RenderSystem(System& sys, const RenderBufferInfo* buffers, u32 count) {
     const u32 grain = sys.grain;
-    std::vector<Voice*> voices;
+    // sotc: kept between calls (their allocations showed in the sound thread's profile).
+    thread_local std::vector<Voice*> voices;
+    voices.clear();
     for (auto* rack : sys.racks) {
         for (auto& v : rack->voices) {
             v->rendered = false;
@@ -1806,7 +1845,11 @@ void RenderSystem(System& sys, const RenderBufferInfo* buffers, u32 count) {
             }
         }
     }
-    std::vector<std::vector<float>> mixes(count);
+    thread_local std::vector<std::vector<float>> mixes;
+    mixes.resize(std::max<size_t>(mixes.size(), count));
+    for (u32 i = 0; i < count; i++) {
+        mixes[i].clear();
+    }
     for (auto* v : voices) {
         if (v->rack->rackId != RACK_MASTERING) {
             continue;
