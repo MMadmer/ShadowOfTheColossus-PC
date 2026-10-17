@@ -11,6 +11,7 @@ namespace Shader::Backend::SPIRV {
 void EmitPrologue(EmitContext& ctx) {
     if (ctx.hw_stage == HwStage::Fragment) {
         ctx.DefineAmdPerVertexAttribs();
+        ctx.DefineGsBarycentrics();
     }
     if (ctx.info.loads.Get(IR::Attribute::WorkgroupIndex)) {
         ctx.DefineWorkgroupIndex();
@@ -73,6 +74,10 @@ void EmitEpilogue(EmitContext& ctx) {
     }
     if (ctx.hw_stage == HwStage::Vertex && ctx.runtime_info.hw.vs.clip_disable) {
         ConvertPositionToClipSpace(ctx);
+    }
+    // sotc: the final clip position, for layout 2's barycentrics (emit_spirv_bary_gs.h).
+    if (ctx.hw_stage == HwStage::Vertex && Sirit::ValidId(ctx.gsb_pos)) {
+        ctx.OpStore(ctx.gsb_pos, ctx.OpLoad(ctx.F32[4], ctx.output_position));
     }
 }
 

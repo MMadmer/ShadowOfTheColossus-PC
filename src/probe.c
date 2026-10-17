@@ -272,6 +272,75 @@ static int profile_by_leaf(const void *a, const void *b) {
 static int profile_by_inclusive(const void *a, const void *b) {
     return (int)((const ProfileSlot *)b)->inclusive-(int)((const ProfileSlot *)a)->inclusive;
 }
+/* sotc: SOTC_THREAD_STATS=<seconds>: every so often, the CPU time of every thread of the process
+ * (by name; unnamed guest threads by id) as a share of one core, the busiest first, and the
+ * total in cores. For planning on CPUs with few cores. */
+#define THREAD_STATS_MAX 512
+static DWORD WINAPI thread_stats(void *arg) {
+    (void)arg;
+    typedef HRESULT (WINAPI *Describe)(HANDLE, PWSTR *);
+    Describe describe=(Describe)(void *)GetProcAddress(GetModuleHandleA("kernel32.dll"),"GetThreadDescription");
+    const int period=atoi(getenv("SOTC_THREAD_STATS"))>0 ? atoi(getenv("SOTC_THREAD_STATS")) : 5;
+    static DWORD ids[THREAD_STATS_MAX];
+    static ULONGLONG last[THREAD_STATS_MAX];
+    static char names[THREAD_STATS_MAX][48];
+    int known=0;
+    ULONGLONG last_wall=GetTickCount64();
+    for (;;) {
+        Sleep((DWORD)period*1000);
+        const ULONGLONG wall=GetTickCount64();
+        const double span=(double)(wall-last_wall)*10000.0; /* 100 ns units */
+        last_wall=wall;
+        struct { double share; int index; } rows[THREAD_STATS_MAX];
+        int count=0;
+        double total=0;
+        HANDLE snapshot=CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD,0);
+        THREADENTRY32 te={.dwSize=sizeof(te)};
+        for (BOOL ok=Thread32First(snapshot,&te); ok; ok=Thread32Next(snapshot,&te)) {
+            if (te.th32OwnerProcessID!=GetCurrentProcessId()) continue;
+            int slot=-1;
+            for (int i=0;i<known;++i) if (ids[i]==te.th32ThreadID) { slot=i; break; }
+            HANDLE t=OpenThread(THREAD_QUERY_LIMITED_INFORMATION,FALSE,te.th32ThreadID);
+            if (!t) continue;
+            FILETIME c,e,k,u;
+            ULONGLONG cpu=0;
+            if (GetThreadTimes(t,&c,&e,&k,&u))
+                cpu=((ULONGLONG)k.dwHighDateTime<<32|k.dwLowDateTime)+((ULONGLONG)u.dwHighDateTime<<32|u.dwLowDateTime);
+            if (slot<0 && known<THREAD_STATS_MAX) {
+                slot=known++;
+                ids[slot]=te.th32ThreadID;
+                last[slot]=cpu;
+                snprintf(names[slot],sizeof names[slot],"tid%lu",(unsigned long)te.th32ThreadID);
+                PWSTR text=NULL;
+                if (describe && SUCCEEDED(describe(t,&text)) && text) {
+                    if (text[0]) WideCharToMultiByte(CP_UTF8,0,text,-1,names[slot],sizeof names[slot],NULL,NULL);
+                    LocalFree(text);
+                }
+                CloseHandle(t);
+                continue;
+            }
+            CloseHandle(t);
+            if (slot<0) continue;
+            const double share=span>0 ? (double)(cpu-last[slot])/span : 0;
+            last[slot]=cpu;
+            total+=share;
+            if (share>=0.01) { rows[count].share=share; rows[count].index=slot; ++count; }
+        }
+        CloseHandle(snapshot);
+        for (int i=1;i<count;++i)
+            for (int j=i;j>0 && rows[j].share>rows[j-1].share;--j) {
+                const double s=rows[j].share; const int x=rows[j].index;
+                rows[j].share=rows[j-1].share; rows[j].index=rows[j-1].index;
+                rows[j-1].share=s; rows[j-1].index=x;
+            }
+        char line[2048];
+        int n=snprintf(line,sizeof line,"SOTC cpu %.2f cores:",total);
+        for (int i=0;i<count && i<16 && n<(int)sizeof line-80;++i)
+            n+=snprintf(line+n,sizeof line-n," %s %.0f%%",names[rows[i].index],rows[i].share*100.0);
+        fprintf(stderr,"%s\n",line);
+    }
+    return 0;
+}
 static DWORD WINAPI profiler(void *name) {
     typedef HRESULT (WINAPI *Describe)(HANDLE, PWSTR *);
     Describe describe=(Describe)(void *)GetProcAddress(GetModuleHandleA("kernel32.dll"),"GetThreadDescription");
@@ -683,6 +752,7 @@ static uint64_t patch_tcb_loads(const Segment *segments, uint64_t count) {
 #endif
 /* sotc: SSE4a and red-zone patches of the eboot (gpu/sotc), described by scripts/sotc_cpu.py. */
 #define SOTC_TRAMPOLINE_SIZE (UINT64_C(16) << 20)
+uintptr_t runtime_guest_image_base;
 static void apply_sotc_cpu_patches(const char *path, const Segment *segments, uint64_t count, uint64_t size) {
     FILE *f=fopen(path,"rb");
     char magic[8];
@@ -984,6 +1054,7 @@ int main(int argc, char **argv) {
     if (getenv("BB_FAULT_RING")) fault_ring_open(getenv("BB_FAULT_RING"));
     if (getenv("BB_STACKS_TRIGGER")) CreateThread(NULL,0,stacks_watcher,(void *)getenv("BB_STACKS_TRIGGER"),0,NULL);
     if (getenv("SOTC_PROFILE")) CreateThread(NULL,0,profiler,(void *)getenv("SOTC_PROFILE"),0,NULL);
+    if (getenv("SOTC_THREAD_STATS")) CreateThread(NULL,0,thread_stats,NULL,0,NULL);
     SetUnhandledExceptionFilter(unhandled_fault);
     if (getenv("BB_STRICT_HANDLES")) {
         PROCESS_MITIGATION_STRICT_HANDLE_CHECK_POLICY strict={0};
@@ -1111,6 +1182,7 @@ int main(int argc, char **argv) {
     image = allocate(round_page(size) + SOTC_TRAMPOLINE_SIZE);
 #endif
     if (fread(image, 1, size, f) != size || fgetc(f) != EOF) fail("incorrect memory image size");
+    runtime_guest_image_base = (uintptr_t)image;
     fclose(f);
     if (!cpu_only) {
         char title[128]="Shadow of the Colossus", serial[16]="UNKNOWN", sfo[4096];

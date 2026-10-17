@@ -171,6 +171,11 @@ public:
         return fragment_shader_barycentric;
     }
 
+    /// Returns true when VK_NV_geometry_shader_passthrough is supported.
+    bool IsGeometryShaderPassthroughSupported() const {
+        return nv_geometry_shader_passthrough;
+    }
+
     /// Returns true when VK_AMD_shader_explicit_vertex_parameter is supported.
     bool IsAmdShaderExplicitVertexParameterSupported() const {
         return amd_shader_explicit_vertex_parameter;
@@ -548,6 +553,7 @@ private:
     u32 queue_family_index{0};
     bool custom_border_color{};
     bool fragment_shader_barycentric{};
+    bool nv_geometry_shader_passthrough{};
     bool amd_shader_explicit_vertex_parameter{};
     bool depth_clip_control{};
     bool depth_clip_enable{};

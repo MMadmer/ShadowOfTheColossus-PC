@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 #include "common/assert.h"
+#include "video_core/renderdoc.h"
 #include "common/debug.h"
 #include "common/thread.h"
 #include "core/debug_state.h"
@@ -641,6 +642,7 @@ bool VideoOutDriver::SubmitFlip(VideoOutPort* port, s32 index, s64 flip_arg,
 }
 
 void VideoOutDriver::SubmitFlipInternal(VideoOutPort* port, s32 index, s64 flip_arg, bool is_eop) {
+    VideoCore::OnFlipCapture(); // sotc: RenderDoc whole-frame captures
     Vulkan::Frame* frame;
     if (index == -1) {
         frame = presenter->PrepareBlankFrame(false);

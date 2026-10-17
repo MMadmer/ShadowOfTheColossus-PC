@@ -1312,6 +1312,31 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, Shader::Backend::Binding
     }
 }
 
+const VideoCore::TextureCache::ImageDesc& Rasterizer::MemoImageDesc(
+    const AmdGpu::Image& tsharp, const Shader::ImageResource& resource) {
+    static const bool enabled = [] {
+        const char* v = std::getenv("SOTC_DESC_MEMO");
+        return !v || v[0] != '0';
+    }();
+    static_assert(sizeof(AmdGpu::Image) == sizeof(std::array<u64, 4>));
+    std::array<u64, 4> key;
+    std::memcpy(key.data(), &tsharp, sizeof(key));
+    if (image_desc_memo.empty()) {
+        image_desc_memo.resize(512);
+    }
+    u64 hash = reinterpret_cast<uintptr_t>(&resource) * 0x9E3779B97F4A7C15ull;
+    for (const u64 word : key) {
+        hash = (hash ^ word) * 0xFF51AFD7ED558CCDull;
+    }
+    auto& entry = image_desc_memo[(hash >> 40) & (image_desc_memo.size() - 1)];
+    if (!enabled || entry.resource != &resource || entry.tsharp != key) {
+        entry.desc = VideoCore::TextureCache::ImageDesc{tsharp, resource};
+        entry.tsharp = key;
+        entry.resource = &resource;
+    }
+    return entry.desc;
+}
+
 void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindings& binding) {
     const auto texture_lock = texture_cache.BatchLock(); // sotc: one lock for the pass
     image_bindings.clear();
@@ -1414,9 +1439,9 @@ void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
         const Shader::MipStorageFallbackMode mip_fallback_mode = image_desc.mip_fallback_mode;
         const u32 num_bindings = image_desc.NumBindings(stage);
 
+        const auto& memo_desc = MemoImageDesc(tsharp, image_desc);
         for (auto i = 0; i < num_bindings; i++) {
-            auto& [image_id, desc] = image_bindings.emplace_back(
-                std::piecewise_construct, std::tuple{}, std::tuple{tsharp, image_desc});
+            auto& [image_id, desc] = image_bindings.emplace_back(VideoCore::ImageId{}, memo_desc);
 
             if (mip_fallback_mode == Shader::MipStorageFallbackMode::ConstantIndex) {
                 ASSERT(num_bindings == 1);

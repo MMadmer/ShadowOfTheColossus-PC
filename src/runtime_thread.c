@@ -303,6 +303,9 @@ static void *host_start(void *p) {
 #ifdef _WIN32
     /* sotc: host thread ids of guest threads, for traces that print GetCurrentThreadId. */
     if (getenv("SOTC_THREAD_IDS")) fprintf(stderr,"Runtime: guest thread '%s' is host thread %lu\n",t->name,GetCurrentThreadId());
+    /* sotc: PS4 priorities below 400 (SotC: the sound mixer and streamers, 256-258) run above
+     * normal: the mixer must not wait behind the renderer and the job workers on small CPUs. */
+    if (t->attr.prio<400) SetThreadPriority(GetCurrentThread(),THREAD_PRIORITY_ABOVE_NORMAL);
 #endif
     if (!exit_setjmp(t)) t->result=t->entry(t->argument);
     runtime_thread_keys_cleanup();
@@ -377,7 +380,39 @@ static ABI __attribute__((noreturn)) void thread_exit(void *value) {
     /* No host unwinder: guest frames have no registered FDEs. */
     exit_longjmp(t);
 }
-static ABI int32_t thread_yield(void) { sched_yield(); return 0; }
+/* sotc: SotC's job workers spin on scePthreadYield while a job waits on a counter (PS4: a core
+ * each). A thread yielding again and again less than 20 us apart naps after a streak of 64
+ * (SOTC_POLL_NAP_US, default 100, 0: off), so the spin leaves the cores to the renderer. */
+static ABI int32_t thread_yield(void) {
+#ifdef _WIN32
+    static __thread int64_t last;
+    static __thread unsigned streak;
+    static int64_t ticks_per_us;
+    static int64_t nap_ns = -1;
+    if (nap_ns < 0) {
+        const char *v = getenv("SOTC_POLL_NAP_US");
+        nap_ns = (v ? strtoll(v, NULL, 10) : 100) * 1000;
+    }
+    if (!ticks_per_us) {
+        LARGE_INTEGER frequency;
+        QueryPerformanceFrequency(&frequency);
+        ticks_per_us = frequency.QuadPart / 1000000 ? frequency.QuadPart / 1000000 : 1;
+    }
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    streak = now.QuadPart - last < 20 * ticks_per_us ? streak + 1 : 0;
+    if (nap_ns > 0 && streak >= 64) {
+        compat_sleep_ns((uint64_t)nap_ns);
+        QueryPerformanceCounter(&now);
+    } else {
+        sched_yield();
+    }
+    last = now.QuadPart;
+#else
+    sched_yield();
+#endif
+    return 0;
+}
 static ABI int32_t thread_get_prio(GuestThread *t,int *prio) {
     if (!find_thread(t)) return ERR(3);
     if (!prio) return ERR(22);

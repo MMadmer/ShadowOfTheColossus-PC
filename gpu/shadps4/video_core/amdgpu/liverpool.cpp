@@ -25,6 +25,7 @@
 #include "video_core/amdgpu/pm4_cmds.h"
 #include "video_core/renderdoc.h"
 #include "shader_recompiler/info.h"
+#include "video_core/renderer_vulkan/vk_graphics_pipeline.h"
 #include "video_core/renderer_vulkan/vk_pipeline_common.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "video_core/sotc_lod_stats.h"
@@ -130,6 +131,13 @@ static void NoteCommandHistogram(const Vulkan::Pipeline* pipeline, int kind) {
                 it->second.hashes += fmt::format("{}:{:08x} ", u32(info->sw_stage), info->pgm_hash);
             }
         }
+        if (!pipeline->IsCompute()) {
+            // Render targets: colour count, depth format, first colour format, primitive.
+            const auto& key = static_cast<const Vulkan::GraphicsPipeline*>(pipeline)->GetGraphicsKey();
+            it->second.hashes += fmt::format("[mrt {} z {} c0 {} prim {}]", key.num_color_attachments,
+                                             u32(key.z_format), u32(key.color_buffers[0].data_format),
+                                             u32(key.prim_type));
+        }
     }
     ++it->second.count;
     const auto now = std::chrono::steady_clock::now();
@@ -156,14 +164,43 @@ static void NoteCommandHistogram(const Vulkan::Pipeline* pipeline, int kind) {
     counts.clear();
 }
 
+// sotc: how long the command processor and the draw thread spin before sleeping. On CPUs with
+// four hardware threads or fewer (i5-7300HQ: 4 cores, no SMT) every spinning loop takes a core the
+// game's own threads need: a short spin there (SOTC_GPU_SPIN overrides).
+static u32 SpinLimit() {
+    static const u32 limit = [] {
+        if (const char* v = std::getenv("SOTC_GPU_SPIN")) {
+            return static_cast<u32>(std::strtoul(v, nullptr, 10));
+        }
+        return Common::UsableCpuCount() <= 4 ? 256u : 4096u;
+    }();
+    return limit;
+}
+
 static inline void CpuRelax() {
 #if defined(__x86_64__) || defined(_M_X64)
     __builtin_ia32_pause();
 #endif
 }
 
+// sotc: on 4 cores or fewer the command processor and the draw thread (the frame's critical
+// path) run above the game's threads, which otherwise take their time slices (the job workers
+// poll); SOTC_GPU_PRIORITY=0/1 forces it off/on.
+static void RaiseGpuThreadPriority() {
+    static const bool raise = [] {
+        if (const char* v = std::getenv("SOTC_GPU_PRIORITY")) {
+            return v[0] != '0';
+        }
+        return Common::UsableCpuCount() <= 4;
+    }();
+    if (raise) {
+        Common::SetCurrentThreadPriority(Common::ThreadPriority::High);
+    }
+}
+
 void Liverpool::BackLoop(std::stop_token stoken) {
     Common::SetCurrentThreadName("shadPS4:GpuDraw");
+    RaiseGpuThreadPriority();
     Shader::g_info_slot = 1;
     u64 tail = back_tail.load(std::memory_order_relaxed);
     while (!stoken.stop_requested()) {
@@ -180,7 +217,7 @@ void Liverpool::BackLoop(std::stop_token stoken) {
                 }
             } idle_time{idle_start};
             bool ready = false;
-            for (u32 spin = 0; spin < 4096; ++spin) {
+            for (u32 spin = 0; spin < SpinLimit(); ++spin) {
                 if (back_head.load(std::memory_order_acquire) != tail ||
                     num_commands.load(std::memory_order_acquire)) {
                     ready = true;
@@ -222,7 +259,7 @@ void Liverpool::DrainBack() {
 void Liverpool::WaitBackTail(u64 head) {
     SotcStats::cp_waits.fetch_add(1, std::memory_order_relaxed);
     for (u32 spin = 0; back_tail.load(std::memory_order_acquire) < head; ++spin) {
-        if (spin < 4096) {
+        if (spin < SpinLimit()) {
             CpuRelax();
             continue;
         }
@@ -238,7 +275,7 @@ void Liverpool::WaitBackTail(u64 head) {
 Liverpool::BackOp& Liverpool::BackAlloc() {
     const u64 head = back_head.load(std::memory_order_relaxed);
     for (u32 spin = 0; head - back_tail.load(std::memory_order_acquire) >= BackRingSize; ++spin) {
-        if (spin < 4096) {
+        if (spin < SpinLimit()) {
             CpuRelax();
             continue;
         }
@@ -499,6 +536,7 @@ void Liverpool::ProcessCommands() {
 
 void Liverpool::Process(std::stop_token stoken) {
     Common::SetCurrentThreadName("shadPS4:GpuCommandProcessor");
+    RaiseGpuThreadPriority();
     gpu_id = std::this_thread::get_id();
 #ifdef __linux__
     gpu_tid = gettid();

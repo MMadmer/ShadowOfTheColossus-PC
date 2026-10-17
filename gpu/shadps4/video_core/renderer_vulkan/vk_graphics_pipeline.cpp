@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdlib>
 #include <utility>
 #include <boost/container/small_vector.hpp>
 
@@ -503,10 +504,15 @@ vk::ShaderModule GraphicsPipeline::BuildBarycentricGs(
         for (u32 p = 0; p < 32; ++p) {
             if (const auto* var = last->FindOutput(fmt::format("out_attr{}", p))) {
                 source.param_location[p] = var->location;
+                source.param_components[p] = var->components;
             }
         }
         if (const auto* var = last->FindOutput("cldist_attr0")) {
             source.clip_location = var->location;
+            source.clip_components = var->components;
+        }
+        if (const auto* var = last->FindOutput("gsb_pos")) {
+            source.pos_location = var->location;
         }
         if (!stages[u32(Shader::SwStage::TessellationEval)]) {
             switch (key.prim_type) {
@@ -526,10 +532,23 @@ vk::ShaderModule GraphicsPipeline::BuildBarycentricGs(
             }
         }
     }
-    const auto words =
-        EmitBarycentricGeometryShader(source, *ios[u32(Shader::SwStage::Fragment)], primitive);
+    // SOTC_GS_PASSTHROUGH=0: always the copying geometry shader (A/B).
+    static const bool passthrough_allowed = [] {
+        const char* v = std::getenv("SOTC_GS_PASSTHROUGH");
+        return !v || v[0] != '0';
+    }();
+    bool is_passthrough = false;
+    const auto words = EmitBarycentricGeometryShader(
+        source, *ios[u32(Shader::SwStage::Fragment)], primitive,
+        passthrough_allowed && instance.IsGeometryShaderPassthroughSupported(), &is_passthrough);
     if (words.empty()) {
         return refuse("an unknown fragment shader input");
+    }
+    static std::atomic<u32> built[2]{};
+    if (const u32 n = built[is_passthrough].fetch_add(1, std::memory_order_relaxed);
+        n == 0 || n == 100 || n == 1000) {
+        LOG_WARNING(Render_Vulkan, "sotc: {} {} barycentric geometry shaders", n + 1,
+                 is_passthrough ? "passthrough" : "copying");
     }
     return CompileSPV(words, instance.GetDevice());
 }

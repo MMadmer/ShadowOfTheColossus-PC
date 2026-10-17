@@ -3,6 +3,7 @@
 
 #include "common/assert.h"
 #include "common/div_ceil.h"
+#include "shader_recompiler/backend/spirv/emit_spirv_bary_gs.h"
 #include "shader_recompiler/backend/spirv/spirv_emit_context.h"
 #include "shader_recompiler/frontend/fetch_shader.h"
 #include "shader_recompiler/ir/attribute.h"
@@ -294,6 +295,40 @@ void EmitContext::DefineAmdPerVertexAttribs() {
     }
 }
 
+Id EmitContext::GsBarycentrics(Id pos) {
+    // b = M^-1 (x, y, w): the rows of M^-1 come per primitive in gsb_bm (emit_spirv_bary_gs.h),
+    // normalized to sum 1 against rounding.
+    const Id p{OpVectorShuffle(F32[3], pos, pos, 0U, 1U, 3U)};
+    const Id input_vec4{TypePointer(spv::StorageClass::Input, F32[4])};
+    std::array<Id, 3> b{};
+    for (u32 k = 0; k < 3; ++k) {
+        const Id row{OpLoad(F32[4], OpAccessChain(input_vec4, gsb_bm, ConstU32(k)))};
+        b[k] = OpDot(F32[1], OpVectorShuffle(F32[3], row, row, 0U, 1U, 2U), p);
+    }
+    const Id inv_sum{
+        OpFDiv(F32[1], ConstF32(1.f), OpFAdd(F32[1], OpFAdd(F32[1], b[0], b[1]), b[2]))};
+    return OpVectorTimesScalar(F32[3], OpCompositeConstruct(F32[3], b[0], b[1], b[2]), inv_sum);
+}
+
+void EmitContext::DefineGsBarycentrics() {
+    if (!Sirit::ValidId(gsb_pos)) {
+        return;
+    }
+    gsb_bary_value = GsBarycentrics(OpLoad(F32[4], gsb_pos));
+    // Screen-space barycentrics: b_k * w_k, normalized.
+    const Id input_vec4{TypePointer(spv::StorageClass::Input, F32[4])};
+    std::array<Id, 3> n{};
+    for (u32 k = 0; k < 3; ++k) {
+        const Id row{OpLoad(F32[4], OpAccessChain(input_vec4, gsb_bm, ConstU32(k)))};
+        n[k] = OpFMul(F32[1], OpCompositeExtract(F32[1], gsb_bary_value, k),
+                      OpCompositeExtract(F32[1], row, 3U));
+    }
+    const Id inv_sum{
+        OpFDiv(F32[1], ConstF32(1.f), OpFAdd(F32[1], OpFAdd(F32[1], n[0], n[1]), n[2]))};
+    gsb_bary_np_value =
+        OpVectorTimesScalar(F32[3], OpCompositeConstruct(F32[3], n[0], n[1], n[2]), inv_sum);
+}
+
 void EmitContext::DefineWorkgroupIndex() {
     const Id workgroup_id_val{OpLoad(U32[3], workgroup_id)};
     const Id workgroup_x{OpCompositeExtract(U32[1], workgroup_id_val, 0)};
@@ -383,40 +418,71 @@ void EmitContext::DefineInputs() {
         // attribute takes three locations), then the emulated clip distances and the two
         // barycentric vectors. The pipeline's geometry shader writes them; it finds them by name
         // (gsb_pv<param>, gsb_in<param>, cldist_attr0, gsb_bary, gsb_bary_np).
+        // Layout 2 (emit_spirv_bary_gs.h) when it fits below GsbPosLocation, else layout 1.
         const bool via_gs = profile.barycentric_via_gs;
         std::array<u32, IR::NumParams> gs_location{};
         u32 gs_clip_location = 0;
         if (via_gs) {
             const bool clip_inputs = runtime_info.hw.fs.clip_distance_emulation;
             const auto count = runtime_info.hw.fs.num_inputs - (clip_inputs ? 1 : 0);
-            u32 next = 0;
+            const bool smooth_bary = info.loads.GetAny(IR::Attribute::BaryCoordSmooth) ||
+                                     info.loads.GetAny(IR::Attribute::BaryCoordPullModel) ||
+                                     info.loads.GetAny(IR::Attribute::BaryCoordSmoothCentroid) ||
+                                     info.loads.GetAny(IR::Attribute::BaryCoordSmoothSample);
+            const bool nopersp_bary = info.loads.GetAny(IR::Attribute::BaryCoordNoPersp) ||
+                                      info.loads.GetAny(IR::Attribute::BaryCoordNoPerspSample);
+            const u32 shift = clip_inputs ? 1 : 0;
+            u32 next = shift;
             for (u32 i = 0; i < count; i++) {
-                if (runtime_info.hw.fs.inputs[i].IsDefault()) {
-                    continue;
+                const auto& input = runtime_info.hw.fs.inputs[i];
+                if (!input.IsDefault() && info.fs_interpolation[i].primary != Qualifier::PerVertex) {
+                    gs_location[i] = input.param_index + shift;
+                    next = std::max(next, gs_location[i] + 1);
                 }
-                gs_location[i] = next;
-                next += info.fs_interpolation[i].primary == Qualifier::PerVertex ? 3 : 1;
             }
-            gs_clip_location = next;
-            next += clip_inputs ? 1 : 0;
-            const u32 bary_location = next;
-            const u32 bary_np_location = next + 1;
-            if (info.loads.GetAny(IR::Attribute::BaryCoordSmooth) ||
-                info.loads.GetAny(IR::Attribute::BaryCoordPullModel) ||
-                info.loads.GetAny(IR::Attribute::BaryCoordSmoothCentroid) ||
-                info.loads.GetAny(IR::Attribute::BaryCoordSmoothSample)) {
-                bary_coord = Name(DefineInput(F32[3], bary_location), "gsb_bary");
+            bool fits = next <= GsbPosLocation;
+            for (u32 i = 0; i < count; i++) {
+                if (!runtime_info.hw.fs.inputs[i].IsDefault() &&
+                    info.fs_interpolation[i].primary == Qualifier::PerVertex) {
+                    gs_location[i] = next;
+                    next += 3;
+                }
+            }
+            const u32 bm_location = next;
+            next += smooth_bary || nopersp_bary ? 3 : 0;
+            fits &= next <= GsbPosLocation;
+            if (fits) {
+                if (smooth_bary || nopersp_bary) {
+                    gsb_pos = Name(DefineInput(F32[4], GsbPosLocation), "gsb_pos");
+                    gsb_bm = Name(DefineInput(TypeArray(F32[4], ConstU32(3U)), bm_location),
+                                  "gsb_bm");
+                    Decorate(gsb_bm, spv::Decoration::Flat);
+                }
+            } else {
+                // Layout 1: packed from location 0.
+                next = 0;
+                for (u32 i = 0; i < count; i++) {
+                    if (runtime_info.hw.fs.inputs[i].IsDefault()) {
+                        continue;
+                    }
+                    gs_location[i] = next;
+                    next += info.fs_interpolation[i].primary == Qualifier::PerVertex ? 3 : 1;
+                }
+                gs_clip_location = next;
+                next += clip_inputs ? 1 : 0;
+                if (smooth_bary) {
+                    bary_coord = Name(DefineInput(F32[3], next), "gsb_bary");
+                }
+                if (nopersp_bary) {
+                    bary_coord_nopersp = Name(DefineInput(F32[3], next + 1), "gsb_bary_np");
+                    Decorate(bary_coord_nopersp, spv::Decoration::NoPerspective);
+                    bary_coord_nopersp_sample = bary_coord_nopersp;
+                }
             }
             if (info.loads.GetAny(IR::Attribute::BaryCoordSmoothSample) && !ValidId(sample_index)) {
                 sample_index =
                     DefineVariable(U32[1], spv::BuiltIn::SampleId, spv::StorageClass::Input);
                 Decorate(sample_index, spv::Decoration::Flat);
-            }
-            if (info.loads.GetAny(IR::Attribute::BaryCoordNoPersp) ||
-                info.loads.GetAny(IR::Attribute::BaryCoordNoPerspSample)) {
-                bary_coord_nopersp = Name(DefineInput(F32[3], bary_np_location), "gsb_bary_np");
-                Decorate(bary_coord_nopersp, spv::Decoration::NoPerspective);
-                bary_coord_nopersp_sample = bary_coord_nopersp;
             }
         }
         if (info.loads.GetAny(IR::Attribute::BaryCoordSmooth) && !via_gs) {
@@ -706,6 +772,19 @@ void EmitContext::DefineOutputs() {
                 output_params[num_attrs] = GetAttributeInfo(
                     AmdGpu::NumberFormat::Float, clip_distances, MaxEmulatedClipDistances, true);
                 Name(clip_distances, fmt::format("cldist_attr{}", 0));
+            }
+            // sotc: barycentric_via_gs layout 2: a copy of the clip position for the fragment
+            // shader's barycentrics (passed through the geometry shader), unless a parameter
+            // already takes its location.
+            if (profile.barycentric_via_gs && hw_stage == HwStage::Vertex) {
+                bool free = true;
+                for (u32 i = 0; i < IR::NumParams; i++) {
+                    free &= !info.stores.GetAny(IR::Attribute::Param0 + i) ||
+                            i + (needs_clip_distance_emulation ? 1 : 0) != GsbPosLocation;
+                }
+                if (free) {
+                    gsb_pos = Name(DefineOutput(F32[4], GsbPosLocation), "gsb_pos");
+                }
             }
         }
         break;

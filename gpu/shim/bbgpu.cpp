@@ -440,8 +440,33 @@ void LoadRenderDoc() {
         }
     }
 }
+// sotc: whole frames, from one guest flip to a later one (SOTC_RDOC_FRAMES, default 1). Run with
+// SOTC_CP_THREADS=0 and SOTC_RECORD_THREAD=0 so the frame's Vulkan calls happen in between.
+void OnFlipCapture() {
+    static const char* trigger = std::getenv("SOTC_RDOC_TRIGGER");
+    static const bool by_frames = std::getenv("SOTC_RDOC_FRAMES") != nullptr;
+    if (!trigger || !by_frames) return;
+    LoadRenderDoc();
+    if (!rdoc_api) return;
+    static int frames_left = 0;
+    if (rdoc_state == 2) {
+        if (--frames_left <= 0) {
+            const bool ok = rdoc_api->EndFrameCapture(nullptr, nullptr) == 1;
+            std::fprintf(stderr, "sotc: RenderDoc capture %s\n", ok ? "saved" : "FAILED");
+            rdoc_state = 0;
+        }
+        return;
+    }
+    if (rdoc_state == 0 && std::remove(trigger) == 0) {
+        frames_left = std::max(1, std::atoi(std::getenv("SOTC_RDOC_FRAMES")));
+        rdoc_api->StartFrameCapture(nullptr, nullptr);
+        rdoc_state = 2;
+        std::fprintf(stderr, "sotc: RenderDoc capture started\n");
+    }
+}
 void StartCapture() {
     static const char* trigger = std::getenv("SOTC_RDOC_TRIGGER");
+    if (std::getenv("SOTC_RDOC_FRAMES")) return; // OnFlipCapture
     if (!trigger && rdoc_state == 0) return;
     LoadRenderDoc();
     if (!rdoc_api) return;
@@ -452,6 +477,7 @@ void StartCapture() {
     }
 }
 void EndCapture() {
+    if (std::getenv("SOTC_RDOC_FRAMES")) return; // OnFlipCapture
     // SOTC_RDOC_SUBMITS=N: the capture spans N submissions (a whole frame is split in several).
     static int left = 0;
     if (rdoc_api && rdoc_state == 2 && left == 0) {
@@ -481,6 +507,7 @@ void EndCapture() {}
 void TriggerCapture() {}
 void SetOutputDir(const std::filesystem::path&, const std::string&) {}
 bool IsRenderDocLoaded() { return false; }
+void OnFlipCapture() {}
 #endif
 void RequestScreenshot(ScreenshotRequest) {}
 // sotc port: BB_FRAME_DUMP_TRIGGER=<file>: when the file appears it is removed and the next

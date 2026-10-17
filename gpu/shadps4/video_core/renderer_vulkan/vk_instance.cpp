@@ -360,6 +360,9 @@ bool Instance::CreateDevice() {
         fragment_shader_barycentric =
             add_extension(VK_KHR_FRAGMENT_SHADER_BARYCENTRIC_EXTENSION_NAME);
     }
+    // sotc: cheap geometry shaders for the barycentric emulation (Pascal and older NVIDIA).
+    nv_geometry_shader_passthrough =
+        add_extension(VK_NV_GEOMETRY_SHADER_PASSTHROUGH_EXTENSION_NAME);
     provoking_vertex = add_extension(VK_EXT_PROVOKING_VERTEX_EXTENSION_NAME);
     shader_stencil_export = add_extension(VK_EXT_SHADER_STENCIL_EXPORT_EXTENSION_NAME);
     image_load_store_lod = add_extension(VK_AMD_SHADER_IMAGE_LOAD_STORE_LOD_EXTENSION_NAME);

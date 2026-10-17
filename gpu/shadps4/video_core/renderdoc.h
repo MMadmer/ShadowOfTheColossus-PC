@@ -21,6 +21,9 @@ void EndCapture();
 /// Triggers capturing process.
 void TriggerCapture();
 
+/// sotc: at every guest flip: SOTC_RDOC_TRIGGER captures SOTC_RDOC_FRAMES whole frames.
+void OnFlipCapture();
+
 /// Sets output directory for captures
 void SetOutputDir(const std::filesystem::path& path, const std::string& prefix);
 

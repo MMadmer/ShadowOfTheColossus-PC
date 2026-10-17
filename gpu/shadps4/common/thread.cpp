@@ -1,3 +1,5 @@
+#include <algorithm>
+#include <bit>
 // SPDX-FileCopyrightText: 2013 Dolphin Emulator Project
 // SPDX-FileCopyrightText: 2014 Citra Emulator Project
 // SPDX-FileCopyrightText: Copyright 2026 shadPS4 Emulator Project
@@ -172,6 +174,20 @@ bool AccurateSleep(const std::chrono::nanoseconds duration, std::chrono::nanosec
 #ifdef _WIN32
 
 // Sets the debugger-visible name of the current thread.
+u32 UsableCpuCount() {
+    static const u32 count = [] {
+#ifdef _WIN32
+        DWORD_PTR process_mask = 0, system_mask = 0;
+        if (GetProcessAffinityMask(GetCurrentProcess(), &process_mask, &system_mask) &&
+            process_mask != 0) {
+            return static_cast<u32>(std::popcount(static_cast<u64>(process_mask)));
+        }
+#endif
+        return std::max(1u, std::thread::hardware_concurrency());
+    }();
+    return count;
+}
+
 void SetCurrentThreadName(const char* name) {
     // bbport: guest thread names are kept by the C runtime.
     SetThreadDescription(GetCurrentThread(), UTF8ToUTF16W(name).data());

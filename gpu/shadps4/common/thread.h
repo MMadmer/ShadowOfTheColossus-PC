@@ -24,6 +24,9 @@ void SetCurrentThreadPriority(ThreadPriority new_priority);
 
 void SetCurrentThreadName(const char* name);
 
+/// sotc: the logical CPUs this process may run on (its affinity mask), at least 1.
+u32 UsableCpuCount();
+
 void SetThreadName(void* thread, const char* name);
 
 bool AccurateSleep(std::chrono::nanoseconds duration, std::chrono::nanoseconds* remaining,

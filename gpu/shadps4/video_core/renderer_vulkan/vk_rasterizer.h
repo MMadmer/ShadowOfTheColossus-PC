@@ -210,6 +210,17 @@ private:
 
     using ImageBindingInfo = std::pair<VideoCore::ImageId, VideoCore::TextureCache::ImageDesc>;
     boost::container::static_vector<ImageBindingInfo, Shader::NUM_IMAGES> image_bindings;
+
+    /// sotc: the image description of a T# and image resource (a pure function of both, ~6% of
+    /// the draw thread when built for every binding of every draw), direct-mapped.
+    struct ImageDescMemo {
+        std::array<u64, 4> tsharp{};
+        const Shader::ImageResource* resource{};
+        VideoCore::TextureCache::ImageDesc desc;
+    };
+    std::vector<ImageDescMemo> image_desc_memo;
+    const VideoCore::TextureCache::ImageDesc& MemoImageDesc(const AmdGpu::Image& tsharp,
+                                                            const Shader::ImageResource& resource);
     bool attachment_feedback_loop{};
     bool needs_barrier{};
 };

@@ -3,6 +3,7 @@
 // sotc: taken from Pink-shadPS4 0.4.0 (luizgustavs), cp_record_thread; scheduler hooks in vk_scheduler.cpp.
 
 #include <chrono>
+#include <thread>
 #include <cstdlib>
 #include <cstring>
 
@@ -857,7 +858,9 @@ void CommandRecorder::ConsumerLoop(std::stop_token stoken) {
     // recorder took a whole core, ~2/3 of it waiting, next to the command processor it waits on).
     static const auto SpinTime = [] {
         const char* v = std::getenv("SOTC_REC_SPIN_US");
-        return std::chrono::microseconds{v ? std::strtol(v, nullptr, 10) : 250};
+        // sotc: 50 us with four hardware threads or fewer (the spin takes a whole core there).
+        return std::chrono::microseconds{
+            v ? std::strtol(v, nullptr, 10) : (Common::UsableCpuCount() <= 4 ? 50 : 250)};
     }();
 #ifdef _WIN32
     // sotc: Windows condition variables wait in whole milliseconds, so 500 us came out as 0:

@@ -13,6 +13,8 @@ typedef bb_jmp_buf sigjmp_buf;
 #endif
 /* Recovery point for speculative guest memory reads on this thread (probe.c fault handler). */
 extern __thread sigjmp_buf *runtime_fault_recover;
+/* sotc: the guest image's base (guest offset 0), set by the loader once it is mapped. */
+extern uintptr_t runtime_guest_image_base;
 /* Restarts the game (in-game settings menu, render resolution change). */
 void runtime_restart(void);
 #define ABI __attribute__((sysv_abi))
