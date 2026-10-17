@@ -72,7 +72,30 @@ static ABI int32_t user_event(int32_t *event) {
 }
 
 /* ---- SystemService ---- */
-static int language(void) { const char *v=getenv("BB_LANGUAGE"); return v ? atoi(v) : 1; }
+/* sotc: without BB_LANGUAGE the console language follows the Windows display language (PS4 ids;
+ * the game's text and voices start from it), English otherwise. */
+static int language(void) {
+    const char *v=getenv("BB_LANGUAGE");
+    if (v && *v) return atoi(v);
+#ifdef _WIN32
+    const LANGID id=GetUserDefaultUILanguage();
+    switch (PRIMARYLANGID(id)) {
+    case LANG_JAPANESE: return 0;
+    case LANG_FRENCH: return 2;
+    case LANG_SPANISH: return 3;
+    case LANG_GERMAN: return 4;
+    case LANG_ITALIAN: return 5;
+    case LANG_DUTCH: return 6;
+    case LANG_PORTUGUESE: return SUBLANGID(id)==SUBLANG_PORTUGUESE_BRAZILIAN ? 17 : 7;
+    case LANG_RUSSIAN: return 8;
+    case LANG_KOREAN: return 9;
+    case LANG_POLISH: return 16;
+    default: return 1;
+    }
+#else
+    return 1;
+#endif
+}
 static ABI int32_t system_param(int32_t id,int32_t *value) {
     if (!value) return SYSTEM_PARAMETER;
     switch (id) {

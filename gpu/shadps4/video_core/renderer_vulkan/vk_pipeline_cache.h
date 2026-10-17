@@ -57,6 +57,18 @@ struct Program {
     Shader::Info info;
     ModuleList modules{};
 
+    /// sotc: the permutation GetProgram found last time. The same user data, flat buffer,
+    /// runtime info and start bindings make the same specialization: the lookup is skipped.
+    struct LastLookup {
+        bool valid{};
+        std::vector<u32> user_data;
+        std::vector<u32> flat;
+        Shader::RuntimeInfo runtime_info{};
+        Shader::Backend::Bindings start{};
+        Shader::Backend::Bindings end{};
+        size_t perm_idx{};
+    } last;
+
     Program() = default;
     Program(Shader::HwStage stage, Shader::SwStage l_stage, Shader::ShaderParams params)
         : info{stage, l_stage, params} {}

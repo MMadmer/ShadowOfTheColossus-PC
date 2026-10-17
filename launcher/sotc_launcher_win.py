@@ -189,10 +189,11 @@ PRESENT_MODES = [('Mailbox', ('Mailbox (baixa latência, sem cortes)', 'Mailbox 
                  ('Fifo', ('FIFO (VSync)', 'FIFO (VSync)')),
                  ('Immediate', ('Immediate (pode cortar a imagem)', 'Immediate (tearing)'))]
 # System language (BB_LANGUAGE, PS4 ids); '' keeps the game's own choice.
-LANGUAGES = [('', ('Automático (o do jogo)', 'Automatic (the game\'s)')),
+LANGUAGES = [('', ('Automático (o do Windows)', 'Automatic (Windows\' language)')),
              ('7', ('Português (Portugal)', 'Portuguese (Portugal)')), ('15', ('Português (Brasil)', 'Portuguese (Brazil)')),
              ('1', ('Inglês', 'English')), ('3', ('Espanhol', 'Spanish')), ('2', ('Francês', 'French')),
-             ('4', ('Alemão', 'German')), ('5', ('Italiano', 'Italian')), ('0', ('Japonês', 'Japanese'))]
+             ('4', ('Alemão', 'German')), ('5', ('Italiano', 'Italian')), ('8', ('Russo', 'Russian')),
+             ('0', ('Japonês', 'Japanese'))]
 READBACKS = [('', ('Precisas (padrão; o jogo precisa)', 'Precise (default; the game needs them)')),
              ('1', ('Relaxadas (pode travar)', 'Relaxed (may hang)'))]
 UI_LANGUAGES = [('', ('Automático', 'Automatic')), ('pt', ('Português', 'Portuguese')), ('en', ('Inglês', 'English'))]

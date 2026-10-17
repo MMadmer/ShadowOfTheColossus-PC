@@ -964,6 +964,31 @@ PipelineCache::Result PipelineCache::GetProgram(HwStage hw_stage, SwStage sw_sta
     info.PgmBase() = params.Base(); // Needs to be actualized for inline cbuffer address fixup
     info.UserData() = params.user_data;
     info.RefreshFlatBuf();
+    // sotc: SOTC_PROGRAM_MEMO=0 always builds the specialization. Tessellation stages read their
+    // constants from memory: never memoized.
+    static const bool program_memo = [] {
+        const char* v = std::getenv("SOTC_PROGRAM_MEMO");
+        return !v || v[0] != '0';
+    }();
+    auto& last = program->last;
+    const bool memo_stage =
+        program_memo && sw_stage != SwStage::TessellationControl && sw_stage != SwStage::TessellationEval;
+    const auto same_words = [](const std::vector<u32>& saved, std::span<const u32> now) {
+        return saved.size() == now.size() &&
+               std::memcmp(saved.data(), now.data(), now.size_bytes()) == 0;
+    };
+    if (memo_stage && last.valid && last.start == binding &&
+        same_words(last.user_data, params.user_data) && same_words(last.flat, info.FlatBuf()) &&
+        last.runtime_info == rt) {
+        binding = last.end;
+        const size_t idx = last.perm_idx;
+        if (auto& fetch = program->modules[idx].spec.fetch_shader_data; !fetch.Empty()) {
+            fetch_shader = &fetch;
+        }
+        return std::make_tuple(&program->info, program->modules[idx].module,
+                               HashCombine(params.hash, idx));
+    }
+    const auto start_binding = binding;
     auto spec = Shader::StageSpecialization(info, rt, profile, binding);
 
     size_t perm_idx = program->modules.size();
@@ -987,6 +1012,15 @@ PipelineCache::Result PipelineCache::GetProgram(HwStage hw_stage, SwStage sw_sta
     }
     if (auto& fetch = program->modules[perm_idx].spec.fetch_shader_data; !fetch.Empty()) {
         fetch_shader = &fetch;
+    }
+    if (memo_stage) {
+        last.user_data.assign(params.user_data.begin(), params.user_data.end());
+        last.flat.assign(info.FlatBuf().begin(), info.FlatBuf().end());
+        last.runtime_info = rt;
+        last.start = start_binding;
+        last.end = binding;
+        last.perm_idx = perm_idx;
+        last.valid = true;
     }
     return std::make_tuple(&program->info, module, perm_hash);
 }
