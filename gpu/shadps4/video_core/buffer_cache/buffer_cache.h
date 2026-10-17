@@ -103,6 +103,12 @@ public:
     /// Return true when a region is modified from the CPU
     [[nodiscard]] bool IsRegionCpuModified(VAddr addr, size_t size);
 
+    /// sotc: changes whenever an arena is created or the resident set changes: a binding resolved
+    /// before (arena handle and offset) is still valid while it stays the same.
+    [[nodiscard]] u64 BindingEpoch() const noexcept {
+        return resident_version + (u64(arenas.size()) << 40);
+    }
+
     /// Return true when a region is modified from the GPU
     [[nodiscard]] bool IsRegionGpuModified(VAddr addr, size_t size);
 

@@ -223,6 +223,47 @@ private:
                                                             const Shader::ImageResource& resource);
     bool attachment_feedback_loop{};
     bool needs_barrier{};
+
+    /// sotc: binding reuse. About two thirds of the binds repeat the previous one (same pipeline,
+    /// user data and flat buffers: instanced passes). Its descriptors are kept and only the cheap
+    /// parts are redone while nothing they were resolved from changed (TryReuseBindings).
+    struct MemoBuffer {
+        const VideoCore::Buffer* buffer;
+        u64 offset;
+        u32 size;
+        VAddr guest;
+    };
+    struct MemoSpecial {
+        u32 info_index;
+        Shader::BufferType type;
+        const Shader::Info* stage;
+    };
+    struct MemoImage {
+        VideoCore::ImageId id;
+        vk::ImageLayout layout;
+        vk::PipelineStageFlags2 stage;
+        vk::AccessFlags2 access;
+        VideoCore::SubresourceRange range;
+        bool has_range;
+    };
+    struct BindMemo {
+        const Pipeline* pipeline{};
+        bool valid{};
+        bool recording{};
+        bool uses_dma{};
+        u64 image_generation{};
+        u64 binding_epoch{};
+        u64 ta_bc_base{};
+        std::vector<u32> words;
+        std::array<u8, Shader::NUM_BUFFERS> buf_offsets{};
+        boost::container::small_vector<MemoBuffer, 16> buffers;
+        boost::container::small_vector<MemoSpecial, 4> specials;
+        boost::container::small_vector<MemoImage, 16> images;
+    };
+    BindMemo bind_memo;
+    bool TryReuseBindings(const Pipeline* pipeline);
+    void FinishBindMemo(const Pipeline* pipeline, bool uses_dma);
+    void NoBindMemo(u32 reason);
 };
 
 } // namespace Vulkan

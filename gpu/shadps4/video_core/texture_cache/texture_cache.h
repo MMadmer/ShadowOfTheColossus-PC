@@ -684,6 +684,14 @@ private:
     ImageId MemoLookup(const ImageInfo& info, bool exact_fmt, bool writer);
     /// The generation a memo for `address` is valid in (per-address unless SOTC_MEMO_ADDR_GEN=0).
     u64 MemoGeneration(VAddr address) const;
+
+public:
+    /// sotc: bumped by every image (un)registration.
+    [[nodiscard]] u64 ImageSetGeneration() const noexcept {
+        return image_set_generation;
+    }
+
+private:
     u64 image_set_generation{};
     /// sotc: per-address generations for FindMemo. A perfect match needs the same
     /// guest_address, so only (un)registering an image at that address can change the

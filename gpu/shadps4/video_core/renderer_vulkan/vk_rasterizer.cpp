@@ -638,6 +638,16 @@ bool Rasterizer::BindResources(const Pipeline* pipeline) {
         return false;
     }
 
+    if (TryReuseBindings(pipeline)) {
+        return true;
+    }
+    // A full bind: recorded for the next one (FinishBindMemo).
+    bind_memo.valid = false;
+    bind_memo.recording = true;
+    bind_memo.buffers.clear();
+    bind_memo.specials.clear();
+    bind_memo.images.clear();
+
     set_write_index = 0;
     set_writes.clear();
     buffer_infos.clear();
@@ -650,6 +660,7 @@ bool Rasterizer::BindResources(const Pipeline* pipeline) {
     for (const auto* stage : pipeline->GetStages()) {
         if (stage && stage->UserData().data() == nullptr &&
             stage->srt_info.flattened_bufsize_dw != 0) {
+            bind_memo.valid = false;
             LOG_ERROR(Render_Vulkan,
                       "Skipping draw: shader {:#x} (sw stage {}, hw stage {}, info {}) has no "
                       "user data bound",
@@ -675,6 +686,35 @@ bool Rasterizer::BindResources(const Pipeline* pipeline) {
 
     if (uses_dma) {
         buffer_cache.SynchronizeDmaBuffers();
+    }
+    FinishBindMemo(pipeline, uses_dma);
+
+    // sotc: how often a bind repeats the previous one (same pipeline, user data and flat
+    // buffers): what a binding reuse could skip (SOTC_FPS line).
+    if (SotcStats::kFpsLog) {
+        static const Pipeline* last_pipeline = nullptr;
+        static u64 last_hash = 0;
+        u64 hash = 0xcbf29ce484222325ull;
+        const auto mix = [&hash](std::span<const u32> words) {
+            for (const u32 word : words) {
+                hash = (hash ^ word) * 0x100000001b3ull;
+            }
+        };
+        for (const auto* stage : pipeline->GetStages()) {
+            if (stage) {
+                mix(stage->UserData());
+                mix(stage->FlatBuf());
+            }
+        }
+        SotcStats::bind_calls.fetch_add(1, std::memory_order_relaxed);
+        if (pipeline == last_pipeline) {
+            SotcStats::bind_same_pipeline.fetch_add(1, std::memory_order_relaxed);
+            if (hash == last_hash) {
+                SotcStats::bind_repeats.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+        last_pipeline = pipeline;
+        last_hash = hash;
     }
 
     return true;
@@ -1179,6 +1219,7 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, Shader::Backend::Binding
     for (const auto& desc : stage.buffers) {
         if (desc.IsSpecial()) {
             if (desc.buffer_type == Shader::BufferType::GdsBuffer) {
+                NoBindMemo(0);
                 const auto* gds_buf = buffer_cache.GetGdsBuffer();
                 buffer_infos.emplace_back(gds_buf->Handle(), 0, gds_buf->SizeBytes());
                 needs_barrier |=
@@ -1190,12 +1231,17 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, Shader::Backend::Binding
                 const u64 offset =
                     vk_buffer.Copy(stage.FlatBuf().data(), ubo_size, alignment);
                 buffer_infos.emplace_back(vk_buffer.Handle(), offset, ubo_size);
+                bind_memo.specials.push_back({static_cast<u32>(buffer_infos.size() - 1),
+                                              desc.buffer_type, &stage});
             } else if (desc.buffer_type == Shader::BufferType::ClipPlanes) {
                 // Permutations compiled without enabled planes never read the buffer, so the
                 // declared binding is satisfied with a null descriptor instead of a copy.
                 if (liverpool->DrawRegs().clipper_control.user_clip_plane_enable == 0) {
                     buffer_infos.emplace_back(VK_NULL_HANDLE, 0, VK_WHOLE_SIZE);
+                    bind_memo.specials.push_back({static_cast<u32>(buffer_infos.size() - 1),
+                                                  desc.buffer_type, &stage});
                 } else {
+                    NoBindMemo(1);
                     auto& vk_buffer = buffer_cache.GetStreamBuffer();
                     std::array<float, AmdGpu::NUM_CLIP_PLANES * 4> planes{};
                     for (u32 i = 0; i < AmdGpu::NUM_CLIP_PLANES; ++i) {
@@ -1216,6 +1262,7 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, Shader::Backend::Binding
                 const auto* fault_buffer = buffer_cache.GetFaultBuffer();
                 buffer_infos.emplace_back(fault_buffer->Handle(), 0, fault_buffer->SizeBytes());
             } else if (desc.buffer_type == Shader::BufferType::SharedMemory) {
+                NoBindMemo(2);
                 auto& lds_buffer = buffer_cache.GetStreamBuffer();
                 const auto& cs_program = liverpool->DrawCsRegs();
                 const auto lds_size = cs_program.SharedMemSize() * cs_program.NumWorkgroups();
@@ -1291,6 +1338,18 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, Shader::Backend::Binding
                 push_data.AddOffset(binding.buffer, adjust);
                 buffer_infos.emplace_back(buffer->Handle(), offset_aligned, size + adjust);
                 bound_buffers.emplace_back(buffer, offset, size, desc.is_written);
+                // A texel buffer over an image (or its metadata) is filled from it at every bind
+                // (SynchronizeMemoryFromImage); without one, a new image changes the image set.
+                if (desc.is_written) {
+                    NoBindMemo(3);
+                } else if (desc.is_formatted && bind_memo.recording &&
+                           (texture_cache.IsMeta(vsharp.base_address) ||
+                            texture_cache.FindImageFromRange(vsharp.base_address, size, false))) {
+                    NoBindMemo(7);
+                } else {
+                    bind_memo.buffers.push_back(
+                        {buffer, offset, static_cast<u32>(size), vsharp.base_address});
+                }
                 if (desc.is_written) {
                     // Raw storage-buffer writes can also make an aliased cached image stale.
                     texture_cache.InvalidateMemoryFromGPU(vsharp.base_address, size);
@@ -1310,6 +1369,144 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, Shader::Backend::Binding
         set_write.pBufferInfo = &buffer_infos.back();
         ++binding.buffer;
     }
+}
+
+void Rasterizer::NoBindMemo(u32 reason) {
+    if (bind_memo.recording && SotcStats::kFpsLog) {
+        SotcStats::bind_unrecorded[reason].fetch_add(1, std::memory_order_relaxed);
+    }
+    bind_memo.recording = false;
+}
+
+void Rasterizer::FinishBindMemo(const Pipeline* pipeline, bool uses_dma) {
+    auto& memo = bind_memo;
+    if (!memo.recording) {
+        return;
+    }
+    memo.recording = false;
+    // The user data and flat buffers of every stage in one vector (sizes first): one copy into
+    // kept capacity per full bind.
+    memo.words.clear();
+    for (const auto* stage : pipeline->GetStages()) {
+        if (stage) {
+            const auto user_data = stage->UserData();
+            const auto& flat = stage->FlatBuf();
+            memo.words.push_back(static_cast<u32>(user_data.size()));
+            memo.words.insert(memo.words.end(), user_data.begin(), user_data.end());
+            memo.words.push_back(static_cast<u32>(flat.size()));
+            memo.words.insert(memo.words.end(), flat.begin(), flat.end());
+        }
+    }
+    memo.pipeline = pipeline;
+    memo.uses_dma = uses_dma;
+    memo.buf_offsets = push_data.buf_offsets;
+    memo.ta_bc_base = liverpool->DrawRegs().ta_bc_base.Address();
+    memo.binding_epoch = buffer_cache.BindingEpoch();
+    memo.image_generation = texture_cache.ImageSetGeneration();
+    memo.valid = true;
+}
+
+bool Rasterizer::TryReuseBindings(const Pipeline* pipeline) {
+    // SOTC_BIND_REUSE=0: every bind resolves its resources.
+    static const bool enabled = [] {
+        const char* v = std::getenv("SOTC_BIND_REUSE");
+        return !v || v[0] != '0';
+    }();
+    const auto& memo = bind_memo;
+    // Why a bind was not reused (SOTC_FPS line).
+    const auto reject = [](u32 reason) {
+        if (SotcStats::kFpsLog) {
+            SotcStats::bind_reject[reason].fetch_add(1, std::memory_order_relaxed);
+        }
+        return false;
+    };
+    if (!enabled || !memo.valid) {
+        return reject(0);
+    }
+    if (memo.pipeline != pipeline) {
+        return reject(1);
+    }
+    size_t at = 0;
+    const auto same = [&](std::span<const u32> now) {
+        if (at >= memo.words.size() || memo.words[at] != now.size() ||
+            at + 1 + now.size() > memo.words.size() ||
+            std::memcmp(memo.words.data() + at + 1, now.data(), now.size_bytes()) != 0) {
+            return false;
+        }
+        at += 1 + now.size();
+        return true;
+    };
+    for (const auto* stage : pipeline->GetStages()) {
+        if (stage && (!same(stage->UserData()) || !same(stage->FlatBuf()))) {
+            return reject(2);
+        }
+    }
+    const auto& regs = liverpool->DrawRegs();
+    if (memo.ta_bc_base != regs.ta_bc_base.Address()) {
+        return reject(3);
+    }
+    if (memo.binding_epoch != buffer_cache.BindingEpoch()) {
+        return reject(4);
+    }
+    if (memo.image_generation != texture_cache.ImageSetGeneration()) {
+        return reject(5);
+    }
+    for (const auto& special : memo.specials) {
+        if (special.type == Shader::BufferType::ClipPlanes &&
+            regs.clipper_control.user_clip_plane_enable != 0) {
+            return reject(6);
+        }
+    }
+    // CPU writes since (or pages the fault grace keeps CPU-modified): their uploads.
+    for (const auto& buffer : memo.buffers) {
+        if (buffer_cache.IsRegionCpuModified(buffer.guest, buffer.size)) {
+            return reject(7);
+        }
+    }
+    const auto texture_lock = texture_cache.BatchLock();
+    for (const auto& saved : memo.images) {
+        const auto& image = texture_cache.GetImage(saved.id);
+        if (True(image.flags & (VideoCore::ImageFlagBits::Dirty |
+                                VideoCore::ImageFlagBits::MaybeCpuDirty)) ||
+            image.binding.is_target || image.binding.needs_rebind) {
+            return reject(8);
+        }
+    }
+
+    // Nothing below can fail: the descriptors of the previous bind are kept.
+    for (const auto& saved : memo.images) {
+        auto& image = texture_cache.GetImage(saved.id);
+        needs_barrier |= runtime.Transit(&image, saved.layout, saved.stage, saved.access,
+                                         saved.has_range
+                                             ? std::optional<VideoCore::SubresourceRange>{saved.range}
+                                             : std::nullopt);
+    }
+    for (const auto& buffer : memo.buffers) {
+        needs_barrier |= runtime.IsBufferAccessed(buffer.buffer, buffer.offset, buffer.size, false);
+        bound_buffers.emplace_back(buffer.buffer, buffer.offset, buffer.size, false);
+    }
+    const u64 alignment = instance.StorageMinAlignment();
+    for (const auto& special : memo.specials) {
+        if (special.type == Shader::BufferType::Flatbuf) {
+            auto& vk_buffer = buffer_cache.GetStreamBuffer();
+            const u32 ubo_size = special.stage->FlatBuf().size() * sizeof(u32);
+            const u64 offset = vk_buffer.Copy(special.stage->FlatBuf().data(), ubo_size, alignment);
+            buffer_infos[special.info_index] =
+                vk::DescriptorBufferInfo{vk_buffer.Handle(), offset, ubo_size};
+        }
+    }
+    push_data = MakeUserData(regs);
+    push_data.buf_offsets = memo.buf_offsets;
+    if (memo.uses_dma) {
+        buffer_cache.SynchronizeDmaBuffers();
+    }
+    if (SotcStats::kFpsLog) {
+        SotcStats::bind_calls.fetch_add(1, std::memory_order_relaxed);
+        SotcStats::bind_same_pipeline.fetch_add(1, std::memory_order_relaxed);
+        SotcStats::bind_repeats.fetch_add(1, std::memory_order_relaxed);
+        SotcStats::bind_reused.fetch_add(1, std::memory_order_relaxed);
+    }
+    return true;
 }
 
 const VideoCore::TextureCache::ImageDesc& Rasterizer::MemoImageDesc(
@@ -1347,6 +1544,7 @@ void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
     for (const auto& image_desc : stage.images) {
         const auto tsharp = image_desc.GetSharp(stage);
         if (image_desc.array_size != 0) {
+            NoBindMemo(4);
             // dynamic_tsharp_array_size (from Pink-shadPS4): one binding per table element, then a
             // null one for out-of-range indices. The shader was typed after `tsharp`, the first
             // valid element, so elements of another view type or number class stay null.
@@ -1489,6 +1687,10 @@ void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
             auto& image_view = texture_cache.FindTexture(image_id, desc);
             const auto binding = image.binding;
 
+            if (is_storage || binding.force_general || binding.is_target) {
+                NoBindMemo(5);
+            }
+
             // The image is either bound as storage in a separate descriptor or bound as render
             // target in feedback loop. Depth images are excluded because they can't be bound as
             // storage and feedback loop doesn't make sense for them
@@ -1516,6 +1718,10 @@ void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
                     needs_barrier |= runtime.Transit(
                         &image, new_layout, vk::PipelineStageFlagBits2::eAllCommands,
                         vk::AccessFlagBits2::eShaderRead, desc.view_info.range);
+                    bind_memo.images.push_back({image_id, new_layout,
+                                                vk::PipelineStageFlagBits2::eAllCommands,
+                                                vk::AccessFlagBits2::eShaderRead,
+                                                desc.view_info.range, true});
                 }
             }
             image.usage.storage |= is_storage;
@@ -1523,6 +1729,11 @@ void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
 
             image_infos.emplace_back(VK_NULL_HANDLE, *image_view.image_view,
                                      image.backing->state.layout);
+            // sotc: the descriptor holds the layout the reuse transits back to.
+            if (!bind_memo.images.empty() && bind_memo.images.back().id == image_id &&
+                image.backing->state.layout != bind_memo.images.back().layout) {
+                NoBindMemo(6);
+            }
         }
     }
 

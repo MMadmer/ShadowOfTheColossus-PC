@@ -372,6 +372,23 @@ void VideoOutDriver::Flip(const Request& req) {
                 std::fill(std::begin(slow_ns), std::end(slow_ns), 0);
                 slow_frames = 0;
             }
+            if (const uint64_t binds = SotcStats::bind_calls.exchange(0)) {
+                std::fprintf(stderr,
+                             "SOTC binds %.0f/s: same pipeline %.1f%%, repeated %.1f%%, reused "
+                             "%.1f%%\n",
+                             binds / seconds,
+                             100.0 * SotcStats::bind_same_pipeline.exchange(0) / binds,
+                             100.0 * SotcStats::bind_repeats.exchange(0) / binds,
+                             100.0 * SotcStats::bind_reused.exchange(0) / binds);
+                std::string reasons;
+                for (auto& count : SotcStats::bind_unrecorded) {
+                    reasons += fmt::format(" u{:.1f}", 100.0 * count.exchange(0) / binds);
+                }
+                for (auto& count : SotcStats::bind_reject) {
+                    reasons += fmt::format(" {:.1f}", 100.0 * count.exchange(0) / binds);
+                }
+                std::fprintf(stderr, "SOTC bind reuse refused (%%):%s\n", reasons.c_str());
+            }
             const uint64_t readbacks = SotcStats::readbacks.exchange(0, std::memory_order_relaxed);
             const uint64_t readback_ns =
                 SotcStats::readback_ns.exchange(0, std::memory_order_relaxed);

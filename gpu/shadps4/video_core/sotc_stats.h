@@ -20,6 +20,12 @@ namespace SotcStats {
 inline const bool kFpsLog = std::getenv("SOTC_FPS") != nullptr;
 inline const bool kCmdStats = std::getenv("SOTC_CMD_STATS") != nullptr;
 inline std::atomic<uint64_t> readbacks{0};    ///< BufferCache::DownloadMemory calls
+inline std::atomic<uint64_t> bind_calls{0};   ///< Rasterizer::BindResources (SOTC_FPS)
+inline std::atomic<uint64_t> bind_same_pipeline{0}; ///< ... with the previous call's pipeline
+inline std::atomic<uint64_t> bind_repeats{0}; ///< ... and its user data and flat buffers
+inline std::atomic<uint64_t> bind_reused{0};  ///< binds served by TryReuseBindings
+inline std::atomic<uint64_t> bind_reject[9]{}; ///< ... refused, by reason
+inline std::atomic<uint64_t> bind_unrecorded[8]{}; ///< full binds not reusable, by reason
 inline std::atomic<uint64_t> readback_ns{0};  ///< time spent in them (copy and wait)
 inline std::atomic<uint64_t> watch_addr{0};     ///< SOTC_CS_WATCH: GPU writes to report
 inline std::atomic<uint64_t> current_program{0}; ///< hash of the dispatch being recorded (1 = a draw)
