@@ -36,6 +36,16 @@ public:
     /// skipped bytes whose GPU value differed from the CPU value (0 when harmless)
     u64 Write(VAddr addr, const u8* data, u64 size);
 
+    /// Whether a checked block header at or below `lo` starts the chain walk over [lo, hi). If not, the
+    /// free tree this guard read is too old for the range: build a new guard.
+    bool Covers(VAddr lo, VAddr hi) const;
+
+    /// Forgets the resolved backing runs: a guard kept across readbacks resolves them again, the guest
+    /// may have remapped memory since.
+    void ForgetRuns() {
+        runs.clear();
+    }
+
 private:
     using Span = std::pair<VAddr, VAddr>;
 
@@ -47,13 +57,14 @@ private:
     void AddFreeBlock(VAddr block);
     void CollectFreeTree();
     void CollectHeaders(VAddr lo, VAddr hi, std::vector<Span>& spans) const;
-    bool NextBlock(VAddr block, VAddr& next) const;
+    void ChainStarts(VAddr lo, VAddr hi, std::vector<VAddr>& starts) const;
+    bool NextBlock(VAddr block, VAddr& next, bool* in_use = nullptr) const;
 
     Core::MemoryManager* memory;
     VAddr heap;
     bool valid = false;
-    std::vector<VAddr> free_blocks; // sorted block starts
-    std::vector<Span> free_spans;   // sorted, header + tree links of every free block
+    std::vector<VAddr> free_blocks; // sorted block starts of the free tree: chain walk starts
+    std::vector<Span> free_spans;   // header and tree links of the pending free block
     // Every backing run resolved during this guard's walk, sorted by start. The free-tree walk reads
     // thousands of nodes per readback; resolving each one through the VMA map was ~25 ms per SotC frame, and
     // the tree spreads over many physical areas

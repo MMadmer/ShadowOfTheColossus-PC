@@ -15,7 +15,8 @@ Settings (environment variables, or sotc.ini beside this script as NAME=value li
     SOTC_DLC_DIR      optional: the game's DLC (one folder per add-on with sce_sys/param.sfo,
                       or shadPS4's addcont folder holding CUSA08809)
     SOTC_MODES        optional, comma-separated: af16 (16x anisotropic filtering),
-                      fps60 (removes the 30 FPS cap; experimental, vblank at 120 Hz)
+                      fps60 (removes the 30 FPS cap; experimental, vblank at 120 Hz),
+                      res720/res810/res900/res960 (render below 1080p, the game scales up)
     SOTC_CVARS        engine settings, NAME=VALUE separated by spaces (e.g. r_motionBlurEnable=0)
     BB_GAMEPAD        the gamepad to use (its name or part of it), when several are connected
     key.<input>=Keys, pad.<input>=buttons   remap the controls (README.md, Controles)

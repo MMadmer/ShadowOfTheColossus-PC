@@ -8,6 +8,8 @@ Writes two files for the loader:
   out/patches.bin  code patches (BBPATCH2, bb-probe --patches):
                    fps60  removes the game's 30 FPS cap (illusion's GoldHEN patch, the shadPS4
                           SotC fork's "SotC-Modes")
+                   res720, res810, res900, res960  render resolution below the 1080p output
+                          (the engine scales the frame up, as the Pro does from 1440p to 4K)
   out/cmdline.bin  the engine command line the game appends to its own (SOTCCMD1,
                    bb-probe --sotc-cmdline): cvars of the Bluepoint engine, e.g.
                    +r_motionBlurEnable=0. Modes that are only cvars:
@@ -31,13 +33,30 @@ MODES = {
         (0x01390090, bytes.fromhex('ff25a20567'), bytes.fromhex('31c0c3')),
     ],
 }
+# Render resolution modes res<height> (16:9): the engine renders at that size and scales the frame
+# up to the 1080p display buffer, as the Pro renders 1440p for a 4K display (the resolution set
+# up by the video output init, base PS4 path: render width / height immediates).
+RENDER_WIDTH = (0x00495d61, bytes.fromhex('b880070000'))
+RENDER_HEIGHT = (0x00495d7c, bytes.fromhex('b938040000'))
+RENDER_HEIGHTS = {720: 1280, 810: 1440, 900: 1600, 960: 1704, 1080: 1920}
+
+
+def render_resolution_patch(height):
+    width = RENDER_HEIGHTS[height]
+    return [(RENDER_WIDTH[0], RENDER_WIDTH[1], bytes([0xb8]) + struct.pack('<I', width)),
+            (RENDER_HEIGHT[0], RENDER_HEIGHT[1], bytes([0xb9]) + struct.pack('<I', height))]
+
+
+for _height in RENDER_HEIGHTS:
+    MODES[f'res{_height}'] = render_resolution_patch(_height)
 # Modes made of cvars only.
 CVAR_MODES = {
     'af16': ['progSamplerAnisoLevel=16', 'progSamplerAnisoLevel_BasePS4=16', 'progSamplerAnisoLevel_Perf=16',
              'progSamplerAnisoLevel_Cinematic=16', 'linearSamplerAnisoLevel=16'],
 }
 # EU 1.01: the command line lea and the fps60 site.
-VERSION_CHECKS = [(CMDLINE_LEA, bytes.fromhex('488d352debad00')), (0x01390090, bytes.fromhex('ff25a20567'))]
+VERSION_CHECKS = [(CMDLINE_LEA, bytes.fromhex('488d352debad00')), (0x01390090, bytes.fromhex('ff25a20567')),
+                  RENDER_WIDTH, RENDER_HEIGHT]
 CVAR = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*(=[-+.0-9A-Za-z_%]+)?$')  # NAME=VALUE or a flag such as nointro
 
 

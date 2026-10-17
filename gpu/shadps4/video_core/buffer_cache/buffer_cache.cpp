@@ -563,13 +563,39 @@ void BufferCache::ApplyDownloads(std::span<const ReadbackItem> pending, const u8
             touches_heap |= item.addr < heap_base + heap_size && heap_base < item.addr + item.size;
         }
         if (touches_heap) {
+            // sotc: free blocks are now read from the physical chain at each write; the free tree
+            // only gives the chain walk its starts. So a changed tree is walked again at most every
+            // 250 ms, at once only when the old one gives no start for a range (Covers).
+            // SOTC_HEAP_GUARD_EVERY=0: every change, as before.
+            static const auto rebuild_every = [] {
+                const char* v = std::getenv("SOTC_HEAP_GUARD_EVERY");
+                return std::chrono::milliseconds(v ? std::strtoull(v, nullptr, 10) : 250);
+            }();
+            static std::chrono::steady_clock::time_point built_at{};
             const std::array<u64, 3> signature = {*std::bit_cast<const u64*>(heap + 0x80),
                                                    *std::bit_cast<const u64*>(heap + 0xa8),
                                                    *std::bit_cast<const u64*>(heap + 0xc0)};
-            if (!cached_guard || signature != cached_signature) {
+            const auto now = std::chrono::steady_clock::now();
+            if (cached_guard) {
+                cached_guard->ForgetRuns();
+            }
+            bool rebuild = !cached_guard ||
+                           (signature != cached_signature && now - built_at >= rebuild_every);
+            if (!rebuild && cached_guard->IsValid()) {
+                for (const auto& item : pending) {
+                    const VAddr lo = std::max(item.addr, heap_base);
+                    const VAddr hi = std::min(item.addr + item.size, heap_base + heap_size);
+                    if (lo < hi && !cached_guard->Covers(lo, hi)) {
+                        rebuild = signature != cached_signature;
+                        break;
+                    }
+                }
+            }
+            if (rebuild) {
                 SotcStats::heap_guard_builds.fetch_add(1, std::memory_order_relaxed);
                 cached_guard.emplace(memory, heap);
                 cached_signature = signature;
+                built_at = now;
             }
             if (cached_guard->IsValid()) {
                 heap_guard = &*cached_guard;
@@ -1470,24 +1496,43 @@ bool BufferCache::MaybeEvictCold(std::chrono::steady_clock::time_point now) {
     // only when every page that is not CPU-modified is equal (a mismatch is tried again after
     // 60 s). Shaders reading arena memory through pointers fault an evicted block back in (one
     // frame of zeros); blocks that came back that way stay resident from then on.
-    static const u64 limit = [] {
+    // sotc: on small cards (budget under 3 GiB: GTX 1050 2 GB) the defaults follow the budget:
+    // 45% of it for the arena (the Shrine binds ~600 MiB of it every few seconds), blocks idle
+    // for 8 s, 128 MiB per check; the texture cache plans for the rest.
+    const u64 budget = instance.GetTotalMemoryBudget();
+    const bool small_card = budget != 0 && budget < (3ull << 30);
+    static const u64 limit = [&] {
         const char* v = std::getenv("SOTC_ARENA_EVICT_MB");
-        return (v ? std::strtoull(v, nullptr, 10) : 1536ull) << 20;
+        if (v) {
+            return std::strtoull(v, nullptr, 10) << 20;
+        }
+        return small_card ? std::max<u64>(budget * 45 / 100, 512ull << 20) : 1536ull << 20;
     }();
-    static const u64 step = [] {
+    static const u64 step = [&] {
         const char* v = std::getenv("SOTC_ARENA_EVICT_STEP_MB");
-        return std::max<u64>(v ? std::strtoull(v, nullptr, 10) : 64ull, 1) << 20;
+        return std::max<u64>(v ? std::strtoull(v, nullptr, 10) : small_card ? 128ull : 64ull, 1)
+               << 20;
     }();
-    static const u16 idle_epochs = [] {
+    static const u16 idle_epochs = [&] {
         const char* v = std::getenv("SOTC_ARENA_EVICT_IDLE_S");
-        return static_cast<u16>(std::clamp<unsigned long>(v ? std::strtoul(v, nullptr, 10) : 30ul,
-                                                          2ul, 30000ul));
+        return static_cast<u16>(std::clamp<unsigned long>(
+            v ? std::strtoul(v, nullptr, 10) : small_card ? 8ul : 30ul, 2ul, 30000ul));
     }();
     if (now < next_evict_check) {
         return false;
     }
     next_evict_check = now + std::chrono::seconds(2);
     AdvanceUseEpoch(now);
+    // sotc: the working set, resident blocks bound in the last ~4 s (SOTC VRAM line).
+    if (SotcStats::kFpsLog) {
+        u64 hot_blocks = 0;
+        for (const Backing& range : resident_ranges) {
+            for (u64 block = range.start; block < range.end; ++block) {
+                hot_blocks += static_cast<u16>(use_epoch - block_last_use[block]) <= 4;
+            }
+        }
+        SotcStats::arena_hot_bytes.store(hot_blocks << block_shift, std::memory_order_relaxed);
+    }
     const u64 resident = SotcStats::arena_bytes.load(std::memory_order_relaxed);
     if (limit == 0 || resident <= limit) {
         return false;

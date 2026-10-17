@@ -281,7 +281,7 @@ void VideoOutDriver::Flip(const Request& req) {
         static auto last_flip = now;
         static std::vector<float> frame_ms;
         static double worst_ms = 0.0;
-        static uint64_t worst_ns[kColumns]{}, slow_ns[kColumns]{};
+        static uint64_t worst_ns[kColumns]{}, slow_ns[kColumns]{}, total_ns[kColumns]{};
         static u32 slow_frames = 0;
         const double interval_ms = std::chrono::duration<double, std::milli>(now - last_flip).count();
         last_flip = now;
@@ -292,6 +292,9 @@ void VideoOutDriver::Flip(const Request& req) {
         cause_ns[SotcStats::FrameCauses] = runtime_file_read_ns_take();
         cause_ns[SotcStats::FrameCauses + 1] = SotcStats::frame_copy_bytes.exchange(0);
         frame_ms.push_back(static_cast<float>(interval_ms));
+        for (int c = 0; c < kColumns; ++c) {
+            total_ns[c] += cause_ns[c];
+        }
         if (interval_ms > worst_ms) {
             worst_ms = interval_ms;
             std::copy(std::begin(cause_ns), std::end(cause_ns), std::begin(worst_ns));
@@ -329,6 +332,13 @@ void VideoOutDriver::Flip(const Request& req) {
                              pct(0.5), pct(0.99), 1000.0 / pct(0.99), worst_ms,
                              columns(worst_ns).c_str(), slow_frames, columns(slow_ns).c_str(),
                              static_cast<unsigned long long>(SotcStats::frame_compiles.exchange(0)));
+                // sotc: the same causes per frame on average (typical frames, not the worst).
+                uint64_t avg_ns[kColumns];
+                for (int c = 0; c < kColumns; ++c) {
+                    avg_ns[c] = frame_ms.empty() ? 0 : total_ns[c] / frame_ms.size();
+                    total_ns[c] = 0;
+                }
+                std::fprintf(stderr, "SOTC FRAMES avg [%s]\n", columns(avg_ns).c_str());
                 std::string allocs;
                 for (int k = 0; k < SotcStats::AllocKinds; ++k) {
                     const uint64_t count = SotcStats::alloc_count[k].exchange(0);
@@ -461,7 +471,7 @@ void VideoOutDriver::Flip(const Request& req) {
             if (const uint64_t budget = SotcStats::vram_budget.load(std::memory_order_relaxed)) {
                 std::fprintf(stderr,
                              "SOTC VRAM %llu/%llu MiB (VMA blocks %llu MiB holding %llu MiB, "
-                             "buffer arenas %llu MiB, images %llu MiB in "
+                             "buffer arenas %llu MiB (%llu hot), images %llu MiB in "
                              "%llu; GC freed %llu, kept tiled %llu), emergency collections %llu\n",
                              static_cast<unsigned long long>(
                                  SotcStats::vram_used.load(std::memory_order_relaxed) >> 20),
@@ -473,6 +483,8 @@ void VideoOutDriver::Flip(const Request& req) {
                                  20),
                              static_cast<unsigned long long>(
                                  SotcStats::arena_bytes.load(std::memory_order_relaxed) >> 20),
+                             static_cast<unsigned long long>(
+                                 SotcStats::arena_hot_bytes.load(std::memory_order_relaxed) >> 20),
                              static_cast<unsigned long long>(
                                  SotcStats::image_bytes.load(std::memory_order_relaxed) >> 20),
                              static_cast<unsigned long long>(

@@ -79,6 +79,7 @@ void BpeHeapGuard::CollectFreeTree() {
     VAddr pending = 0;
     if (Read(heap + 0xc0, &pending, sizeof(pending)) && IsHeapPointer(pending)) {
         AddFreeBlock(pending);
+        free_spans.emplace_back(pending, pending + FreeNodeSize);
     }
     std::vector<VAddr> stack{root};
     size_t visited = 0;
@@ -115,13 +116,9 @@ void BpeHeapGuard::CollectFreeTree() {
     }
     std::sort(free_blocks.begin(), free_blocks.end());
     free_blocks.erase(std::unique(free_blocks.begin(), free_blocks.end()), free_blocks.end());
-    free_spans.reserve(free_blocks.size());
-    for (const VAddr block : free_blocks) {
-        free_spans.emplace_back(block, block + FreeNodeSize);
-    }
 }
 
-bool BpeHeapGuard::NextBlock(VAddr block, VAddr& next) const {
+bool BpeHeapGuard::NextBlock(VAddr block, VAddr& next, bool* in_use) const {
     u64 size_flags = 0;
     if (!Read(block + 8, &size_flags, sizeof(size_flags))) {
         return false;
@@ -131,39 +128,65 @@ bool BpeHeapGuard::NextBlock(VAddr block, VAddr& next) const {
         return false;
     }
     next = block + size + HeaderSize;
+    if (in_use) {
+        *in_use = (size_flags & 1) != 0;
+    }
     // The next block must point back: this rejects anything that only looks like a header
     VAddr prev = 0;
     return IsHeapPointer(next) && Read(next, &prev, sizeof(prev)) && prev == block;
 }
 
-void BpeHeapGuard::CollectHeaders(VAddr lo, VAddr hi, std::vector<Span>& spans) const {
-    // Start from the closest free block at or below the range, whose header is known to be real, and follow
-    // the physical chain through the range
-    auto it = std::upper_bound(free_blocks.begin(), free_blocks.end(), lo);
-    std::vector<VAddr> starts;
+void BpeHeapGuard::ChainStarts(VAddr lo, VAddr hi, std::vector<VAddr>& starts) const {
     // Readbacks usually start at a binding base, i.e. the user pointer of an allocation: start from its
-    // header too (accepted only if the next block points back to it)
-    if (VAddr next = 0; lo > HeaderSize && NextBlock(lo - HeaderSize, next)) {
+    // header (accepted only if the next block points back to it). Else the closest block of the free tree
+    // at or below the range, and every one inside it. The tree may be older than the heap: each start is
+    // checked the same way.
+    VAddr next = 0;
+    if (lo > HeaderSize && NextBlock(lo - HeaderSize, next)) {
         starts.push_back(lo - HeaderSize);
     }
-    if (it != free_blocks.begin()) {
-        starts.push_back(*std::prev(it));
+    auto it = std::upper_bound(free_blocks.begin(), free_blocks.end(), lo);
+    for (auto below = it; below != free_blocks.begin();) {
+        --below;
+        if (NextBlock(*below, next)) {
+            starts.push_back(*below);
+            break;
+        }
     }
     for (; it != free_blocks.end() && *it < hi; ++it) {
-        starts.push_back(*it);
+        if (NextBlock(*it, next)) {
+            starts.push_back(*it);
+        }
     }
     std::sort(starts.begin(), starts.end());
+}
+
+bool BpeHeapGuard::Covers(VAddr lo, VAddr hi) const {
+    std::vector<VAddr> starts;
+    ChainStarts(lo, hi, starts);
+    return !starts.empty() && starts.front() <= lo;
+}
+
+void BpeHeapGuard::CollectHeaders(VAddr lo, VAddr hi, std::vector<Span>& spans) const {
+    // Follow the physical chain through the range from each start. A free block (size bit 0 clear, as the
+    // game's free function reads it) keeps its tree links after the header too: read from the chain itself,
+    // blocks freed after the tree walk are covered as well.
+    std::vector<VAddr> starts;
+    ChainStarts(lo, hi, starts);
     VAddr covered_until = 0;
     for (VAddr block : starts) {
         if (block < covered_until) {
             continue;
         }
         for (size_t step = 0; step < MaxChainSteps && block < hi; ++step) {
-            if (block + HeaderSize > lo) {
-                spans.emplace_back(block, block + HeaderSize);
-            }
             VAddr next = 0;
-            if (!NextBlock(block, next)) {
+            bool in_use = true;
+            const bool valid = NextBlock(block, next, &in_use);
+            const VAddr span_end = block + (valid && !in_use ? FreeNodeSize : HeaderSize);
+            if (span_end > lo) {
+                spans.emplace_back(block, span_end);
+            }
+            if (!valid) {
                 break;
             }
             block = next;
@@ -174,11 +197,10 @@ void BpeHeapGuard::CollectHeaders(VAddr lo, VAddr hi, std::vector<Span>& spans) 
 
 std::vector<BpeHeapGuard::Span> BpeHeapGuard::CollectSpans(VAddr addr, VAddr end) {
     std::vector<Span> spans;
-    for (auto it = std::lower_bound(free_spans.begin(), free_spans.end(),
-                                    Span{addr > FreeNodeSize ? addr - FreeNodeSize : 0, 0});
-         it != free_spans.end() && it->first < end; ++it) {
-        if (it->second > addr) {
-            spans.push_back(*it);
+    // The pending block (heap+0xc0) is free but out of the tree, maybe out of the chain walk too.
+    for (const auto& span : free_spans) {
+        if (span.first < end && span.second > addr) {
+            spans.push_back(span);
         }
     }
     CollectHeaders(addr, end, spans);

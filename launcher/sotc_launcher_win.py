@@ -104,7 +104,7 @@ APP_DEFAULTS = {'ui_language': '', 'game_dir': str(PORT_DIR.parent / GAME_ID), '
                 'user_dir': '', 'af16': True, 'fps60': False, 'fullscreen': False,
                 'present_mode': 'Mailbox', 'language': '', 'player_name': '', 'show_fps': False,
                 'readbacks': '', 'extra_env': '', 'close_on_play': False, 'gamepad': '',
-                'output_res': '1920x1080', 'upscaler': 'fsr1', 'sharpness': '250', 'mouse': True,
+                'output_res': '1920x1080', 'render_res': '', 'upscaler': 'fsr1', 'sharpness': '250', 'mouse': True,
                 'mouse_sens': '1.0', 'mouse_invert': False, 'neo': False, 'fx_vignette': True,
                 'fx_fog': True, 'fx_ssao': True, 'engine_cvars': '', 'perf_culling': True,
                 'perf_record_thread': True, 'perf_dma': True, 'gpu_submit': 'auto', 'library_dirs': [], 'keys': {},
@@ -173,6 +173,12 @@ EFFECTS = [('fx_vignette', ('Vinheta (cantos escurecidos)', 'Vignette (darkened 
            ('fx_ssao', ('Oclusão ambiente (SSAO)', 'Ambient occlusion (SSAO)'), 'AO_Mode=0')]
 OUTPUTS = [('1280x720', ('1280 × 720 (720p)', '1280 × 720 (720p)')), ('1920x1080', ('1920 × 1080 (1080p)', '1920 × 1080 (1080p)')),
            ('2560x1440', ('2560 × 1440 (1440p)', '2560 × 1440 (1440p)')), ('3840x2160', ('3840 × 2160 (4K)', '3840 × 2160 (4K)'))]
+# Engine render resolution (scripts/sotc_modes.py res<height>): the frame is scaled up to the 1080p
+# display buffer by the game itself, as the PS4 Pro does from 1440p to 4K.
+RENDER_RES = [('', ('1080p (nativa, como no PS4)', '1080p (native, as on PS4)')),
+              ('res900', ('900p (GPUs fracas)', '900p (weak GPUs)')),
+              ('res810', ('810p', '810p')),
+              ('res720', ('720p (GPU muito fraca)', '720p (very weak GPU)'))]
 UPSCALERS = [('fsr1', ('FSR 1 (AMD, qualquer placa)', 'FSR 1 (AMD, any GPU)')),
              ('bilinear', ('Bilinear (simples)', 'Bilinear (plain)'))]
 SHARPNESS = [('0', ('Alta', 'High')), ('250', ('Média (padrão)', 'Medium (default)')), ('600', ('Baixa', 'Low')),
@@ -302,7 +308,10 @@ def game_environment(s):
         env['SOTC_SYS_MODULES'] = s['sys_modules']
     if s.get('dlc_dir'):
         env['SOTC_DLC_DIR'] = s['dlc_dir']
-    env['SOTC_MODES'] = ','.join(m for m in ('af16', 'fps60') if s.get(m))
+    modes = [m for m in ('af16', 'fps60') if s.get(m)]
+    if s.get('render_res') in {key for key, _t in RENDER_RES if key}:
+        modes.append(s['render_res'])
+    env['SOTC_MODES'] = ','.join(modes)
     env['BB_FULLSCREEN'] = '1' if s['fullscreen'] else '0'
     env['BB_PRESENT_MODE'] = s['present_mode']
     if s['language']:
@@ -672,12 +681,13 @@ class Launcher:
         quick.grid(row=0, column=1, sticky='nw')
         ttk.Label(quick, text=_('Ajustes rápidos', 'Quick settings'), style='Section.TLabel').grid(
             row=0, column=0, columnspan=2, sticky='w', pady=(0, 2))
+        self.row(quick, _('Render', 'Render'), self.choice(quick, 'render_res', RENDER_RES, 24))
         self.row(quick, _('Saída', 'Output'), self.choice(quick, 'output_res', OUTPUTS, 24))
         self.row(quick, _('Upscaler', 'Upscaler'), self.choice(quick, 'upscaler', UPSCALERS, 24))
         self.check(quick, 'fps60', _('60 FPS (experimental)', '60 FPS (experimental)'))
         self.check(quick, 'af16', _('Texturas nítidas (filtro 16x)', 'Sharp textures (16x filtering)'))
         self.check(quick, 'fullscreen', _('Tela cheia', 'Fullscreen'))
-        for key in ('af16', 'fps60', 'fullscreen', 'output_res', 'upscaler'):
+        for key in ('af16', 'fps60', 'fullscreen', 'output_res', 'render_res', 'upscaler'):
             self.vars[key].trace_add('write', lambda *_a: self.refresh_status())
 
     def draw_banner(self):
@@ -804,6 +814,13 @@ class Launcher:
                    _('Tira o limite de 30 FPS do jogo; o vblank vai a 120 Hz. Mediu 38 FPS no campo e ~25 no templo.',
                      'Removes the game\'s 30 FPS cap; vblank at 120 Hz. Measured 38 FPS in the open world, ~25 at the temple.'))
         self.section(f, _('Resolução', 'Resolution'))
+        self.row(f, _('Resolução de render', 'Render resolution'), self.choice(f, 'render_res', RENDER_RES),
+                 _('Abaixo de 1080p o próprio jogo amplia a imagem para 1080p (como o PS4 Pro faz de 1440p para 4K): '
+                   'menos trabalho para placas fracas (GTX 1050: 900p), texturas e névoa iguais, imagem um pouco '
+                   'mais suave. Só na versão EU 1.01.',
+                   'Below 1080p the game itself scales the frame up to 1080p (as the PS4 Pro does from 1440p to '
+                   '4K): less work for weak cards (GTX 1050: 900p), same textures and fog, a slightly softer '
+                   'image. EU 1.01 only.'))
         self.row(f, _('Saída', 'Output'), self.choice(f, 'output_res', OUTPUTS),
                  _('O jogo renderiza em 1080p, como no PS4; a imagem é ampliada ou reduzida para a saída. '
                    'Num monitor menor que a saída, a janela cabe na tela e a tela cheia usa o monitor todo.',
@@ -1027,6 +1044,7 @@ class Launcher:
     def summary(self):
         parts = [_('60 FPS', '60 FPS') if self.var('fps60').get() else _('30 FPS (como no PS4)', '30 FPS (as on PS4)'),
                  self.var('output_res').get().replace('x', ' × '),
+                 _(*dict(RENDER_RES).get(self.var('render_res').get(), RENDER_RES[0][1])).split(' ')[0] + ' render',
                  'FSR 1' if self.var('upscaler').get() == 'fsr1' else 'bilinear']
         if self.var('af16').get():
             parts.append(_('AF 16x', '16x AF'))
