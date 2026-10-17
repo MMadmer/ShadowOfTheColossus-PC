@@ -1,6 +1,23 @@
-# Shadow of the Colossus — PC (port nativo / native port) · v0.57-opt7
+# Shadow of the Colossus — PC (port nativo / native port) · v0.57-opt7 · MMadmer fork
 
 **[Português](#português)** · **[English](#english)** · [Releases](../../releases) · [Changelog](CHANGELOG.md)
+
+> **A separate project / Отдельный проект.** This is [MMadmer](https://github.com/MMadmer)'s
+> fork of [AjncSystem/ShadowOfTheColossus-PC](https://github.com/AjncSystem/ShadowOfTheColossus-PC),
+> the original native port. Its focus is optimizing the port as a whole: less CPU and GPU work
+> per frame, steadier frame times, less video memory, faster startup, and good play on modest
+> hardware too (4-core CPUs, 2 GB cards); plus quality-of-life such as `.pkg` dump unpacking (see
+> [CHANGELOG](CHANGELOG.md), 0.57-opt6 and later). It builds on upstream pull requests that are
+> still open there: #32 (Gabriell-os), #46 (Lucas-blip-png), #81 (jownatan) and #83
+> (Oussama268). Improvements are offered back to the original as pull requests. Report problems
+> with this fork's builds here, not in the original repository.
+>
+> Это форк [MMadmer](https://github.com/MMadmer) оригинального нативного порта
+> [AjncSystem/ShadowOfTheColossus-PC](https://github.com/AjncSystem/ShadowOfTheColossus-PC),
+> посвящённый оптимизации порта в целом (меньше работы CPU и GPU на кадр, ровнее кадры, меньше
+> видеопамяти, быстрее запуск) — в том числе чтобы игра хорошо шла и на слабом железе. Основан также на ещё не принятых
+> там пул-реквестах #32, #46, #81 и #83 их авторов. Улучшения предлагаются в оригинал пул-реквестами;
+> о проблемах сборок этого форка — сюда, а не в оригинальную репу.
 
 > **Nenhum arquivo do jogo nem da Sony está incluído / No game or Sony files are included.**
 > Você precisa do seu próprio dump do jogo e, para ter som, de dois módulos do seu próprio
@@ -200,6 +217,13 @@ diagnóstico / diagnostic variables: [docs/sotc/README-SotC.md](docs/sotc/README
 
 ## Créditos / Credits
 
+- [AjncSystem/ShadowOfTheColossus-PC](https://github.com/AjncSystem/ShadowOfTheColossus-PC)
+  (AjncSystem): o port original / the original port this fork is based on.
+- Pull requests do original incluídos / upstream pull requests included:
+  [#32](https://github.com/AjncSystem/ShadowOfTheColossus-PC/pull/32) Gabriell-os (AMD),
+  [#46](https://github.com/AjncSystem/ShadowOfTheColossus-PC/pull/46) Lucas-blip-png,
+  [#81](https://github.com/AjncSystem/ShadowOfTheColossus-PC/pull/81) jownatan (Intel Arc),
+  [#83](https://github.com/AjncSystem/ShadowOfTheColossus-PC/pull/83) Oussama268 (0.57-opt5).
 - [bloodborne_pc](https://github.com/Supermedo/bloodborne_pc) (Supermedo, deadinside28 and
   forks): carregador, runtime nativo e lançador / loader, native runtime and launcher. README
   original: [docs/bbport](docs/bbport/README.md).
@@ -213,4 +237,18 @@ diagnóstico / diagnostic variables: [docs/sotc/README-SotC.md](docs/sotc/README
   approach e o acesso direto à memória para o SotC / and direct memory access for SotC.
 - Patch de 60 FPS / 60 FPS patch: illusion (GoldHEN cheats).
 
-Licença / License: **GPL-2.0-or-later** ([LICENSE](LICENSE)).
+Licença / License: **GPL-2.0-or-later** ([LICENSE](LICENSE)), como o original / as the original.
+
+- Modificações deste fork / this fork's modifications: © 2026 MMadmer, GPL-2.0-or-later. O que
+  mudou e quando / what changed and when: [CHANGELOG](CHANGELOG.md) (0.57-opt6 and later) and the
+  git history; changed code in the vendored shadPS4 is marked with `sotc:` comments.
+- Os binários das Releases são compilados deste código / Release binaries are built from this
+  source: the exact source of every release is its git tag in this repository.
+- Componentes de terceiros / third-party components keep their own licenses: shadPS4
+  (GPL-2.0-or-later, [gpu/shadps4/LICENSE](gpu/shadps4/LICENSE)), the submodules in
+  `.gitmodules` (LibAtrac9, FSR-Vulkan, imgui, magic_enum, miniz, xbyak), the files under
+  `gpu/third_party` with their license files, and PkgTool / LibOrbisPkg (LGPL-3.0, source:
+  <https://github.com/maxton/LibOrbisPkg>), shipped unmodified in Release packages under
+  `tools/PkgTool` together with its `LICENSE.txt`.
+- Nenhum arquivo do jogo ou firmware da Sony é distribuído / no game files or Sony firmware are
+  distributed.

@@ -24,3 +24,52 @@ patches.json
 !launcher/sotc.png
 out/
 sotc.ini
+
+# Never in the repository: the game, its dumps and Sony firmware (bring your own copy)
+CUSA08809*/
+*.pkg
+*.sprx
+*.prx
+*.self
+eboot*.bin
+eboot*.elf
+param.sfo
+savedata/
+save-template/
+# Generated at build or run time: caches, packaged builds, interpreters, binaries
+SotC-PC/
+shaderpack/
+venv/
+.venv/
+*.exe
+*.dll
+*.pdb
+*.lib
+*.a
+*.o
+*.obj
+*.profraw
+*.profdata
+*.spv
+*.pipeline_cache
+# Logs, captures, dumps and profiling output
+*.log
+*.rdc
+*.dmp
+crashes/
+stacks_*.txt
+prof_*.txt
+tree_*.txt
+census*.txt
+# Disassembler databases and local editor/assistant state
+*.i64
+*.idb
+*.id0
+*.id1
+*.id2
+*.nam
+*.til
+.vs/
+.vscode/
+.idea/
+.claude/
