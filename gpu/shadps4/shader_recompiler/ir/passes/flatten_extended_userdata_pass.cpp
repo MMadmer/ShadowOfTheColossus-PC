@@ -26,6 +26,9 @@
 #include "shader_recompiler/ir/reg.h"
 #include "shader_recompiler/ir/srt_gvn_table.h"
 #include "shader_recompiler/ir/value.h"
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 #ifdef ARCH_X86_64
 
@@ -201,6 +204,34 @@ bool SrtWalkerSignalHandler(void* context, void* fault_address) {
            operands[1].type == ZYDIS_OPERAND_TYPE_MEMORY);
 
     size_t len = instruction.length;
+#ifdef _WIN32
+    // sotc: the faulting load reads zero this time only, and the walker goes on. Upstream patched
+    // the load into "xor reg, reg" for good: one draw with a null SRT pointer (the game binds
+    // some before their tables are set up, at boot) then made every later draw of that shader
+    // read zeros instead of its sharps, nondeterministically (black or corrupt scenes in some
+    // sessions, ~500 walkers patched).
+    {
+        auto* ctx = static_cast<EXCEPTION_POINTERS*>(context)->ContextRecord;
+        switch (operands[0].reg.value) {
+        case ZYDIS_REGISTER_RDI:
+            ctx->Rdi = 0;
+            break;
+        case ZYDIS_REGISTER_R10D:
+            ctx->R10 = 0;
+            break;
+        default:
+            UNREACHABLE_MSG("Unsupported register for SRT walker fault");
+            return false;
+        }
+        ctx->Rip += len;
+        static std::atomic<u32> reported{0};
+        if (reported.fetch_add(1, std::memory_order_relaxed) < 4) {
+            LOG_WARNING(Render_Recompiler, "SRT walker load at {} faulted on {}: read as zero",
+                        code, fault_address);
+        }
+        return true;
+    }
+#endif
     const size_t patch_size = 3;
     u8* code_patch = const_cast<u8*>(reinterpret_cast<const u8*>(code));
 

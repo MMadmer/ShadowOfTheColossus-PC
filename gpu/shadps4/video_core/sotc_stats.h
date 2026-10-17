@@ -48,6 +48,8 @@ inline std::atomic<uint64_t> cp_waits{0};
 /// loop around them, which spins while a queue waits).
 inline std::atomic<uint64_t> draw_idle_ns{0};
 inline std::atomic<uint64_t> cp_parse_ns{0};
+/// GPU time of the submitted command buffers (timestamps, SOTC_FPS): the GPU's busy time.
+inline std::atomic<uint64_t> gpu_busy_ns{0};
 inline uint64_t NowNs() {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(
                std::chrono::steady_clock::now().time_since_epoch())

@@ -487,8 +487,10 @@ void VideoOutDriver::Flip(const Request& req) {
             if (flips) {
                 const double idle_ms = SotcStats::draw_idle_ns.exchange(0) / 1e6;
                 const double parse_ms = SotcStats::cp_parse_ns.exchange(0) / 1e6;
-                std::fprintf(stderr, "SOTC threads per frame: draw busy %.2f ms, command parse %.2f ms\n",
-                             (seconds * 1000.0 - idle_ms) / flips, parse_ms / flips);
+                const double gpu_ms = SotcStats::gpu_busy_ns.exchange(0) / 1e6;
+                std::fprintf(stderr, "SOTC threads per frame: draw busy %.2f ms, command parse %.2f ms, "
+                             "GPU busy %.2f ms\n",
+                             (seconds * 1000.0 - idle_ms) / flips, parse_ms / flips, gpu_ms / flips);
             }
             // sotc: write-fault readbacks whose pages were still GPU-modified (totals).
             if (const uint64_t pending = SotcStats::write_fault_gpu_pending.load(),

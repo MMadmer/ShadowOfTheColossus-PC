@@ -13,8 +13,12 @@
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
 
 #include <miniz.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 #include <algorithm>
+#include <cstdlib>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -89,6 +93,9 @@ constexpr std::string GetBlobFileExtension(BlobType type) {
     case BlobType::ShaderProfile: {
         return "bin";
     }
+    case BlobType::DriverCache: {
+        return "vkc";
+    }
     default:
         UNREACHABLE();
     }
@@ -127,11 +134,89 @@ void DataBase::Open() {
         if (!std::filesystem::exists(cache_path)) {
             std::filesystem::create_directories(cache_path);
         }
+        SeedFromPack();
         Prefetch();
     }
 
     io_worker = std::jthread{ProcessIO};
     opened = true;
+}
+
+// sotc: the port ships a shader pack (SOTC_SHADER_PACK, default <exe>/../shaderpack): a pipeline
+// cache recorded over the game, in the folder named like the cache (CUSA08809_nodma, ...), with a
+// pack.id stamp. A cache that was not seeded from this pack is replaced by it once; the warm-up
+// then builds every pipeline at boot (with its progress window). If the pack was made with
+// another shader profile, WarmUp finds the profile mismatch and starts a fresh cache as before.
+void DataBase::SeedFromPack() {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::path pack_root;
+    if (const char* v = std::getenv("SOTC_SHADER_PACK")) {
+        if (v[0] == '0' && v[1] == '\0') {
+            return;
+        }
+        pack_root = fs::path{v};
+    } else {
+        wchar_t exe[1024]{};
+#ifdef _WIN32
+        GetModuleFileNameW(nullptr, exe, 1024);
+        pack_root = fs::path{exe}.parent_path().parent_path() / "shaderpack";
+#endif
+    }
+    const fs::path pack = pack_root / cache_path.filename();
+    const fs::path pack_id_file = pack / "pack.id";
+    if (!fs::is_regular_file(pack_id_file, ec)) {
+        return;
+    }
+    const auto read_text = [](const fs::path& path) {
+        using namespace Common::FS;
+        const IOFile file{path, FileAccessMode::Read};
+        if (!file.IsOpen()) {
+            return std::string{};
+        }
+        std::string text(file.GetSize(), '\0');
+        file.ReadSpan(std::span<char>{text});
+        return text;
+    };
+    const std::string pack_id = read_text(pack_id_file);
+    const fs::path seeded_file = cache_path / "pack.id";
+    if (!pack_id.empty() && read_text(seeded_file) == pack_id) {
+        return;
+    }
+    const auto start = std::chrono::steady_clock::now();
+    for (const auto& entry : fs::directory_iterator{cache_path, ec}) {
+        if (entry.is_regular_file(ec)) {
+            fs::remove(entry.path(), ec);
+        }
+    }
+    u32 copied = 0;
+    for (const auto& entry : fs::directory_iterator{pack, ec}) {
+        if (entry.is_regular_file(ec) && entry.path().filename() != "pack.id") {
+            if (fs::copy_file(entry.path(), cache_path / entry.path().filename(),
+                              fs::copy_options::overwrite_existing, ec)) {
+                ++copied;
+            }
+        }
+    }
+    fs::copy_file(pack_id_file, seeded_file, fs::copy_options::overwrite_existing, ec);
+    LOG_WARNING(Render, "sotc: shader cache seeded from the shader pack ({} files) in {} ms", copied,
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - start)
+                    .count());
+}
+
+void DataBase::IndexAdd(std::string&& file_name) {
+    std::scoped_lock lock{index_mutex};
+    on_disk.insert(std::move(file_name));
+}
+
+bool DataBase::Exists(BlobType type, const std::string& name) {
+    if (!opened || EmulatorSettings.IsPipelineCacheArchived()) {
+        return opened;
+    }
+    auto file_name = name + "." + GetBlobFileExtension(type);
+    std::scoped_lock lock{index_mutex};
+    return on_disk.contains(file_name);
 }
 
 // sotc: the boot preload opened ~12k small files one by one (~21 s of a 22 s warm-up on Windows,
@@ -144,6 +229,12 @@ void DataBase::Prefetch() {
     for (const auto& entry : std::filesystem::directory_iterator{cache_path, ec}) {
         if (entry.is_regular_file(ec) && entry.path().extension() != ".tmp") {
             files.push_back(entry.path());
+        }
+    }
+    {
+        std::scoped_lock lock{index_mutex};
+        for (const auto& file : files) {
+            on_disk.insert(file.filename().string());
         }
     }
     const u32 num_threads =
@@ -224,6 +315,10 @@ void DataBase::Clear() {
         return;
     }
     prefetched.clear();
+    {
+        std::scoped_lock lock{index_mutex};
+        on_disk.clear();
+    }
     std::error_code ec;
     u64 removed = 0;
     for (const auto& entry : std::filesystem::directory_iterator(cache_path, ec)) {
@@ -304,6 +399,7 @@ bool DataBase::Save(BlobType type, const std::string& name, std::vector<u8>&& da
 
     auto path = EmulatorSettings.IsPipelineCacheArchived() ? std::filesystem::path{name}
                                                            : cache_path / name;
+    IndexAdd(name + "." + GetBlobFileExtension(type));
     return WriteVector(type, std::move(path), std::move(data));
 }
 
@@ -314,6 +410,7 @@ bool DataBase::Save(BlobType type, const std::string& name, std::vector<u32>&& d
 
     auto path = EmulatorSettings.IsPipelineCacheArchived() ? std::filesystem::path{name}
                                                            : cache_path / name;
+    IndexAdd(name + "." + GetBlobFileExtension(type));
     return WriteVector(type, std::move(path), std::move(data));
 }
 

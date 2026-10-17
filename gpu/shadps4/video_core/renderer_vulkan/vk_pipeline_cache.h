@@ -6,6 +6,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <deque>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <thread>
@@ -84,6 +85,9 @@ public:
     void WarmUp();
     void Sync();
 
+    /// sotc: narrows an NVIDIA profile to the features shared by all GeForce cards from Pascal on.
+    static void ApplyPortableProfile(Shader::Profile& profile, vk::DriverId driver);
+
     bool LoadComputePipeline(Serialization::Archive& ar);
     bool LoadGraphicsPipeline(Serialization::Archive& ar);
     bool LoadPipelineStage(Serialization::Archive& ar, size_t stage);
@@ -147,6 +151,21 @@ private:
     void CollectAsyncPipelines();
     void AsyncPipelineWorker(std::stop_token token);
 
+    /// sotc: a cached pipeline the warm-up builds on a worker thread (build), then puts into the
+    /// pipeline maps on the warm-up thread (install; a pipeline the driver refused is dropped).
+    struct PreloadJob {
+        std::function<void()> build;
+        std::function<bool()> install;
+    };
+    std::vector<PreloadJob>* preload_jobs{};
+
+    /// sotc: the driver's pipeline cache, kept with the shader cache (see LoadDriverCache).
+    void LoadDriverCache();
+    void SaveDriverCache();
+    void DriverCacheSaver(std::stop_token token);
+    size_t driver_cache_saved_size{};
+    std::atomic<u32> new_since_driver_save{0};
+
 private:
     const Instance& instance;
     Scheduler& scheduler;
@@ -184,6 +203,7 @@ private:
     std::vector<std::unique_ptr<AsyncPipelineJob>> async_done;
     std::atomic<u32> async_done_count{0};
     std::vector<std::jthread> async_workers;
+    std::jthread driver_cache_saver;
 };
 
 } // namespace Vulkan

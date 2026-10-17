@@ -1116,6 +1116,14 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
         return (v ? std::strtoull(v, nullptr, 10) : 4ull) << 20;
     }();
     const u64 want_bytes = u64{resident_blocks} << block_shift;
+    // sotc: device-local arena memory respects SOTC_VRAM_LIMIT_MB (emulated small cards).
+    const auto allocate_memory = [&](const vk::MemoryAllocateInfo& info) {
+        if (info.memoryTypeIndex == arena_memory_type_index &&
+            !instance.EmulatedVramAllows(info.allocationSize)) {
+            return vk::ResultValue<vk::DeviceMemory>{vk::Result::eErrorOutOfDeviceMemory, {}};
+        }
+        return instance.GetDevice().allocateMemory(info);
+    };
     vk::DeviceMemory device_memory{};
     u64 memory_base{};
     if (slab_bytes >= u64{block_size} && want_bytes <= slab_bytes / 2) {
@@ -1124,7 +1132,7 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
                 .allocationSize = slab_bytes,
                 .memoryTypeIndex = arena_memory_type_index,
             };
-            const auto [slab_result, slab_memory] = instance.GetDevice().allocateMemory(slab_info);
+            const auto [slab_result, slab_memory] = allocate_memory(slab_info);
             arena_slab = slab_result == vk::Result::eSuccess ? slab_memory : vk::DeviceMemory{};
             arena_slab_size = slab_bytes;
             arena_slab_used = 0;
@@ -1144,7 +1152,7 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
             .allocationSize = resident_blocks << block_shift,
             .memoryTypeIndex = arena_memory_type_index,
         };
-        auto [alloc_result, exact_memory] = instance.GetDevice().allocateMemory(alloc_info);
+        auto [alloc_result, exact_memory] = allocate_memory(alloc_info);
         if (alloc_result == vk::Result::eErrorOutOfDeviceMemory && arena_fallback_memory_type_index) {
             // Resident arena ranges are never released, so a long session can exhaust video memory.
             // Keep running from system memory (slower GPU access) instead of aborting.
@@ -1153,7 +1161,7 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
                 LOG_WARNING(Render, "Video memory exhausted, placing new buffer memory in system RAM");
             }
             alloc_info.memoryTypeIndex = *arena_fallback_memory_type_index;
-            const auto retry = instance.GetDevice().allocateMemory(alloc_info);
+            const auto retry = allocate_memory(alloc_info);
             alloc_result = retry.result;
             exact_memory = retry.value;
         }
@@ -1170,7 +1178,7 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
                 // next submit. One more try now (memory freed meanwhile by other threads or the GC).
                 collect_deferred = true;
                 alloc_info.memoryTypeIndex = arena_memory_type_index;
-                const auto retry = instance.GetDevice().allocateMemory(alloc_info);
+                const auto retry = allocate_memory(alloc_info);
                 alloc_result = retry.result;
                 exact_memory = retry.value;
                 break;
@@ -1178,7 +1186,7 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
             scheduler.Finish();
             scheduler.PopPendingOperations();
             alloc_info.memoryTypeIndex = arena_memory_type_index;
-            const auto retry = instance.GetDevice().allocateMemory(alloc_info);
+            const auto retry = allocate_memory(alloc_info);
             alloc_result = retry.result;
             exact_memory = retry.value;
         }

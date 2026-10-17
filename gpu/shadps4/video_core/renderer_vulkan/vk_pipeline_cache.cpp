@@ -290,6 +290,35 @@ const Shader::RuntimeInfo& PipelineCache::BuildRuntimeInfo(HwStage stage, SwStag
     return info;
 }
 
+// sotc: on NVIDIA the shaders are translated for the features every GeForce from Pascal (GTX 10)
+// on has with a current driver (vulkan.gpuinfo.org, GTX 1050 on 582.x): the SPIR-V, and so a
+// shader cache recorded on one such card (the port's shader pack), is the same on all of them.
+// A card that lacks one of these gets its own profile and cache, as before.
+// SOTC_PORTABLE_SHADERS=0 keeps the full profile of this GPU.
+void PipelineCache::ApplyPortableProfile(Shader::Profile& p, vk::DriverId driver) {
+    const char* v = std::getenv("SOTC_PORTABLE_SHADERS");
+    if ((v && v[0] == '0') || driver != vk::DriverId::eNvidiaProprietary) {
+        return;
+    }
+    p.max_viewport_width = std::min(p.max_viewport_width, 32768u);
+    p.max_viewport_height = std::min(p.max_viewport_height, 32768u);
+    p.max_shared_memory_size = std::min(p.max_shared_memory_size, 49152u);
+    p.support_float16 = false;
+    p.support_fp16_denorm_flush = false;
+    p.support_fp16_round_to_zero = false;
+    p.support_fp32_denorm_preserve = false;
+    p.support_fp32_denorm_flush = false;
+    p.support_fp64_denorm_preserve = false;
+    p.support_fp64_denorm_flush = false;
+    p.supports_buffer_fp32_atomic_min_max = false;
+    p.supports_image_fp32_atomic_min_max = false;
+    p.supports_fragment_shader_barycentric = false;
+    p.needs_manual_interpolation = false;
+    p.supports_shader_stencil_export = false;
+    LOG_INFO(Render_Vulkan, "sotc: portable NVIDIA shader profile (SOTC_PORTABLE_SHADERS=0 turns "
+                            "it off)");
+}
+
 // sotc: SOTC_ASYNC_SHADERS=0 builds every graphics pipeline on the command processor, as
 // before (draws are never skipped for a pipeline being built).
 static bool AsyncShadersEnabled() {
@@ -367,12 +396,10 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
         .needs_clip_distance_emulation = instance.GetDriverID() == vk::DriverId::eNvidiaProprietary,
         .supports_shader_stencil_export = instance_.IsShaderStencilExportSupported(),
     };
+    ApplyPortableProfile(profile, instance.GetDriverID());
     WarmUp();
-
-    auto [cache_result, cache] = instance.GetDevice().createPipelineCacheUnique({});
-    ASSERT_MSG(cache_result == vk::Result::eSuccess, "Failed to create pipeline cache: {}",
-               vk::to_string(cache_result));
-    pipeline_cache = std::move(cache);
+    LoadDriverCache(); // sotc: when the warm-up did not (no or a fresh shader cache)
+    driver_cache_saver = std::jthread([this](std::stop_token token) { DriverCacheSaver(token); });
 
     // sotc: pipeline workers for SOTC_ASYNC_SHADERS (see AsyncPipelineJob).
     if (AsyncShadersEnabled()) {
@@ -384,6 +411,26 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
 }
 
 PipelineCache::~PipelineCache() = default;
+
+// sotc: pipelines built during the game are added to the stored driver cache at most once a
+// minute, off the GPU threads.
+void PipelineCache::DriverCacheSaver(std::stop_token token) {
+    Common::SetCurrentThreadName("shadPS4:PipelineCacheSaver");
+    std::mutex mutex;
+    std::condition_variable_any cv;
+    while (!token.stop_requested()) {
+        {
+            std::unique_lock lock{mutex};
+            cv.wait_for(lock, token, std::chrono::seconds(60), [] { return false; });
+        }
+        if (token.stop_requested()) {
+            return;
+        }
+        if (new_since_driver_save.exchange(0) != 0) {
+            SaveDriverCache();
+        }
+    }
+}
 
 bool PipelineCache::AsyncPipelineEligible() const {
     // Off the command processor the guest registers belong to later draws: only pipelines whose
@@ -462,6 +509,7 @@ void PipelineCache::CollectAsyncPipelines() {
         it.value() = std::move(job->pipeline);
         RegisterPipelineData(job->key, job->hash, job->sdata);
         ++num_new_pipelines;
+        new_since_driver_save.fetch_add(1, std::memory_order_relaxed);
     }
 }
 
@@ -509,6 +557,7 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
 
         RegisterPipelineData(graphics_key, pipeline_hash, sdata);
         ++num_new_pipelines;
+        new_since_driver_save.fetch_add(1, std::memory_order_relaxed);
 
         if (EmulatorSettings.IsShaderCollect()) {
             for (auto stage = 0; stage < MaxShaderStages; ++stage) {
@@ -541,6 +590,7 @@ const ComputePipeline* PipelineCache::GetComputePipeline() {
                                                        modules[0], sdata, false);
         RegisterPipelineData(compute_key, sdata);
         ++num_new_pipelines;
+        new_since_driver_save.fetch_add(1, std::memory_order_relaxed);
 
         if (EmulatorSettings.IsShaderCollect()) {
             auto& m = modules[0];

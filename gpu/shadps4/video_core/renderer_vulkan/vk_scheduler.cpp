@@ -28,6 +28,19 @@ Scheduler::Scheduler(const Instance& instance, bool record_thread)
 #if TRACY_GPU_ENABLED
     profiler_scope = reinterpret_cast<tracy::VkCtxScope*>(std::malloc(sizeof(tracy::VkCtxScope)));
 #endif
+    if (SotcStats::kFpsLog &&
+        instance.GetPhysicalDevice().getProperties().limits.timestampComputeAndGraphics) {
+        auto [result, pool] = instance.GetDevice().createQueryPoolUnique({
+            .queryType = vk::QueryType::eTimestamp,
+            .queryCount = GpuTimeSlots * 2,
+        });
+        if (result == vk::Result::eSuccess) {
+            gpu_time_pool = std::move(pool);
+            gpu_time_period_ns =
+                instance.GetPhysicalDevice().getProperties().limits.timestampPeriod;
+            instance.GetDevice().resetQueryPool(*gpu_time_pool, 0, GpuTimeSlots * 2);
+        }
+    }
     BeginSession();
     priority_pending_ops_thread =
         std::jthread(std::bind_front(&Scheduler::PriorityPendingOpsThread, this));
@@ -337,6 +350,9 @@ void Scheduler::BeginSession() {
 
     // Invalidate dynamic state so it gets applied to the new command buffer.
     dynamic_state.Invalidate();
+    if (sessions.size() == 1) {
+        GpuTimeBegin();
+    }
 
 #if TRACY_GPU_ENABLED
     auto* profiler_ctx = instance.GetProfilerContext();
@@ -431,6 +447,10 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
                                     static_cast<u32>(signal_value));
     }
 
+    if (gpu_time_open && !sessions.empty()) {
+        EndRendering();
+        GpuTimeEnd(signal_value);
+    }
     EndSession();
 
     boost::container::small_vector<vk::CommandBuffer, 8> cmd_buffers;
@@ -463,10 +483,58 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
     }
 
     work_semaphore.Refresh();
+    GpuTimeCollect();
     BeginSession();
 
     // Apply pending operations
     PopPendingOperations();
+}
+
+// sotc: the GPU's busy time, from a timestamp at the start and the end of every submit. The
+// queue runs the submits one after the other, so their sum is the time the GPU worked.
+void Scheduler::GpuTimeBegin() {
+    if (!gpu_time_pool) {
+        return;
+    }
+    if (gpu_time_next - gpu_time_read >= GpuTimeSlots) {
+        ++gpu_time_read; // the oldest pair is about to be reused: drop it unread
+    }
+    const u32 slot = static_cast<u32>(gpu_time_next % GpuTimeSlots);
+    const auto cmdbuf = sessions.back().primary;
+    cmdbuf.resetQueryPool(*gpu_time_pool, slot * 2, 2);
+    cmdbuf.writeTimestamp(vk::PipelineStageFlagBits::eTopOfPipe, *gpu_time_pool, slot * 2);
+    gpu_time_open = true;
+}
+
+void Scheduler::GpuTimeEnd(u64 signal_value) {
+    const u32 slot = static_cast<u32>(gpu_time_next % GpuTimeSlots);
+    sessions.back().primary.writeTimestamp(vk::PipelineStageFlagBits::eBottomOfPipe,
+                                           *gpu_time_pool, slot * 2 + 1);
+    gpu_time_tick[slot] = signal_value;
+    ++gpu_time_next;
+    gpu_time_open = false;
+}
+
+void Scheduler::GpuTimeCollect() {
+    if (!gpu_time_pool) {
+        return;
+    }
+    while (gpu_time_read < gpu_time_next) {
+        const u32 slot = static_cast<u32>(gpu_time_read % GpuTimeSlots);
+        if (!work_semaphore.IsFree(gpu_time_tick[slot])) {
+            break;
+        }
+        std::array<u64, 2> stamps{};
+        const auto result = instance.GetDevice().getQueryPoolResults(
+            *gpu_time_pool, slot * 2, 2, sizeof(stamps), stamps.data(), sizeof(u64),
+            vk::QueryResultFlagBits::e64);
+        if (result == vk::Result::eSuccess && stamps[1] > stamps[0]) {
+            SotcStats::gpu_busy_ns.fetch_add(
+                static_cast<u64>((stamps[1] - stamps[0]) * gpu_time_period_ns),
+                std::memory_order_relaxed);
+        }
+        ++gpu_time_read;
+    }
 }
 
 void Scheduler::PriorityPendingOpsThread(std::stop_token stoken) {

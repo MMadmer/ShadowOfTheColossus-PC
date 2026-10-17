@@ -524,6 +524,17 @@ private:
     u64 ahead_sequence{};
     bool ahead_unfinished{};
     tracy::VkCtxScope* profiler_scope{};
+    /// sotc: GPU time per submit (SOTC_FPS): a timestamp pair per submit in a ring of slots.
+    static constexpr u32 GpuTimeSlots = 1024;
+    vk::UniqueQueryPool gpu_time_pool;
+    double gpu_time_period_ns{};
+    std::array<u64, GpuTimeSlots> gpu_time_tick{};
+    u64 gpu_time_next{};
+    u64 gpu_time_read{};
+    bool gpu_time_open{};
+    void GpuTimeBegin();
+    void GpuTimeEnd(u64 signal_value);
+    void GpuTimeCollect();
     /// Newest tick the recording thread has put on the queue.
     std::atomic<u64> recorded_submit_tick{0};
     /// Last member: stops (after running everything queued) before the rest is destroyed.

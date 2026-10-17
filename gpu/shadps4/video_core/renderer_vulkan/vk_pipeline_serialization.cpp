@@ -2,11 +2,16 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "sotc_progress.h"
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstring>
+#include <optional>
+#include <thread>
 #include <mutex>
 #include <unordered_set>
 #include "common/serdes.h"
+#include "common/thread.h"
 #include "core/emulator_settings.h"
 #include "shader_recompiler/frontend/fetch_shader.h"
 #include "shader_recompiler/info.h"
@@ -143,7 +148,10 @@ void RegisterShaderBinary(std::vector<u32>&& spv, u64 pgm_hash, size_t perm_idx)
     }
 
     const auto name = fmt::format("{:#018x}_{}", pgm_hash, perm_idx);
-    if (!EmulatorSettings.IsPipelineCacheArchived()) {
+    // sotc: only a name already on disk needs the comparison (an in-memory index answers that;
+    // the disk lookup of every new shader cost ~1 ms each, 220 ms in some 5 s windows).
+    if (!EmulatorSettings.IsPipelineCacheArchived() &&
+        Storage::DataBase::Instance().Exists(Storage::BlobType::ShaderBinary, name)) {
         std::vector<u32> stored;
         Storage::DataBase::Instance().Load(Storage::BlobType::ShaderBinary, name, stored);
         if (!stored.empty() && stored != spv) {
@@ -232,6 +240,36 @@ bool PipelineCache::LoadComputePipeline(Serialization::Archive& ar) {
     const auto [it, is_new] = compute_pipelines.try_emplace(compute_key);
     ASSERT(is_new);
 
+    if (preload_jobs) {
+        // sotc: built on a warm-up worker (see WarmUp).
+        struct State {
+            ComputePipelineKey key;
+            const Shader::Info* info;
+            vk::ShaderModule module;
+            ComputePipeline::SerializationSupport sdata;
+            std::unique_ptr<ComputePipeline> pipeline;
+        };
+        auto state = std::make_shared<State>(State{compute_key, infos[0], modules[0], sdata, {}});
+        preload_jobs->push_back({
+            [this, state] {
+                state->pipeline = std::make_unique<ComputePipeline>(
+                    instance, scheduler, desc_heap, profile, *pipeline_cache, state->key,
+                    *state->info, state->module, state->sdata, true);
+            },
+            [this, state] {
+                if (!state->pipeline || !state->pipeline->Handle()) {
+                    compute_pipelines.erase(state->key);
+                    return false;
+                }
+                compute_pipelines[state->key] = std::move(state->pipeline);
+                return true;
+            },
+        });
+        infos.fill(nullptr);
+        modules.fill(nullptr);
+        return true;
+    }
+
     {
         WarmUpTimer timer{warmup_times.pipelines};
         it.value() = std::make_unique<ComputePipeline>(instance, scheduler, desc_heap, profile,
@@ -318,6 +356,46 @@ bool PipelineCache::LoadGraphicsPipeline(Serialization::Archive& ar) {
 
     const auto [it, is_new] = graphics_pipelines.try_emplace(graphics_key);
     ASSERT(is_new);
+
+    if (preload_jobs) {
+        // sotc: built on a warm-up worker (see WarmUp). Copies: the fetch shader data lives in a
+        // module list that later loads can grow.
+        struct State {
+            GraphicsPipelineKey key;
+            std::array<const Shader::Info*, MaxShaderStages> infos;
+            std::array<Shader::RuntimeInfo, MaxShaderStages> runtime_infos;
+            std::optional<Shader::Gcn::FetchShaderData> fetch;
+            std::array<vk::ShaderModule, MaxShaderStages> modules;
+            GraphicsPipeline::SerializationSupport sdata;
+            std::unique_ptr<GraphicsPipeline> pipeline;
+        };
+        std::optional<Shader::Gcn::FetchShaderData> fetch;
+        if (fetch_shader) {
+            fetch = *fetch_shader;
+        }
+        auto state = std::make_shared<State>(
+            State{graphics_key, infos, runtime_infos, std::move(fetch), modules, sdata, {}});
+        preload_jobs->push_back({
+            [this, state] {
+                state->pipeline = std::make_unique<GraphicsPipeline>(
+                    instance, scheduler, desc_heap, profile, state->key, *pipeline_cache,
+                    state->infos, state->runtime_infos, state->fetch ? &*state->fetch : nullptr,
+                    state->modules, state->sdata, true);
+            },
+            [this, state] {
+                if (!state->pipeline || !state->pipeline->Handle()) {
+                    graphics_pipelines.erase(state->key);
+                    return false;
+                }
+                graphics_pipelines[state->key] = std::move(state->pipeline);
+                return true;
+            },
+        });
+        infos.fill(nullptr);
+        modules.fill(nullptr);
+        fetch_shader = nullptr;
+        return true;
+    }
 
     {
         WarmUpTimer timer{warmup_times.pipelines};
@@ -449,18 +527,40 @@ void PipelineCache::WarmUp() {
         return;
     }
 
+    LoadDriverCache();
+
+    // sotc: SOTC_PROGRESS_DEMO=<seconds> shows the loading screen with a simulated build (to
+    // check how it looks when the real one is too fast to see).
+    if (const char* demo = std::getenv("SOTC_PROGRESS_DEMO")) {
+        const int seconds = std::max(1, std::atoi(demo));
+        SotcProgress::Begin(100, SotcProgress::Stage::Reading);
+        for (u32 i = 0; i <= 100; ++i) {
+            SotcProgress::Update(i);
+            std::this_thread::sleep_for(std::chrono::milliseconds(seconds * 2));
+        }
+        SotcProgress::Begin(3000, SotcProgress::Stage::Building);
+        for (u32 i = 0; i <= 3000; i += 10) {
+            SotcProgress::Update(i);
+            std::this_thread::sleep_for(std::chrono::milliseconds(seconds * 1000 / 300));
+        }
+        SotcProgress::End();
+    }
+
     u32 num_pipelines{};
     u32 num_total_pipelines{};
     const auto warmup_start = std::chrono::steady_clock::now();
-    // sotc: a window with a progress bar while the cached pipelines are built.
-    SotcProgress::Begin(static_cast<u32>(
-        Storage::DataBase::Instance().CountBlobs(Storage::BlobType::PipelineKey)));
+    const u32 num_keys =
+        static_cast<u32>(Storage::DataBase::Instance().CountBlobs(Storage::BlobType::PipelineKey));
+    // sotc: a loading screen with a progress bar while the cached pipelines are built: first the
+    // cache entries are read (fast), then the driver builds every pipeline on all CPU cores.
+    SotcProgress::Begin(num_keys, SotcProgress::Stage::Reading);
 
+    std::vector<PreloadJob> jobs;
+    jobs.reserve(num_keys);
+    preload_jobs = &jobs;
     Storage::DataBase::Instance().ForEachBlob(
         Storage::BlobType::PipelineKey, [&](std::vector<u8>&& data) {
             ++num_total_pipelines;
-
-            bool result{};
             try {
                 Serialization::Archive ar{std::move(data)};
                 Serialization::Reader pldata{ar};
@@ -474,36 +574,120 @@ void PipelineCache::WarmUp() {
                 u32 is_compute{};
                 pldata.Read(is_compute);
                 if (is_compute) {
-                    result = LoadComputePipeline(ar);
+                    LoadComputePipeline(ar);
                 } else {
-                    result = LoadGraphicsPipeline(ar);
+                    LoadGraphicsPipeline(ar);
                 }
             } catch (const Serialization::CorruptedData&) {
                 // A truncated entry (e.g. from a killed session) is just skipped.
                 infos.fill(nullptr);
                 modules.fill(nullptr);
                 fetch_shader = nullptr;
-                result = false;
-            }
-
-            if (result) {
-                ++num_pipelines;
             }
             SotcProgress::Update(num_total_pipelines);
         });
+    preload_jobs = nullptr;
+    const auto read_end = std::chrono::steady_clock::now();
+
+    // The driver compiles one pipeline at a time per thread: every core builds its share.
+    SotcProgress::Begin(static_cast<u32>(jobs.size()), SotcProgress::Stage::Building);
+    {
+        const u32 hw = std::max(1u, std::thread::hardware_concurrency());
+        u32 num_workers = std::clamp<u32>(hw, 1u, 32u);
+        if (const char* v = std::getenv("SOTC_PRELOAD_THREADS")) {
+            num_workers = std::clamp<u32>(static_cast<u32>(std::atoi(v)), 1u, 32u);
+        }
+        std::atomic<size_t> next{0};
+        std::atomic<u32> done{0};
+        std::vector<std::jthread> workers;
+        for (u32 w = 0; w < num_workers; ++w) {
+            workers.emplace_back([&] {
+                Common::SetCurrentThreadName("shadPS4:PipelinePreload");
+                for (size_t i; (i = next.fetch_add(1)) < jobs.size();) {
+                    jobs[i].build();
+                    SotcProgress::Update(done.fetch_add(1) + 1);
+                }
+            });
+        }
+    }
+    for (auto& job : jobs) {
+        num_pipelines += job.install() ? 1 : 0;
+    }
     SotcProgress::End();
+    last_graphics_pipeline = nullptr;
 
     LOG_WARNING(Render,
-             "Preloaded {} pipelines in {} ms (SPIR-V reads {} ms, shader modules {} ms, "
-             "pipeline creation {} ms)",
-             num_pipelines, Ms(std::chrono::steady_clock::now() - warmup_start),
-             Ms(warmup_times.load), Ms(warmup_times.modules), Ms(warmup_times.pipelines));
+                "Preloaded {} pipelines in {} ms (cache read {} ms, SPIR-V reads {} ms, shader "
+                "modules {} ms, pipeline builds {} ms on {} threads)",
+                num_pipelines, Ms(std::chrono::steady_clock::now() - warmup_start),
+                Ms(read_end - warmup_start), Ms(warmup_times.load), Ms(warmup_times.modules),
+                Ms(std::chrono::steady_clock::now() - read_end),
+                std::max(1u, std::thread::hardware_concurrency()));
     if (num_total_pipelines > num_pipelines) {
         LOG_WARNING(Render, "{} stale pipelines were found. Consider re-generating the cache",
                     num_total_pipelines - num_pipelines);
     }
 
     Storage::DataBase::Instance().FinishPreload();
+    // sotc: what the driver compiled is kept (vkGetPipelineCacheData), so the next start builds
+    // the same pipelines from it in a fraction of the time.
+    if (!jobs.empty()) {
+        SaveDriverCache();
+    }
+}
+
+// sotc: the driver's own pipeline cache (VkPipelineCache data) is stored with the shader cache.
+// NVIDIA's disk cache is limited in size and shared with every other game; this one is not.
+void PipelineCache::LoadDriverCache() {
+    if (pipeline_cache) {
+        return;
+    }
+    std::vector<u8> data;
+    const char* use = std::getenv("SOTC_DRIVER_CACHE");
+    if (Storage::DataBase::Instance().IsOpened() && !(use && use[0] == '0')) {
+        Storage::DataBase::Instance().Load(Storage::BlobType::DriverCache, "driver", data);
+    }
+    // The header (vendor, device, cache UUID) must match this GPU and driver, else start empty.
+    const auto& props = instance.GetPhysicalDevice().getProperties();
+    if (data.size() >= 16 + VK_UUID_SIZE) {
+        u32 vendor{}, device{};
+        std::memcpy(&vendor, data.data() + 8, 4);
+        std::memcpy(&device, data.data() + 12, 4);
+        if (vendor != props.vendorID || device != props.deviceID ||
+            std::memcmp(data.data() + 16, props.pipelineCacheUUID.data(), VK_UUID_SIZE) != 0) {
+            LOG_INFO(Render_Vulkan, "sotc: driver pipeline cache is from another GPU or driver");
+            data.clear();
+        }
+    } else {
+        data.clear();
+    }
+    const vk::PipelineCacheCreateInfo cache_info = {
+        .initialDataSize = data.size(),
+        .pInitialData = data.empty() ? nullptr : data.data(),
+    };
+    auto created = instance.GetDevice().createPipelineCacheUnique(cache_info);
+    if (created.result != vk::Result::eSuccess && !data.empty()) {
+        data.clear();
+        created = instance.GetDevice().createPipelineCacheUnique({});
+    }
+    ASSERT_MSG(created.result == vk::Result::eSuccess, "Failed to create pipeline cache: {}",
+               vk::to_string(created.result));
+    pipeline_cache = std::move(created.value);
+    driver_cache_saved_size = data.size();
+    LOG_INFO(Render_Vulkan, "sotc: driver pipeline cache {} MB", data.size() >> 20);
+}
+
+void PipelineCache::SaveDriverCache() {
+    if (!pipeline_cache || !Storage::DataBase::Instance().IsOpened()) {
+        return;
+    }
+    auto [result, data] = instance.GetDevice().getPipelineCacheData(*pipeline_cache);
+    if (result != vk::Result::eSuccess || data.size() <= driver_cache_saved_size) {
+        return;
+    }
+    driver_cache_saved_size = data.size();
+    std::vector<u8> bytes(data.begin(), data.end());
+    Storage::DataBase::Instance().Save(Storage::BlobType::DriverCache, "driver", std::move(bytes));
 }
 
 void PipelineCache::Sync() {

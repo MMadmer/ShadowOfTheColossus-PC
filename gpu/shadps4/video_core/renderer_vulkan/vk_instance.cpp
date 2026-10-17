@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <array>
 #include <cstdlib>
 #include <boost/container/static_vector.hpp>
 #include <fmt/format.h>
@@ -732,6 +733,20 @@ void Instance::CreateAllocator() {
             SotcStats::sys_vk_frees.fetch_add(1, std::memory_order_relaxed);
         },
     };
+    // sotc: SOTC_VRAM_LIMIT_MB caps the device-local heaps for VMA (its budget follows).
+    std::array<VkDeviceSize, VK_MAX_MEMORY_HEAPS> heap_limits;
+    heap_limits.fill(VK_WHOLE_SIZE);
+    const u64 vram_limit = EmulatedVramLimit();
+    if (vram_limit) {
+        for (u32 i = 0; i < memory_properties.memoryHeapCount; ++i) {
+            if (memory_properties.memoryHeaps[i].flags & vk::MemoryHeapFlagBits::eDeviceLocal) {
+                // The driver budget of a real card is ~80% of its heap; past it, allocations of
+                // VMA move to system memory as on a real card under pressure.
+                heap_limits[i] = vram_limit * 8 / 10;
+            }
+        }
+        LOG_WARNING(Render_Vulkan, "sotc: emulating {} MB of video memory", vram_limit >> 20);
+    }
     const VmaAllocatorCreateInfo allocator_info = {
         // The driver's budget counts the buffer arena memory allocated outside VMA, so images
         // stop filling the VRAM the arena still needs and spill to system memory instead
@@ -742,6 +757,7 @@ void Instance::CreateAllocator() {
         .device = *device,
         .preferredLargeHeapBlockSize = block_size,
         .pDeviceMemoryCallbacks = SotcStats::kCmdStats ? &memory_callbacks : nullptr,
+        .pHeapSizeLimit = vram_limit ? heap_limits.data() : nullptr,
         .pVulkanFunctions = &functions,
         .instance = *instance,
         .vulkanApiVersion = TargetVulkanApiVersion,
@@ -808,6 +824,10 @@ void Instance::CollectPhysicalMemoryInfo() {
         }
         // If memory budget is not supported, use the size of the heap as the budget.
         total_memory_budget += memory_props.memoryHeaps[i].size;
+    }
+    if (const u64 limit = EmulatedVramLimit(); limit && !IsIntegrated()) {
+        // sotc: a real card of that size gives about 80% of its heap as the budget (2 GB: 1.63 GB).
+        total_memory_budget = std::min<u64>(total_memory_budget, limit * 8 / 10);
     }
     if (!IsIntegrated()) {
         // We reserve some memory for the system.
@@ -877,6 +897,19 @@ void Instance::CollectToolingInfo() const {
         LOG_INFO(Render_Vulkan, "Attached debugging tool: {}", name);
         object_names_enabled = true;
     }
+}
+
+u64 Instance::EmulatedVramLimit() {
+    static const u64 limit = [] {
+        const char* v = std::getenv("SOTC_VRAM_LIMIT_MB");
+        return v ? static_cast<u64>(std::strtoull(v, nullptr, 10)) << 20 : u64{0};
+    }();
+    return limit;
+}
+
+bool Instance::EmulatedVramAllows(u64 bytes) const {
+    const u64 limit = EmulatedVramLimit();
+    return !limit || GetDeviceMemoryUsage() + bytes <= limit;
 }
 
 u64 Instance::GetDeviceMemoryUsage() const {
