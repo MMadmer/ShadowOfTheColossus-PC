@@ -1,4 +1,4 @@
-# Shadow of the Colossus — PC (port nativo / native port) · v1.0.0 · MMadmer fork
+# Shadow of the Colossus — PC (port nativo / native port) · v1.0.1 · MMadmer fork
 
 **[Português](#português)** · **[English](#english)** · [Releases](../../releases) · [Changelog](CHANGELOG.md)
 
@@ -38,6 +38,7 @@ de que o jogo precisa, no estilo do [bloodborne_pc](https://github.com/Supermedo
 
 | Versão | Melhorias e correções |
 |---|---|
+| **1.0.1** | **Todos os efeitos sonoros com a biblioteca de som do port** (o lançador não ativa mais sozinho os módulos de som de um shadPS4 instalado), modo da janela (janela, tela cheia em janela, tela cheia exclusiva), lançador em inglês, russo, chinês, japonês e português, libSceAudio3d e UserFx do NGS2. |
 | **1.0.0** | **Primeiro release do fork:** **controle Xbox completo** (ícones do Xbox, ou das teclas e do mouse, nítidos e desenhados por shader, também no esquema de Controles, troca na hora ao conectar ou usar outro dispositivo, vibração igual à do PS4), instalador e zip, compilação com um comando (`build.cmd`), som com a biblioteca própria do port, tudo da 0.57-opt6 e 0.57-opt7. |
 | **0.57-opt7** | **Menos CPU por quadro para i5/GTX 1050:** o processador de comandos não gira mais esperando (−20% do tempo dele no santuário), o thread de desenho reaproveita os render targets e não repete push descriptors iguais, o mixer de som gasta menos no reverb; o launcher escolhe 810p numa GTX 1050 e 900p numa 1050 Ti. |
 | **0.57-opt6** | **PCs de 4 núcleos e placas fracas:** os workers do jogo não tomam mais os núcleos do render (7 → 3,5 núcleos ocupados no santuário), barycentrics via geometry shader passthrough (GTX 10: −14% de GPU), resolução de render 900/810/720p, shaders compilados uma vez a partir de um pacote, o launcher desempacota dumps .pkg (jogo, atualização e todas as DLC). |
@@ -139,6 +140,7 @@ game needs, in the style of [bloodborne_pc](https://github.com/Supermedo/bloodbo
 
 | Version | Improvements and fixes |
 |---|---|
+| **1.0.1** | **Every sound effect through the port's own sound library** (the launcher no longer enables an installed shadPS4's sound modules on its own), window mode (windowed, borderless fullscreen, exclusive fullscreen), launcher in English, Russian, Chinese, Japanese and Portuguese, libSceAudio3d and NGS2 UserFx. |
 | **1.0.0** | **First release of the fork:** **full Xbox controller support** (sharp shader-drawn Xbox, or key and mouse, button icons, the Controls diagram included, switching as soon as another device is connected or used, PS4-accurate rumble), installer and zip, one-command build (`build.cmd`), sound through the port's own library, everything from 0.57-opt6 and 0.57-opt7. |
 | **0.57-opt7** | **Less CPU per frame for i5/GTX 1050:** the command processor no longer spins while it waits (−20% of its time at the shrine), the draw thread keeps its render targets and drops repeated push descriptors, the sound mixer spends less on reverb; the launcher picks 810p on a GTX 1050 and 900p on a 1050 Ti. |
 | **0.57-opt6** | **4-core PCs and weak cards:** the game's workers no longer take the render cores (7 → 3.5 cores busy at the shrine), barycentrics through a passthrough geometry shader (GTX 10: −14% GPU), 900/810/720p render resolution, shaders built once from a pack, the launcher unpacks .pkg dumps (game, update and every DLC). |

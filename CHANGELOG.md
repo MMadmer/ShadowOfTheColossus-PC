@@ -1,6 +1,6 @@
 # Changelog
 
-## Próxima versão (fork MMadmer)
+## 1.0.1 — 2026-10-18 (fork MMadmer)
 - **Som do port por padrão:** o lançador não copia mais sozinho os módulos de som de um shadPS4
   instalado (`user/sys_modules`) nem os ativa: a biblioteca de som própria do port toca todos os
   sons. Com os módulos copiados automaticamente foi relatada a falta da maior parte dos efeitos
