@@ -33,12 +33,13 @@ $OwnMsys = [bool]$env:MSYS2_ROOT
 $Msys = if ($OwnMsys) { $env:MSYS2_ROOT } else { Join-Path $Deps 'msys64' }
 $Bash = Join-Path $Msys 'usr\bin\bash.exe'
 
-function InMsys([string]$command) {
+# -MayExit: the command may end its own shell (a non-zero exit code).
+function InMsys([string]$command, [switch]$MayExit) {
     $env:MSYSTEM = 'CLANG64'
     $env:CHERE_INVOKING = '1'
     $env:MSYS2_PATH_TYPE = 'minimal'
     & $Bash -lc $command
-    if ($LASTEXITCODE) { throw "failed in MSYS2: $command" }
+    if ($LASTEXITCODE -and -not $MayExit) { throw "failed in MSYS2: $command" }
 }
 
 if (-not (Test-Path $Bash)) {
@@ -55,8 +56,9 @@ $stamp = Join-Path $Msys '.sotc-packages-2'
 if (-not (Test-Path $stamp)) {
     Step 'Installing the toolchain and libraries (once, ~1.5 GB)'
     if (-not $OwnMsys) {
-        # A new MSYS2 updates its core first; the second pass updates the rest.
-        InMsys 'pacman -Syu --noconfirm --noprogressbar || true'
+        # A new MSYS2 updates its core first and closes its own shell doing so; the second pass
+        # updates the rest.
+        InMsys 'pacman -Syu --noconfirm --noprogressbar' -MayExit
         InMsys 'pacman -Syu --noconfirm --noprogressbar'
     }
     InMsys ('pacman -S --needed --noconfirm --noprogressbar git patch unzip ' +
