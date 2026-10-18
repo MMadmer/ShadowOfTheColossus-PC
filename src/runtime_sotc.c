@@ -187,7 +187,7 @@ static ABI int32_t net_unavailable(void) { return (int32_t)0x80410101; }
 
 /* --- Sound: libSceNgs2 is the port's own (gpu/shim/ngs2/ngs2_hle.cpp; SOTC_NGS2_HLE=0 renders
  * silence). With the user's own firmware modules linked, their native code is used instead
- * (probe.c prefer_native). libSceAudio3d accepts objects and paces the audio thread. --- */
+ * (probe.c prefer_native). libSceAudio3d is in runtime_audio.c. --- */
 ABI int32_t sotc_ngs2_system_create(const void *option, const void *allocator, uintptr_t *out);
 ABI int32_t sotc_ngs2_system_destroy(uintptr_t system, void *out_info);
 ABI int32_t sotc_ngs2_system_render(uintptr_t system, const void *buffers, uint32_t count);
@@ -198,38 +198,6 @@ ABI int32_t sotc_ngs2_rack_get_voice_handle(uintptr_t rack, uint32_t index, uint
 ABI int32_t sotc_ngs2_voice_control(uintptr_t voice, const void *params);
 ABI int32_t sotc_ngs2_voice_get_state(uintptr_t voice, void *state, uint64_t size);
 ABI int32_t sotc_ngs2_voice_get_state_flags(uintptr_t voice, uint32_t *flags);
-static ABI int32_t audio3d_port_open(int32_t user, const void *params, uint32_t *port) {
-    (void)user; (void)params;
-    if (!port) return (int32_t)0x80ec0004;
-    *port=1;
-    puts("Runtime: Audio3d port opened (silent audio)");
-    return 0;
-}
-static ABI int32_t audio3d_object_reserve(uint32_t port, uint32_t *object) {
-    static _Atomic uint32_t next=1;
-    (void)port;
-    if (!object) return (int32_t)0x80ec0004;
-    *object=next++;
-    return 0;
-}
-static ABI int32_t audio3d_port_push(uint32_t port, int blocking) {
-    (void)port;
-    if (blocking) { /* one 256-sample grain at 48 kHz */
-#ifdef _WIN32
-        Sleep(5);
-#else
-        usleep(5333);
-#endif
-    }
-    return 0;
-}
-static ABI int32_t audio3d_queue_level(uint32_t port, uint32_t *level, uint32_t *available) {
-    (void)port;
-    if (level) *level=0;
-    if (available) *available=4;
-    return 0;
-}
-
 /* --- POSIX scheduling: FreeBSD policies, PS4 FIFO priorities 256..767 --- */
 enum { SCHED_FIFO_=1, SCHED_OTHER_=2, SCHED_RR_=3 };
 static ABI int32_t sched_priority_max(int policy) { return policy==SCHED_FIFO_ || policy==SCHED_RR_ ? 767 : E_INVAL; }
@@ -438,12 +406,6 @@ static const RuntimeExport exports[]={
     {"sceNgs2RackDestroy",sotc_ngs2_rack_destroy}, {"sceNgs2RackGetVoiceHandle",sotc_ngs2_rack_get_voice_handle},
     {"sceNgs2VoiceControl",sotc_ngs2_voice_control}, {"sceNgs2VoiceGetState",sotc_ngs2_voice_get_state},
     {"sceNgs2VoiceGetStateFlags",sotc_ngs2_voice_get_state_flags},
-    {"sceAudio3dInitialize",ok_args}, {"sceAudio3dTerminate",ok_ignored},
-    {"sceAudio3dPortOpen",audio3d_port_open}, {"sceAudio3dPortClose",ok_args},
-    {"sceAudio3dObjectReserve",audio3d_object_reserve}, {"sceAudio3dObjectUnreserve",ok_args},
-    {"sceAudio3dObjectSetAttributes",ok_args}, {"sceAudio3dPortSetAttribute",ok_args},
-    {"sceAudio3dPortAdvance",ok_args}, {"sceAudio3dPortPush",audio3d_port_push},
-    {"sceAudio3dPortGetQueueLevel",audio3d_queue_level},
     {"sceKernelConvertUtcToLocaltime",utc_to_local}, {"sceKernelConvertLocaltimeToUtc",local_to_utc},
     {"sched_get_priority_max",sched_priority_max}, {"sched_get_priority_min",sched_priority_min},
     {"pthread_getschedparam",get_sched_param}, {"pthread_setschedparam",set_sched_param},

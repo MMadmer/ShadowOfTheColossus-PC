@@ -5,7 +5,9 @@
  * play stale halves - a click every 10.7 ms. The lowest SDL queue level of
  * each window is steered to two buffers (silence prefill on underrun, ±3%
  * cadence corrections), which also absorbs device clock drift. Without an audio device (headless runs, BB_AUDIO=none)
- * ports only follow the clock. */
+ * ports only follow the clock. Every port type plays on the PC's default output device: the
+ * pad speaker, headset (voice/personal) and aux ports as well, so sounds the PS4 sends to the
+ * DualShock's speaker are heard without one. */
 #define _GNU_SOURCE
 #include "runtime.h"
 #include <stdio.h>
@@ -13,6 +15,7 @@
 #include <string.h>
 #include <pthread.h>
 #include <time.h>
+#include <math.h>
 #include <SDL3/SDL.h>
 
 #define PORTS 25
@@ -266,11 +269,204 @@ static ABI int32_t audio_last_time(int32_t handle, uint64_t *time) {
     *time=p->last_output_us; return 0;
 }
 
+/* --- libSceAudio3d. Shadow of the Colossus' sound engine (sndx) plays its positional voices as
+ * Audio3d objects: during each NGS2 render their UserFx sets the grain's mono PCM with the
+ * position, gain and spread (sceAudio3dObjectSetAttributes), then PortAdvance closes the grain and
+ * a thread of the game pushes it. An advance pans the objects to stereo here (by the azimuth of
+ * their position, +x right of the listener, narrowed by their spread; the game's gain already
+ * holds the distance) into a small queue; a push plays it on the port's own SDL stream, next to
+ * the AudioOut ports on the same device. --- */
+#define A3D_OBJECTS 1024
+#define A3D_MAX_GRAIN 1024
+#define A3D_QUEUE 8
+#define A3D_ERR_OUT_OF_RESOURCES ((int32_t)0x80EA0004)
+#define A3D_ERR_INVALID_PORT ((int32_t)0x80EA0005)
+#define A3D_ERR_INVALID_OBJECT ((int32_t)0x80EA0006)
+#define A3D_ERR_INVALID_PARAMETER ((int32_t)0x80EA0007)
+enum { A3D_PCM=1, A3D_PRIORITY=2, A3D_POSITION=3, A3D_SPREAD=4, A3D_GAIN=5, A3D_RESET_STATE=7, A3D_AMBISONICS=9 };
+typedef struct { uint32_t id, pad; const void *value; uint64_t size; } A3dAttribute;
+typedef struct { uint32_t format, pad; const void *buffer; uint32_t samples; } A3dPcm; /* format 0 s16, 1 float */
+_Static_assert(sizeof(A3dAttribute)==24 && sizeof(A3dPcm)==24,"Audio3d attribute layout");
+typedef struct {
+    int used, has_pcm, has_position, ambisonics;
+    float gain, spread, position[3];
+    uint32_t frames;
+    float pcm[A3D_MAX_GRAIN];
+} A3dObject;
+static struct {
+    pthread_mutex_t lock;
+    int open;
+    uint32_t grain, depth, head, count;
+    SDL_AudioStream *stream;
+    A3dObject objects[A3D_OBJECTS];
+    float queue[A3D_QUEUE][A3D_MAX_GRAIN*2];
+    size_t grains, objects_heard;
+} a3d={.lock=PTHREAD_MUTEX_INITIALIZER};
+
+static void a3d_reset(A3dObject *o) {
+    o->has_pcm=o->has_position=0; o->ambisonics=-1;
+    o->gain=1.0f; o->spread=0.0f; o->position[0]=o->position[1]=o->position[2]=0.0f;
+}
+static A3dObject *a3d_object(uint32_t port, uint32_t object) {
+    return a3d.open && port==0 && object<A3D_OBJECTS && a3d.objects[object].used ? &a3d.objects[object] : NULL;
+}
+static ABI int32_t a3d_initialize(int64_t reserved) { (void)reserved; return 0; }
+static ABI int32_t a3d_terminate(void) { return 0; }
+/* Open parameters: u64 size, u32 granularity, rate, max objects, queue depth, buffer mode. */
+static ABI int32_t a3d_port_open(int32_t user, const uint32_t *params, uint32_t *port) {
+    (void)user;
+    if (!params || !port) return A3D_ERR_INVALID_PARAMETER;
+    pthread_mutex_lock(&a3d.lock);
+    const uint32_t grain=params[2], depth=params[0]>=24 ? params[5] : 0;
+    a3d.grain=grain>=256 && grain<=A3D_MAX_GRAIN ? grain : 256;
+    a3d.depth=depth>=1 && depth<=A3D_QUEUE ? depth : 2;
+    a3d.head=a3d.count=0;
+    if (!a3d.stream && sdl_audio()) {
+        SDL_AudioSpec spec={SDL_AUDIO_F32,2,48000};
+        a3d.stream=SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK,&spec,NULL,NULL);
+        if (a3d.stream) SDL_ResumeAudioStreamDevice(a3d.stream);
+        else fprintf(stderr,"Runtime: SDL audio stream failed (%s); Audio3d objects are silent\n",SDL_GetError());
+    }
+    a3d.open=1;
+    *port=0;
+    pthread_mutex_unlock(&a3d.lock);
+    printf("Runtime: Audio3d port opened (%u-sample grains, queue %u)\n",a3d.grain,a3d.depth);
+    return 0;
+}
+static ABI int32_t a3d_port_close(uint32_t port) {
+    if (port!=0) return A3D_ERR_INVALID_PORT;
+    pthread_mutex_lock(&a3d.lock);
+    if (a3d.stream) SDL_DestroyAudioStream(a3d.stream);
+    a3d.stream=NULL; a3d.open=0;
+    for (int i=0;i<A3D_OBJECTS;++i) a3d.objects[i].used=0;
+    pthread_mutex_unlock(&a3d.lock);
+    return 0;
+}
+static ABI int32_t a3d_object_reserve(uint32_t port, uint32_t *object) {
+    if (!object) return A3D_ERR_INVALID_PARAMETER;
+    pthread_mutex_lock(&a3d.lock);
+    int32_t r=a3d.open && port==0 ? A3D_ERR_OUT_OF_RESOURCES : A3D_ERR_INVALID_PORT;
+    for (uint32_t i=0;r==A3D_ERR_OUT_OF_RESOURCES && i<A3D_OBJECTS;++i) if (!a3d.objects[i].used) {
+        a3d.objects[i].used=1; a3d_reset(&a3d.objects[i]); *object=i; r=0;
+    }
+    pthread_mutex_unlock(&a3d.lock);
+    return r;
+}
+static ABI int32_t a3d_object_unreserve(uint32_t port, uint32_t object) {
+    pthread_mutex_lock(&a3d.lock);
+    A3dObject *o=a3d_object(port,object);
+    if (o) o->used=0;
+    pthread_mutex_unlock(&a3d.lock);
+    return o ? 0 : A3D_ERR_INVALID_OBJECT;
+}
+static ABI int32_t a3d_object_set_attributes(uint32_t port, uint32_t object, uint64_t count, const A3dAttribute *attributes) {
+    if (count && !attributes) return A3D_ERR_INVALID_PARAMETER;
+    pthread_mutex_lock(&a3d.lock);
+    A3dObject *o=a3d_object(port,object);
+    for (uint64_t i=0;o && i<count;++i) {
+        const A3dAttribute *a=&attributes[i];
+        if (!a->value) continue;
+        switch (a->id) {
+        case A3D_PCM: {
+            if (a->size<sizeof(A3dPcm)) break;
+            const A3dPcm *pcm=a->value;
+            if (!pcm->buffer) break;
+            const uint32_t n=pcm->samples<a3d.grain ? pcm->samples : a3d.grain;
+            if (pcm->format==1) memcpy(o->pcm,pcm->buffer,n*sizeof(float));
+            else for (uint32_t s=0;s<n;++s) o->pcm[s]=((const int16_t *)pcm->buffer)[s]/32768.0f;
+            o->frames=n; o->has_pcm=1;
+            break;
+        }
+        case A3D_POSITION:
+            if (a->size>=12) { memcpy(o->position,a->value,12); o->has_position=1; }
+            break;
+        case A3D_SPREAD: if (a->size>=4) memcpy(&o->spread,a->value,4); break;
+        case A3D_GAIN: if (a->size>=4) memcpy(&o->gain,a->value,4); break;
+        case A3D_AMBISONICS: if (a->size>=4) memcpy(&o->ambisonics,a->value,4); break;
+        case A3D_RESET_STATE: a3d_reset(o); break;
+        default: break;
+        }
+    }
+    pthread_mutex_unlock(&a3d.lock);
+    return o ? 0 : A3D_ERR_INVALID_OBJECT;
+}
+static ABI int32_t a3d_port_set_attribute(uint32_t port, uint32_t id, const void *value, uint64_t size) {
+    (void)id; (void)value; (void)size;
+    return port==0 ? 0 : A3D_ERR_INVALID_PORT;
+}
+/* Closes the grain: every object given PCM since the last advance is panned into it. */
+static ABI int32_t a3d_port_advance(uint32_t port) {
+    if (port!=0) return A3D_ERR_INVALID_PORT;
+    pthread_mutex_lock(&a3d.lock);
+    if (a3d.count==A3D_QUEUE) { a3d.head=(a3d.head+1)%A3D_QUEUE; --a3d.count; } /* nobody pushes: oldest dropped */
+    float *mix=a3d.queue[(a3d.head+a3d.count)%A3D_QUEUE];
+    memset(mix,0,sizeof(float)*2*a3d.grain);
+    for (int i=0;i<A3D_OBJECTS;++i) {
+        A3dObject *o=&a3d.objects[i];
+        if (!o->used || !o->has_pcm) continue;
+        /* Constant-power pan by the azimuth; a wide spread pulls the source to the centre, an
+           ambisonic or unplaced object stays there. */
+        float pan=0.0f;
+        const float x=o->position[0], z=o->position[2], d=sqrtf(x*x+z*z);
+        if (o->has_position && o->ambisonics<0 && d>1e-4f) {
+            const float width=1.0f-fminf(fmaxf(o->spread,0.0f)/3.14159265f,1.0f);
+            pan=fmaxf(-1.0f,fminf(1.0f,x/d))*width;
+        }
+        const float angle=(pan+1.0f)*0.78539816f, left=cosf(angle)*o->gain, right=sinf(angle)*o->gain;
+        for (uint32_t s=0;s<o->frames;++s) { mix[2*s]+=o->pcm[s]*left; mix[2*s+1]+=o->pcm[s]*right; }
+        o->has_pcm=0;
+        ++a3d.objects_heard;
+    }
+    ++a3d.count; ++a3d.grains;
+    static int told;
+    const int first=!told && a3d.objects_heard;
+    told|=first;
+    pthread_mutex_unlock(&a3d.lock);
+    if (first) puts("Runtime: Audio3d objects are playing");
+    return 0;
+}
+/* Plays the queued grains. The stream is kept 2 grains ahead like an AudioOut port: silence on an
+   underrun, a grain dropped when it runs far ahead. */
+static ABI int32_t a3d_port_push(uint32_t port, int32_t blocking) {
+    (void)blocking;
+    if (port!=0) return A3D_ERR_INVALID_PORT;
+    pthread_mutex_lock(&a3d.lock);
+    const int bytes=(int)(sizeof(float)*2*a3d.grain);
+    for (;a3d.count;a3d.head=(a3d.head+1)%A3D_QUEUE,--a3d.count) {
+        if (!a3d.stream) continue;
+        const int queued=SDL_GetAudioStreamQueued(a3d.stream);
+        if (queued<bytes) {
+            static const float silence[A3D_MAX_GRAIN*2];
+            SDL_PutAudioStreamData(a3d.stream,silence,bytes);
+        }
+        if (queued<8*bytes) SDL_PutAudioStreamData(a3d.stream,a3d.queue[a3d.head],bytes);
+    }
+    pthread_mutex_unlock(&a3d.lock);
+    return 0;
+}
+static ABI int32_t a3d_port_queue_level(uint32_t port, uint32_t *level, uint32_t *available) {
+    if (port!=0) return A3D_ERR_INVALID_PORT;
+    pthread_mutex_lock(&a3d.lock);
+    if (level) *level=a3d.count;
+    if (available) *available=a3d.count<a3d.depth ? a3d.depth-a3d.count : 0;
+    pthread_mutex_unlock(&a3d.lock);
+    return 0;
+}
+
 static const RuntimeExport exports[]={
     {"sceAudioOutInit",audio_init}, {"sceAudioOutOpen",audio_open}, {"sceAudioOutClose",audio_close},
     {"sceAudioOutOutput",audio_output}, {"sceAudioOutOutputs",audio_outputs},
     {"sceAudioOutSetVolume",audio_volume}, {"sceAudioOutGetPortState",audio_state},
     {"sceAudioOutGetLastOutputTime",audio_last_time},
+    {"sceAudio3dInitialize",a3d_initialize}, {"sceAudio3dTerminate",a3d_terminate},
+    {"sceAudio3dPortOpen",a3d_port_open}, {"sceAudio3dPortClose",a3d_port_close},
+    {"sceAudio3dObjectReserve",a3d_object_reserve}, {"sceAudio3dObjectUnreserve",a3d_object_unreserve},
+    {"sceAudio3dObjectSetAttributes",a3d_object_set_attributes},
+    {"sceAudio3dPortSetAttribute",a3d_port_set_attribute}, {"sceAudio3dPortAdvance",a3d_port_advance},
+    {"sceAudio3dPortPush",a3d_port_push}, {"sceAudio3dPortGetQueueLevel",a3d_port_queue_level},
 };
 uintptr_t runtime_audio_resolve(const char *name) { return RUNTIME_LOOKUP(exports,name); }
-void runtime_audio_report(void) { printf("Runtime: audio ports opened=%zu, buffers output=%zu\n",ports_opened,buffers_out); }
+void runtime_audio_report(void) {
+    printf("Runtime: audio ports opened=%zu, buffers output=%zu; Audio3d grains=%zu, object grains=%zu\n",
+           ports_opened,buffers_out,a3d.grains,a3d.objects_heard);
+}

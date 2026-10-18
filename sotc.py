@@ -6,9 +6,10 @@
 
 Settings (environment variables, or sotc.ini beside this script as NAME=value lines):
     SOTC_GAME_DIR     the dumped game folder (the one with eboot.bin); default ../CUSA08809
-    SOTC_SYS_MODULES  folder with YOUR OWN console's decrypted libSceNgs2.sprx and
-                      libSceUlt.sprx (shadPS4's user/sys_modules). Without it the game is silent.
-                      These files are Sony firmware: they are never distributed with the port.
+    SOTC_SYS_MODULES  optional: folder with YOUR OWN console's decrypted libSceNgs2.sprx and
+                      libSceUlt.sprx (shadPS4's user/sys_modules), used instead of the port's own
+                      sound library. These files are Sony firmware: they are never distributed
+                      with the port.
     SOTC_USER_DIR     saves, shader/pipeline caches; default ./user
     SOTC_UPDATE_DIR   optional: the game update; by default <game>-UPDATE or <game>-patch next to
                       the dump (as shadPS4); its files take the place of the base game's
@@ -135,10 +136,9 @@ def main():
         modules = [Path(sys_modules) / name for name in SYS_MODULES]
         missing = [m.name for m in modules if not m.is_file()]
         if missing:
-            print(f'SOTC_SYS_MODULES: {", ".join(missing)} not found in {sys_modules}; no sound', file=sys.stderr)
+            print(f'SOTC_SYS_MODULES: {", ".join(missing)} not found in {sys_modules}; '
+                  "the port's own sound library is used", file=sys.stderr)
             modules = []
-    else:
-        print('SOTC_SYS_MODULES not set: no sound (see sotc.py)', file=sys.stderr)
 
     # A complete update (shadPS4's <game>-UPDATE): the image comes from its eboot, and its files
     # take the place of the base game's while the game runs (src/runtime_file.c).

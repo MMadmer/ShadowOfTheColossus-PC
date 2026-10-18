@@ -2,8 +2,8 @@
 // sotc: libSceNgs2 written for the port, so the game has sound without the user's firmware
 // modules (libSceNgs2.sprx / libSceUlt.sprx). Covers what Shadow of the Colossus asks of it:
 // systems, sampler / submixer / reverb / mastering racks (and pass-through custom submixers),
-// ATRAC9 and PCM sampler voices with pitch, envelopes, ports, matrices and patches, and the
-// render into the game's output buffers.
+// ATRAC9 and PCM sampler voices with pitch, envelopes, ports, matrices, patches and UserFx, and
+// the render into the game's output buffers.
 //
 // PS4 structure layouts and parameter ids were read from the game's own calls (SOTC_NGS2_TRACE),
 // checked against shadPS4's ngs2 headers. The rendering model, the default channel map and the
@@ -95,6 +95,7 @@ constexpr u32 SAMPLER_ADD_BLOCKS = 0x10000001;
 constexpr u32 SAMPLER_EXIT_LOOP = 0x10000004;
 constexpr u32 SAMPLER_PITCH = 0x10000005;
 constexpr u32 SAMPLER_ENVELOPE = 0x10000006;
+constexpr u32 SAMPLER_USER_FX = 0x10000008;
 constexpr u32 SAMPLER_FILTER = 0x1000000a;
 constexpr u32 SUBMIXER_SETUP = 0x20000000;
 constexpr u32 SUBMIXER_USER_FX = 0x20000004;
@@ -1373,6 +1374,10 @@ void ResetSampler(Voice& v) {
     ReleaseAtrac9(v.atrac9);
     v.atrac9 = {};
     v.vag = Vag{};
+    // The game sets a UserFx after the setup, only on its positional voices.
+    v.userFx = nullptr;
+    v.userFxData = {};
+    v.userFxFlags = 0;
 }
 
 void SetupSampler(Voice& v, const WaveformFormat& f) {
@@ -1642,6 +1647,7 @@ void ApplyParam(Voice& v, const ParamHead& head) {
     case CUSTOM_SUBMIXER_SETUP:
         v.channels = std::clamp<u32>(u32At(12) ? u32At(12) : u32At(8), 1, MAX_CHANNELS);
         return;
+    case SAMPLER_USER_FX:
     case SUBMIXER_USER_FX:
         if (size >= 40) {
             std::memcpy(&v.userFx, p + 8, 8);
@@ -1758,6 +1764,19 @@ void MixPort(Voice& dest, const Voice& src, const Port& port, u32 grain) {
     }
 }
 
+// The voice's UserFx callback (guest code) over its planar grain; flags 1 on the first grain after
+// a start.
+void CallUserFx(Voice& v, u32 grain, u32 rate) {
+    float* channels[MAX_CHANNELS];
+    for (u32 c = 0; c < v.channels; c++) {
+        channels[c] = v.samples.data() + static_cast<size_t>(c) * grain;
+    }
+    UserFxContext ctx{channels, v.userFxData[0], v.userFxData[1], v.userFxData[2],
+                      v.userFxFlags, v.channels, grain, rate};
+    v.userFx(&ctx);
+    v.userFxFlags = 0;
+}
+
 void RenderVoice(Voice& v, u32 grain, u32 rate) {
     if (v.rendered || v.rendering) {
         return;
@@ -1784,6 +1803,11 @@ void RenderVoice(Voice& v, u32 grain, u32 rate) {
                     v.state = before;
                 }
             }
+            // The game's sampler UserFx hands each grain of its positional voices to Audio3d
+            // objects (sndx: sceAudio3dObjectSetAttributes with the PCM, position and gain).
+            if (v.userFx) {
+                CallUserFx(v, grain, rate);
+            }
         } else {
             for (auto& [src, port] : v.sources) {
                 RenderVoice(*src, grain, rate);
@@ -1797,14 +1821,7 @@ void RenderVoice(Voice& v, u32 grain, u32 rate) {
                 v.hasSamples = ProcessReverb(*v.reverb, v.samples, v.channels, grain, rate);
             }
             if (v.userFx && v.hasSamples && UserFxEnabled()) {
-                float* channels[MAX_CHANNELS];
-                for (u32 c = 0; c < v.channels; c++) {
-                    channels[c] = v.samples.data() + static_cast<size_t>(c) * grain;
-                }
-                UserFxContext ctx{channels, v.userFxData[0], v.userFxData[1], v.userFxData[2],
-                                  v.userFxFlags,  v.channels,       grain,            rate};
-                v.userFx(&ctx);
-                v.userFxFlags = 0;
+                CallUserFx(v, grain, rate);
             }
         }
     }
@@ -1909,7 +1926,8 @@ void RenderSystem(System& sys, const RenderBufferInfo* buffers, u32 count) {
         }
     }
     // Voices nothing reached still play on (they advance only when rendered): render them now so
-    // their waveforms progress and finish as the game expects.
+    // their waveforms progress and finish as the game expects. The game's positional voices are
+    // such voices: their UserFx hands each grain to an Audio3d object.
     for (auto* v : voices) {
         if (!v->rendered && IsSampler(*v) && (v->state == Play::Playing || v->state == Play::Stopped)) {
             RenderVoice(*v, grain, sys.sampleRate);
