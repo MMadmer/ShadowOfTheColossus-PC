@@ -208,10 +208,10 @@ cd ShadowOfTheColossus-PC
 build.cmd
 ```
 
-`build.cmd` baixa um MSYS2 próprio em `.deps` (nada é instalado no sistema; ~1,5 GB na primeira
+`build.cmd` baixa um MSYS2 próprio em `.deps` (nada é instalado no sistema; ~4 GB na primeira
 vez), instala os pacotes, os submódulos e o PkgTool, compila `out/bb-probe.exe` e abre o lançador
 direto do código / downloads a private MSYS2 into `.deps` (nothing is installed system-wide;
-~1.5 GB the first time), the packages, submodules and PkgTool, builds `out/bb-probe.exe` and starts
+~4 GB the first time), the packages, submodules and PkgTool, builds `out/bb-probe.exe` and starts
 the launcher from the source tree. Depois só recompila o que mudou / later runs only rebuild what
 changed.
 

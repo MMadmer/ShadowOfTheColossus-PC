@@ -54,7 +54,7 @@ if (-not (Test-Path $Bash)) {
 # Bump the stamp when the package list changes.
 $stamp = Join-Path $Msys '.sotc-packages-2'
 if (-not (Test-Path $stamp)) {
-    Step 'Installing the toolchain and libraries (once, ~1.5 GB)'
+    Step 'Installing the toolchain and libraries (once, ~500 MB download, ~3.5 GB on disk)'
     if (-not $OwnMsys) {
         # A new MSYS2 updates its core first and closes its own shell doing so; the second pass
         # updates the rest.
@@ -66,6 +66,7 @@ if (-not (Test-Path $stamp)) {
             'mingw-w64-clang-x86_64-{vulkan-headers,vulkan-loader,vulkan-memory-allocator,glslang} ' +
             'mingw-w64-clang-x86_64-{sdl3,fmt,boost,robin-map,xxhash,ffmpeg,zydis} ' +
             'mingw-w64-clang-x86_64-{spirv-tools,spirv-headers,spirv-cross}')
+    InMsys 'pacman -Scc --noconfirm --noprogressbar'  # the downloaded packages, ~500 MB
     New-Item -ItemType File -Force $stamp | Out-Null
 }
 $MsysPosix = (& (Join-Path $Msys 'usr\bin\cygpath.exe') -u $Msys).Trim()
