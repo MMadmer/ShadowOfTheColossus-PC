@@ -4,24 +4,24 @@
 
 > **A separate project / Отдельный проект.** This is [MMadmer](https://github.com/MMadmer)'s
 > fork of [AjncSystem/ShadowOfTheColossus-PC](https://github.com/AjncSystem/ShadowOfTheColossus-PC),
-> the original native port. Its focus is optimizing the port as a whole: less CPU and GPU work
-> per frame, steadier frame times, less video memory, faster startup, and good play on modest
-> hardware too (4-core CPUs, 2 GB cards); plus quality-of-life such as `.pkg` dump unpacking (see
+> the original native port. It focuses on optimizing the port as a whole: less CPU and GPU work
+> per frame, steadier frame times, less video memory, faster startup, and good performance on
+> modest hardware as well (4-core CPUs, 2 GB cards), together with conveniences such as `.pkg` dump unpacking (see
 > [CHANGELOG](CHANGELOG.md), 0.57-opt6 and later). It builds on upstream pull requests that are
 > still open there: #32 (Gabriell-os), #46 (Lucas-blip-png), #81 (jownatan) and #83
 > (Oussama268). Improvements are offered back to the original as pull requests. Report problems
 > with this fork's builds here, not in the original repository.
 >
-> Это форк [MMadmer](https://github.com/MMadmer) оригинального нативного порта
+> Данный проект — форк [MMadmer](https://github.com/MMadmer) оригинального нативного порта
 > [AjncSystem/ShadowOfTheColossus-PC](https://github.com/AjncSystem/ShadowOfTheColossus-PC),
-> посвящённый оптимизации порта в целом (меньше работы CPU и GPU на кадр, ровнее кадры, меньше
-> видеопамяти, быстрее запуск) — в том числе чтобы игра хорошо шла и на слабом железе. Основан также на ещё не принятых
-> там пул-реквестах #32, #46, #81 и #83 их авторов. Улучшения предлагаются в оригинал пул-реквестами;
-> о проблемах сборок этого форка — сюда, а не в оригинальную репу.
+> посвящённый оптимизации порта в целом: снижению нагрузки на процессор и видеокарту, стабильному
+> времени кадра, экономии видеопамяти и ускорению запуска, в том числе для игры на слабых
+> компьютерах. Проект также включает ещё не принятые в оригинальный репозиторий пул-реквесты #32,
+> #46, #81 и #83 их авторов. Улучшения предлагаются оригинальному проекту в виде пул-реквестов.
+> О проблемах сборок этого форка следует сообщать в данном репозитории, а не в оригинальном.
 
 > **Nenhum arquivo do jogo nem da Sony está incluído / No game or Sony files are included.**
-> Você precisa do seu próprio dump do jogo e, para ter som, de dois módulos do seu próprio
-> console. / You need your own game dump and, for sound, two modules from your own console.
+> É necessário um dump próprio do jogo. / A game dump owned by the user is required.
 > Este projeto não tem ligação com a Sony Interactive Entertainment nem com a Bluepoint Games. /
 > This project is not affiliated with Sony Interactive Entertainment or Bluepoint Games.
 
@@ -111,7 +111,7 @@ normalmente, a 30 FPS.
 | Texturas | Streaming de texturas (o jogo carrega os mips mais finos), sem corrupção de memória. |
 | Água | Reflexos em espaço de tela, reflexos de ambiente por *probe*, respingos e anéis ao nadar. |
 | Saves | Gravação, carregamento e exclusão pela lista de saves na tela. |
-| Som | Áudio real com os módulos Ngs2/Ult do próprio usuário. |
+| Som | Biblioteca de som própria do port (NGS2 e áudio 3D dos sons posicionais); com os módulos Ngs2/Ult do próprio console, a do console. |
 | Controles | Teclado e controle juntos, câmera no mouse, troca de teclas no lançador. |
 | Modos | 60 FPS (patch de illusion), filtro anisotrópico 16x, modo PS4 Pro, saída até 4K. |
 | Desempenho | No demo da tela de título, em modo 60 FPS: média de **37–45 → ~67 FPS**, trecho mais pesado (ponte do cânion) **~17 → 29–34 FPS**. |

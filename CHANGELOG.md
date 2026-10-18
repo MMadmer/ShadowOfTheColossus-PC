@@ -1,5 +1,24 @@
 # Changelog
 
+## Próxima versão (fork MMadmer)
+- **Som do port por padrão:** o lançador não copia mais sozinho os módulos de som de um shadPS4
+  instalado (`user/sys_modules`) nem os ativa: a biblioteca de som própria do port toca todos os
+  sons. Com os módulos copiados automaticamente foi relatada a falta da maior parte dos efeitos
+  sonoros (golpes, cascos, flechas), restando a música e as vozes. As configurações em que um
+  lançador anterior fez essa cópia voltam à biblioteca do port; uma pasta escolhida manualmente
+  continua valendo.
+- **libSceAudio3d e UserFx do NGS2:** o port implementa o libSceAudio3d (objetos posicionados em
+  estéreo pelo azimute e pela abertura, tocados no dispositivo de saída padrão) e chama os UserFx
+  das vozes do sampler NGS2, pelos quais o motor de som do jogo (sndx) entrega os objetos de áudio
+  3D quando esse modo está ativo. Os sons que o PS4 envia ao alto-falante do controle, ao headset
+  ou à saída auxiliar também tocam no dispositivo padrão.
+- **Modo da janela:** janela, tela cheia em janela (sem bordas, na resolução do monitor) ou tela
+  cheia exclusiva (o monitor passa para a resolução de saída), no lugar da caixa "Tela cheia"
+  (`SOTC_WINDOW_MODE=windowed|borderless|fullscreen`; a caixa marcada vira tela cheia em janela).
+- **Idiomas do lançador:** inglês, russo, chinês (simplificado), japonês e português, com troca
+  imediata e fontes do Windows para chinês e japonês; o idioma automático segue o do Windows.
+- Textos em russo da documentação revisados em estilo formal.
+
 ## 1.0.0 — 2026-10-18 (fork MMadmer)
 Primeiro release do fork [MMadmer/ShadowOfTheColossus-PC](https://github.com/MMadmer/ShadowOfTheColossus-PC),
 com tudo da 0.57-opt6 e 0.57-opt7.

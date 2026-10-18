@@ -126,6 +126,8 @@ Estas variáveis de ambiente ajudam a investigar problemas:
 | Variável | Efeito |
 |---|---|
 | `SOTC_FPS=1` | taxa de quadros a cada 5 s |
+| `SOTC_WINDOW_MODE=windowed/borderless/fullscreen` | janela, tela cheia em janela ou tela cheia exclusiva (na resolução de saída) |
+| `SOTC_PAD_GLYPHS=xbox/ps/keyboard` | fixa os ícones dos botões (padrão: os do dispositivo em uso) |
 | `BB_FAULT_RING=arquivo` | grava as últimas exceções (sobrevive a quedas) |
 | `BB_STACKS_TRIGGER=arquivo` | criar o arquivo despeja as pilhas das threads |
 | `BB_READBACKS=0/1/2` | leituras da GPU; o padrão 2 é o exigido pelo jogo |
