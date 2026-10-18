@@ -185,7 +185,8 @@ public:
     /// sotc: host bytes this full chain would save as a mip tail (census "projected" only).
     u64 sotc_shadow_saving{};
 
-    /// sotc: 1 + the button icon this image shows (PadGlyphs::Identify), 0 for none.
+    /// sotc: the button icon or controller diagram this image shows (PadGlyphs::Identify), 0 for
+    /// none.
     u8 sotc_glyph{};
 
     struct {

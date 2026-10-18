@@ -64,9 +64,9 @@ static uint8_t connected_count;
 static int gamepad_new; /* set when a gamepad was just opened (it becomes the active device) */
 
 /* sotc: the button icons the game shows (gpu/shadps4/video_core/texture_cache/sotc_pad_glyphs.cpp):
- * 1 = Xbox while a gamepad other than a PlayStation one is the active device (it connected or was
- * used last), 0 = the game's own PlayStation icons (keyboard and mouse, DualShock, DualSense).
- * SOTC_PAD_GLYPHS=xbox or ps fixes the choice. */
+ * 0 = the game's own PlayStation ones (DualShock, DualSense), 1 = Xbox (any other gamepad),
+ * 2 = keyboard and mouse (no gamepad, or the keyboard or mouse used last); see update_glyphs.
+ * SOTC_PAD_GLYPHS=ps, xbox or keyboard fixes the choice. */
 static _Atomic int glyph_style;
 int runtime_pad_glyph_style(void) { return atomic_load_explicit(&glyph_style,memory_order_relaxed); }
 
@@ -337,19 +337,66 @@ static int playstation_pad(SDL_Gamepad *g) {
     const SDL_GamepadType type=SDL_GetGamepadType(g);
     return type==SDL_GAMEPAD_TYPE_PS3 || type==SDL_GAMEPAD_TYPE_PS4 || type==SDL_GAMEPAD_TYPE_PS5;
 }
-/* The active device decides the icons; called under lock with this sample's input. */
+/* The active device decides the icons, called under lock with this sample's input: a gamepad
+ * that connected or was used last shows its own (PlayStation: the game's, any other: Xbox); with
+ * none, or the keyboard or mouse used last, the keyboard and mouse ones. */
 static void update_glyphs(SDL_Gamepad *g, int pad_used, int keys_used) {
     static int mode=-1, pad_active;
     if (mode<0) {
         const char *v=getenv("SOTC_PAD_GLYPHS");
-        mode=!v ? 0 : !SDL_strcasecmp(v,"xbox") ? 1 : !SDL_strcasecmp(v,"ps") ? 2 : 0;
+        mode=!v ? -2 : !SDL_strcasecmp(v,"ps") ? 0 : !SDL_strcasecmp(v,"xbox") ? 1 :
+             !SDL_strcasecmp(v,"keyboard") ? 2 : -2;
     }
     if (gamepad_new || pad_used) pad_active=1;
     else if (keys_used) pad_active=0;
     gamepad_new=0;
-    const int style=mode==1 ? 1 : mode==2 ? 0 : g && pad_active && !playstation_pad(g);
+    const int style=mode>=0 ? mode : !g || !pad_active ? 2 : playstation_pad(g) ? 0 : 1;
+    static const char *const names[]={"PlayStation","Xbox","keyboard and mouse"};
     if (atomic_exchange_explicit(&glyph_style,style,memory_order_relaxed)!=style)
-        printf("Runtime: button icons: %s\n",style ? "Xbox" : "PlayStation");
+        printf("Runtime: button icons: %s\n",names[style]);
+}
+
+/* sotc: the short label of a key on its icon (upper case; 1-4 are the up, down, left and right
+ * arrows of the icon font). */
+static void key_label(SDL_Scancode key, char *out, int size) {
+    static const struct { SDL_Scancode key; const char *label; } named[]={
+        {SDL_SCANCODE_SPACE,"SPACE"}, {SDL_SCANCODE_LSHIFT,"SHIFT"}, {SDL_SCANCODE_RSHIFT,"SHIFT"},
+        {SDL_SCANCODE_LCTRL,"CTRL"}, {SDL_SCANCODE_RCTRL,"CTRL"}, {SDL_SCANCODE_LALT,"ALT"},
+        {SDL_SCANCODE_RALT,"ALT"}, {SDL_SCANCODE_RETURN,"ENTER"}, {SDL_SCANCODE_KP_ENTER,"ENTER"},
+        {SDL_SCANCODE_BACKSPACE,"BKSP"}, {SDL_SCANCODE_ESCAPE,"ESC"}, {SDL_SCANCODE_TAB,"TAB"},
+        {SDL_SCANCODE_CAPSLOCK,"CAPS"}, {SDL_SCANCODE_DELETE,"DEL"}, {SDL_SCANCODE_INSERT,"INS"},
+        {SDL_SCANCODE_HOME,"HOME"}, {SDL_SCANCODE_END,"END"}, {SDL_SCANCODE_PAGEUP,"PGUP"},
+        {SDL_SCANCODE_PAGEDOWN,"PGDN"}, {SDL_SCANCODE_UP,"\x01"}, {SDL_SCANCODE_DOWN,"\x02"},
+        {SDL_SCANCODE_LEFT,"\x03"}, {SDL_SCANCODE_RIGHT,"\x04"},
+    };
+    for (size_t i=0;i<sizeof(named)/sizeof(*named);++i)
+        if (named[i].key==key) { snprintf(out,size,"%s",named[i].label); return; }
+    /* Letters, digits, F-keys and the rest: SDL's name without spaces, upper case. */
+    const char *name=SDL_GetScancodeName(key);
+    int n=0;
+    for (; name && *name && n<size-1; ++name)
+        if (*name!=' ') out[n++]=(char)SDL_toupper((unsigned char)*name);
+    out[n]=0;
+}
+
+/* sotc: what an input (input_names) is bound to, for the button icons: its first gamepad button
+ * (SDL_GamepadButton; SDL_GAMEPAD_BUTTON_COUNT and +1 are the triggers; -1 none), its first key's
+ * label ("" none) and its mouse buttons (SDL button bits). 0 for an unknown input. */
+int runtime_pad_binding(const char *input, int *pad_button, char *label, int label_size,
+                        unsigned *mouse) {
+    pthread_mutex_lock(&lock);
+    if (!bindings_ready) { load_bindings(); bindings_ready=1; }
+    int found=0;
+    for (int i=0;i<IN_COUNT && !found;++i) {
+        if (strcmp(input_names[i],input)) continue;
+        found=1;
+        const Binding *b=&bindings[i];
+        *pad_button=b->pad_count ? b->pad[0] : -1;
+        if (b->key_count) key_label(b->keys[0],label,label_size); else if (label_size) label[0]=0;
+        *mouse=b->mouse;
+    }
+    pthread_mutex_unlock(&lock);
+    return found;
 }
 static void rumble(SDL_Gamepad *g, uint64_t now) {
     if (!g) return;

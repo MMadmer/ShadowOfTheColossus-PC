@@ -994,7 +994,8 @@ void TextureCache::RefreshImage(Image& image) {
         image.hash = hash;
     }
 
-    // sotc: a button icon the Xbox ones stand in for (PadGlyphs), checked on every upload.
+    // sotc: a button icon or controller diagram others stand in for (PadGlyphs), checked on every
+    // upload.
     image.sotc_glyph = PadGlyphs::Identify(image.info, image.info.guest_address);
 
     const u32 num_layers = image.info.resources.layers;

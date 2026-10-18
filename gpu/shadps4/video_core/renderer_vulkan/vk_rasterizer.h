@@ -199,8 +199,8 @@ private:
         sizeof(AmdGpu::Regs::depth_buffer) + sizeof(AmdGpu::Regs::depth_view) +
         sizeof(AmdGpu::Regs::depth_htile_data_base) +
         sizeof(AmdGpu::CbDbExtent) * (AmdGpu::NUM_COLOR_BUFFERS + 1);
-    /// sotc: the Xbox button icons were shown at the last bind (BindResources).
-    bool pad_glyphs_xbox{};
+    /// sotc: the button icon style of the last bind (PadGlyphs::Style, BindResources).
+    int pad_glyph_style{};
     struct TargetMemo {
         bool valid{};
         u32 mrt_mask{};

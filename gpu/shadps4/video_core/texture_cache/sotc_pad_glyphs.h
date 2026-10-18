@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-// sotc: Xbox button icons for the game's PlayStation ones.
+// sotc: button icons for the device in use in place of the game's PlayStation ones.
 
 #pragma once
 
@@ -18,40 +18,60 @@ namespace VideoCore {
 struct ImageInfo;
 
 /// The game shows its button prompts with one 128x128 RGBA8 sRGB texture per button
-/// (textures/common/ui/_ps4/ps4_*.ctxr). An uploaded image whose first mip has the content of one
-/// of them is marked with its icon (Identify); while a gamepad other than a PlayStation one is the
-/// active device (src/runtime_pad.c), BindTextures samples the matching Xbox icon instead. The
-/// icons are drawn by host_shaders/sotc_pad_glyphs.comp once at start-up, with the shader warm-up:
-/// the game's memory and textures stay untouched. SOTC_PAD_GLYPHS=ps keeps the game's icons.
+/// (textures/common/ui/_ps4/ps4_*.ctxr), and the DualShock 4 diagram of Options > Controls with
+/// controller_image*. An uploaded image whose content is one of them is marked (Identify).
+/// BindTextures then samples, for the active device (src/runtime_pad.c), the Xbox icon or the key /
+/// mouse icon of what the input is bound to, and an Xbox controller or the keys and mouse buttons
+/// in the diagram, instead; a DualShock or DualSense keeps the game's. They are drawn by
+/// host_shaders/sotc_pad_glyphs.comp once at start-up with the shader warm-up, from the bindings
+/// of that session, finer than the game's (they stay sharp at any output resolution). The game's
+/// memory and files stay untouched.
 class PadGlyphs {
 public:
-    enum Glyph : u8 {
-        A, B, X, Y, LB, RB, LT, RT, LS, RS, Menu, View, Share,
+    /// The game's icon textures.
+    enum Slot : u8 {
+        Cross, Circle, Square, Triangle, L1, R1, L2, R2, L3, R3, Options, Touchpad, Share,
         DpadUp, DpadDown, DpadLeft, DpadRight, DpadLR, DpadUD, StickL, StickR,
         WiggleL1, WiggleL2, WiggleL3, WiggleL4, WiggleR1, WiggleR2, WiggleR3, WiggleR4,
-        Count,
+        SlotCount,
     };
+    /// The game's diagrams: all sixteen callouts, and the demo's without the touchpad and down.
+    enum Diagram : u8 { DiagramFull, DiagramDemo, DiagramCount };
+    /// Icon styles (runtime_pad_glyph_style): the game's, Xbox, keyboard and mouse.
+    enum Style : int { PlayStation = 0, Xbox = 1, Keyboard = 2 };
 
     explicit PadGlyphs(const Vulkan::Instance& instance);
     ~PadGlyphs();
 
-    /// The icon an image about to be uploaded from `address` shows: 1 + Glyph, 0 for none.
+    /// What an image about to be uploaded from `address` shows: 1 + Slot for an icon,
+    /// 1 + SlotCount + Diagram for the diagram, 0 for anything else.
     static u8 Identify(const ImageInfo& info, VAddr address);
 
-    /// Whether the Xbox icons are shown now.
-    static bool XboxActive();
+    /// The style shown now.
+    static Style Current();
 
-    /// The view of icon `marked` (1 + Glyph) as `format` (the game's sRGB, or UNORM), as a 2D or
-    /// a one-layer 2D array view; a null handle when the icons are not available.
-    vk::ImageView IconView(u8 marked, vk::Format format, bool array) const;
+    /// The view standing in for `marked` (Identify) in `style` as `format` (the game's sRGB, or
+    /// UNORM), a 2D or a one-layer 2D array view; a null handle for the game's own.
+    vk::ImageView IconView(u8 marked, Style style, vk::Format format, bool array) const;
 
 private:
+    struct Spec {
+        s32 kind;
+        s32 arg;
+        std::array<char, 96> text; // labels of six characters
+    };
+    // [layer][sRGB, UNORM][2D, 2D array]
+    using Views = std::vector<std::array<std::array<vk::UniqueImageView, 2>, 2>>;
+
+    static Spec Describe(Slot slot, Style style);
+    static Spec DescribeDiagram(Diagram diagram, Style style);
     void Render(const Vulkan::Instance& instance);
 
     vk::Device device;
-    UniqueImage image;
-    // [glyph][sRGB, UNORM][2D, 2D array]
-    std::vector<std::array<std::array<vk::UniqueImageView, 2>, 2>> views;
+    UniqueImage image;    // icons: a layer per slot, Xbox then keyboard
+    UniqueImage diagrams; // a layer per diagram, Xbox then keyboard
+    Views views;
+    Views diagram_views;
 };
 
 } // namespace VideoCore

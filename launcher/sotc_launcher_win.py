@@ -202,9 +202,10 @@ def weak_gpu_render_res(gpu_line):
 
 
 # Button icons in the game (SOTC_PAD_GLYPHS, gpu texture_cache/sotc_pad_glyphs.cpp).
-PAD_GLYPHS = [('', ('Automáticos (Xbox com um controle Xbox ou genérico)', 'Automatic (Xbox with an Xbox or generic gamepad)')),
+PAD_GLYPHS = [('', ('Automáticos (do dispositivo em uso)', 'Automatic (the device in use)')),
               ('xbox', ('Sempre Xbox', 'Always Xbox')),
-              ('ps', ('Sempre PlayStation', 'Always PlayStation'))]
+              ('ps', ('Sempre PlayStation', 'Always PlayStation')),
+              ('keyboard', ('Sempre teclado e mouse', 'Always keyboard and mouse'))]
 UPSCALERS = [('fsr1', ('FSR 1 (AMD, qualquer placa)', 'FSR 1 (AMD, any GPU)')),
              ('bilinear', ('Bilinear (simples)', 'Bilinear (plain)'))]
 SHARPNESS = [('0', ('Alta', 'High')), ('250', ('Média (padrão)', 'Medium (default)')), ('600', ('Baixa', 'Low')),
@@ -377,7 +378,7 @@ def game_environment(s):
     env['SOTC_MOUSE_INVERT'] = '1' if s.get('mouse_invert') else '0'
     if str(s.get('gamepad', '')).strip():
         env['BB_GAMEPAD'] = str(s['gamepad']).strip()
-    if s.get('pad_glyphs') in ('xbox', 'ps'):
+    if s.get('pad_glyphs') in ('xbox', 'ps', 'keyboard'):
         env['SOTC_PAD_GLYPHS'] = s['pad_glyphs']
     env['BB_CONFIG'] = str(PORT_DIR / 'sotc.ini')
     for item in str(s['extra_env']).split():
@@ -911,10 +912,12 @@ class Launcher:
                  _('Nome (ou parte) do controle a usar quando houver vários; vazio = o primeiro.',
                    'Name (or part of it) of the gamepad to use when several are connected; empty = the first.'))
         self.row(f, _('Ícones dos botões', 'Button icons'), self.choice(f, 'pad_glyphs', PAD_GLYPHS, 44),
-                 _('Com um controle Xbox (ou genérico) em uso o jogo mostra os botões do Xbox; com teclado, '
-                   'DualShock ou DualSense, os do PlayStation. Troca na hora ao conectar ou usar outro controle.',
-                   'With an Xbox (or generic) gamepad in use the game shows Xbox buttons; with the keyboard, a '
-                   'DualShock or a DualSense, the PlayStation ones. It switches as soon as another one is '
+                 _('O jogo mostra os botões do que está em uso: Xbox com um controle Xbox (ou genérico), os do '
+                   'PlayStation com DualShock ou DualSense, as teclas e o mouse configurados no teclado, também '
+                   'no esquema de Opções > Controles. Troca na hora ao conectar ou usar outro dispositivo.',
+                   'The game shows the buttons of what is in use: Xbox with an Xbox (or generic) gamepad, the '
+                   'PlayStation ones with a DualShock or DualSense, the bound keys and mouse buttons on the '
+                   'keyboard, in the Options > Controls diagram too. It switches as soon as another device is '
                    'connected or used.'))
         self.section(f, _('Mouse', 'Mouse'))
         self.check(f, 'mouse', _('Câmera no mouse', 'Mouse camera'),

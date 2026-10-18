@@ -1,22 +1,31 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-// sotc: Xbox button icons in place of the game's PlayStation ones (video_core/texture_cache/
-// sotc_pad_glyphs.cpp): a white symbol on a black disc, drawn from distance functions, one
-// dispatch per mip level. The image is RGBA8 UNORM and holds sRGB-encoded values (it is sampled
-// through an sRGB view, like the game's textures); alpha is coverage.
+// sotc: the button icons that stand in for the game's PlayStation ones (video_core/texture_cache/
+// sotc_pad_glyphs.cpp): Xbox buttons, keys and mouse buttons, white on black, and the controller
+// diagram of Options > Controls, drawn from distance functions with 4x4 samples per pixel, one
+// dispatch per picture and mip level. The image is RGBA8 UNORM holding sRGB-encoded values
+// (sampled through an sRGB view like the game's textures); alpha is coverage.
 #version 450
 
 layout(local_size_x = 8, local_size_y = 8) in;
 layout(binding = 0, rgba8) uniform writeonly image2D dst;
 layout(push_constant) uniform Params {
-    int glyph;
-    int size;
+    int kind;      // what to draw (KIND_*)
+    int size;      // this mip's size (width) in pixels
+    int arg;       // Xbox icon / mouse button / lit keys / lit arrow; diagram: rows and style
+    int pad0;      // diagram: this mip's height
+    uint text[24]; // labels of six ASCII characters (1-4: arrows up, down, left, right)
 };
 
-// Glyph ids (sotc_pad_glyphs.h).
+const int KIND_XBOX = 0, KIND_KEY = 1, KIND_MOUSE = 2, KIND_KEYS = 3, KIND_MOUSE_MOVE = 4;
+const int KIND_DIAGRAM = 5;
+
+// Xbox icons (arg of KIND_XBOX, PadGlyphs::XboxIcon).
 const int A = 0, B = 1, X = 2, Y = 3, LB = 4, RB = 5, LT = 6, RT = 7, LS = 8, RS = 9;
 const int MENU = 10, VIEW = 11, SHARE = 12;
 const int DPAD_UP = 13, DPAD_DOWN = 14, DPAD_LEFT = 15, DPAD_RIGHT = 16, DPAD_LR = 17, DPAD_UD = 18;
 const int STICK_L = 19, STICK_R = 20, WIGGLE_L = 21, WIGGLE_R = 25;
+
+const float PI = 3.14159265;
 
 float seg(vec2 p, vec2 a, vec2 b) {
     vec2 pa = p - a, ba = b - a;
@@ -24,12 +33,12 @@ float seg(vec2 p, vec2 a, vec2 b) {
     return length(pa - ba * h);
 }
 
-// Arc of radius r around c from angle a0 to a1 (radians, a1 > a0, y down: 0 right, pi/2 down).
+// Arc of radius r around c from angle a0 to a1 (radians, a1 > a0; y down: 0 right, pi/2 down).
 float arc(vec2 p, vec2 c, float r, float a0, float a1) {
     vec2 d = p - c;
     float a = atan(d.y, d.x);
     while (a < a0) {
-        a += 6.2831853;
+        a += 2.0 * PI;
     }
     if (a <= a1) {
         return abs(length(d) - r);
@@ -39,92 +48,161 @@ float arc(vec2 p, vec2 c, float r, float a0, float a1) {
     return min(length(p - e0), length(p - e1));
 }
 
-const float PI = 3.14159265;
-
-// Distance to the centre line of a letter in a cell (u right, v down, 0..1 tall) and its width.
-float letter(int ch, vec2 q) {
-    float d = 1e9;
-    if (ch == 65) { // A
-        d = min(seg(q, vec2(0.0, 1.0), vec2(0.4, 0.0)), seg(q, vec2(0.4, 0.0), vec2(0.8, 1.0)));
-        d = min(d, seg(q, vec2(0.17, 0.64), vec2(0.63, 0.64)));
-    } else if (ch == 66) { // B
-        d = seg(q, vec2(0.0, 0.0), vec2(0.0, 1.0));
-        d = min(d, seg(q, vec2(0.0, 0.0), vec2(0.38, 0.0)));
-        d = min(d, arc(q, vec2(0.38, 0.24), 0.24, -0.5 * PI, 0.5 * PI));
-        d = min(d, seg(q, vec2(0.0, 0.48), vec2(0.42, 0.48)));
-        d = min(d, arc(q, vec2(0.42, 0.74), 0.26, -0.5 * PI, 0.5 * PI));
-        d = min(d, seg(q, vec2(0.0, 1.0), vec2(0.42, 1.0)));
-    } else if (ch == 88) { // X
-        d = min(seg(q, vec2(0.0, 0.0), vec2(0.76, 1.0)), seg(q, vec2(0.76, 0.0), vec2(0.0, 1.0)));
-    } else if (ch == 89) { // Y
-        d = min(seg(q, vec2(0.0, 0.0), vec2(0.38, 0.52)), seg(q, vec2(0.76, 0.0), vec2(0.38, 0.52)));
-        d = min(d, seg(q, vec2(0.38, 0.52), vec2(0.38, 1.0)));
-    } else if (ch == 76) { // L
-        d = min(seg(q, vec2(0.0, 0.0), vec2(0.0, 1.0)), seg(q, vec2(0.0, 1.0), vec2(0.6, 1.0)));
-    } else if (ch == 82) { // R
-        d = seg(q, vec2(0.0, 0.0), vec2(0.0, 1.0));
-        d = min(d, seg(q, vec2(0.0, 0.0), vec2(0.38, 0.0)));
-        d = min(d, arc(q, vec2(0.38, 0.26), 0.26, -0.5 * PI, 0.5 * PI));
-        d = min(d, seg(q, vec2(0.0, 0.52), vec2(0.38, 0.52)));
-        d = min(d, seg(q, vec2(0.3, 0.52), vec2(0.7, 1.0)));
-    } else if (ch == 83) { // S
-        d = arc(q, vec2(0.35, 0.26), 0.26, 0.5 * PI, 1.85 * PI);
-        d = min(d, arc(q, vec2(0.35, 0.74), 0.26, -0.5 * PI, 0.85 * PI));
-    } else if (ch == 84) { // T
-        d = min(seg(q, vec2(0.0, 0.0), vec2(0.76, 0.0)), seg(q, vec2(0.38, 0.0), vec2(0.38, 1.0)));
-    }
-    return d;
-}
-
-float letter_width(int ch) {
-    return ch == 65 ? 0.8 : ch == 66 ? 0.68 : ch == 88 || ch == 89 || ch == 84 ? 0.76 :
-           ch == 76 ? 0.6 : ch == 82 ? 0.7 : 0.62;
-}
-
-// Distance to a label of one or two letters centred at the origin, cell height h, stroke half
-// width w.
-float label(vec2 p, int c0, int c1, float h, float w) {
-    float gap = 0.22;
-    float w0 = letter_width(c0);
-    float total = c1 == 0 ? w0 : w0 + gap + letter_width(c1);
-    vec2 origin = vec2(-0.5 * total * h, -0.5 * h);
-    float d = letter(c0, (p - origin) / h) * h;
-    if (c1 != 0) {
-        d = min(d, letter(c1, (p - origin) / h - vec2(w0 + gap, 0.0)) * h);
-    }
-    return d - w;
-}
-
 float box(vec2 p, vec2 half_size, float r) {
     vec2 q = abs(p) - half_size + r;
     return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
 }
 
-// Signed distance of the white symbol (negative inside); `grey` returns the d-pad body.
-float symbol(vec2 p, out float grey) {
-    grey = 1e9;
-    switch (glyph) {
-    case A: return label(p, 65, 0, 1.0, 0.1);
-    case B: return label(p, 66, 0, 1.0, 0.1);
-    case X: return label(p, 88, 0, 1.0, 0.1);
-    case Y: return label(p, 89, 0, 1.0, 0.1);
-    case LB: return label(p, 76, 66, 0.62, 0.078);
-    case RB: return label(p, 82, 66, 0.62, 0.078);
-    case LT: return label(p, 76, 84, 0.62, 0.078);
-    case RT: return label(p, 82, 84, 0.62, 0.078);
-    case LS: return label(p, 76, 83, 0.62, 0.078);
-    case RS: return label(p, 82, 83, 0.62, 0.078);
+// --- Stroke font: distance to a character's centre line in a cell 1 tall (u right, v down). ---
+#define S(ax, ay, bx, by) d = min(d, seg(q, vec2(ax, ay), vec2(bx, by)))
+#define C(cx, cy, r, a0, a1) d = min(d, arc(q, vec2(cx, cy), r, (a0) * PI, (a1) * PI))
+
+float character(int c, vec2 q) {
+    float d = 1e9;
+    switch (c) {
+    case 1: S(0.3, 1.0, 0.3, 0.06); S(0.3, 0.0, 0.0, 0.32); S(0.3, 0.0, 0.6, 0.32); break;   // up
+    case 2: S(0.3, 0.0, 0.3, 0.94); S(0.3, 1.0, 0.0, 0.68); S(0.3, 1.0, 0.6, 0.68); break;   // down
+    case 3: S(0.8, 0.5, 0.06, 0.5); S(0.0, 0.5, 0.32, 0.2); S(0.0, 0.5, 0.32, 0.8); break;   // left
+    case 4: S(0.0, 0.5, 0.74, 0.5); S(0.8, 0.5, 0.48, 0.2); S(0.8, 0.5, 0.48, 0.8); break;   // right
+    case 48: S(0.0, 0.3, 0.0, 0.7); S(0.6, 0.3, 0.6, 0.7); C(0.3, 0.3, 0.3, 1.0, 2.0); C(0.3, 0.7, 0.3, 0.0, 1.0); break;
+    case 49: S(0.3, 0.0, 0.3, 1.0); S(0.08, 0.22, 0.3, 0.0); break;
+    case 50: C(0.3, 0.3, 0.3, 1.0, 2.25); S(0.512, 0.512, 0.0, 1.0); S(0.0, 1.0, 0.6, 1.0); break;
+    case 51: C(0.3, 0.27, 0.27, -1.0, 0.5); C(0.3, 0.73, 0.27, -0.5, 1.0); break;
+    case 52: S(0.45, 1.0, 0.45, 0.0); S(0.45, 0.0, 0.0, 0.68); S(0.0, 0.68, 0.6, 0.68); break;
+    case 53: S(0.58, 0.0, 0.05, 0.0); S(0.05, 0.0, 0.05, 0.42); S(0.05, 0.42, 0.096, 0.433); C(0.3, 0.68, 0.32, -0.72, 0.8); break;
+    case 54: C(0.3, 0.7, 0.3, 0.0, 2.0); S(0.02, 0.66, 0.4, 0.0); break;
+    case 55: S(0.0, 0.0, 0.6, 0.0); S(0.6, 0.0, 0.18, 1.0); break;
+    case 56: C(0.3, 0.26, 0.24, 0.0, 2.0); C(0.3, 0.73, 0.27, 0.0, 2.0); break;
+    case 57: C(0.3, 0.3, 0.3, 0.0, 2.0); S(0.58, 0.34, 0.2, 1.0); break;
+    case 65: S(0.0, 1.0, 0.36, 0.0); S(0.36, 0.0, 0.72, 1.0); S(0.15, 0.64, 0.57, 0.64); break;
+    case 66: S(0.0, 0.0, 0.0, 1.0); S(0.0, 0.0, 0.34, 0.0); C(0.34, 0.24, 0.24, -0.5, 0.5); S(0.0, 0.48, 0.38, 0.48); C(0.38, 0.74, 0.26, -0.5, 0.5); S(0.0, 1.0, 0.38, 1.0); break;
+    case 67: S(0.0, 0.3, 0.0, 0.7); C(0.3, 0.3, 0.3, 1.0, 1.8); C(0.3, 0.7, 0.3, 0.2, 1.0); break;
+    case 68: S(0.0, 0.0, 0.0, 1.0); S(0.0, 0.0, 0.28, 0.0); C(0.28, 0.32, 0.32, -0.5, 0.0); S(0.6, 0.32, 0.6, 0.68); C(0.28, 0.68, 0.32, 0.0, 0.5); S(0.28, 1.0, 0.0, 1.0); break;
+    case 69: S(0.0, 0.0, 0.0, 1.0); S(0.0, 0.0, 0.55, 0.0); S(0.0, 0.5, 0.45, 0.5); S(0.0, 1.0, 0.55, 1.0); break;
+    case 70: S(0.0, 0.0, 0.0, 1.0); S(0.0, 0.0, 0.55, 0.0); S(0.0, 0.5, 0.45, 0.5); break;
+    case 71: S(0.0, 0.3, 0.0, 0.7); C(0.3, 0.3, 0.3, 1.0, 1.8); C(0.3, 0.7, 0.3, 0.0, 1.0); S(0.6, 0.55, 0.6, 0.7); S(0.32, 0.55, 0.6, 0.55); break;
+    case 72: S(0.0, 0.0, 0.0, 1.0); S(0.6, 0.0, 0.6, 1.0); S(0.0, 0.5, 0.6, 0.5); break;
+    case 73: S(0.15, 0.0, 0.15, 1.0); S(0.0, 0.0, 0.3, 0.0); S(0.0, 1.0, 0.3, 1.0); break;
+    case 74: S(0.5, 0.0, 0.5, 0.75); C(0.25, 0.75, 0.25, 0.0, 1.0); break;
+    case 75: S(0.0, 0.0, 0.0, 1.0); S(0.6, 0.0, 0.0, 0.58); S(0.2, 0.4, 0.6, 1.0); break;
+    case 76: S(0.0, 0.0, 0.0, 1.0); S(0.0, 1.0, 0.55, 1.0); break;
+    case 77: S(0.0, 1.0, 0.0, 0.0); S(0.0, 0.0, 0.35, 0.6); S(0.35, 0.6, 0.7, 0.0); S(0.7, 0.0, 0.7, 1.0); break;
+    case 78: S(0.0, 1.0, 0.0, 0.0); S(0.0, 0.0, 0.6, 1.0); S(0.6, 1.0, 0.6, 0.0); break;
+    case 79: S(0.0, 0.3, 0.0, 0.7); S(0.6, 0.3, 0.6, 0.7); C(0.3, 0.3, 0.3, 1.0, 2.0); C(0.3, 0.7, 0.3, 0.0, 1.0); break;
+    case 80: S(0.0, 0.0, 0.0, 1.0); S(0.0, 0.0, 0.32, 0.0); C(0.32, 0.26, 0.26, -0.5, 0.5); S(0.32, 0.52, 0.0, 0.52); break;
+    case 81: S(0.0, 0.3, 0.0, 0.7); S(0.6, 0.3, 0.6, 0.7); C(0.3, 0.3, 0.3, 1.0, 2.0); C(0.3, 0.7, 0.3, 0.0, 1.0); S(0.36, 0.72, 0.66, 1.0); break;
+    case 82: S(0.0, 0.0, 0.0, 1.0); S(0.0, 0.0, 0.32, 0.0); C(0.32, 0.26, 0.26, -0.5, 0.5); S(0.0, 0.52, 0.32, 0.52); S(0.26, 0.52, 0.62, 1.0); break;
+    case 83: C(0.31, 0.26, 0.26, 0.5, 1.85); C(0.31, 0.74, 0.26, -0.5, 0.85); break;
+    case 84: S(0.0, 0.0, 0.64, 0.0); S(0.32, 0.0, 0.32, 1.0); break;
+    case 85: S(0.0, 0.0, 0.0, 0.7); C(0.3, 0.7, 0.3, 0.0, 1.0); S(0.6, 0.7, 0.6, 0.0); break;
+    case 86: S(0.0, 0.0, 0.32, 1.0); S(0.32, 1.0, 0.64, 0.0); break;
+    case 87: S(0.0, 0.0, 0.2, 1.0); S(0.2, 1.0, 0.4, 0.35); S(0.4, 0.35, 0.6, 1.0); S(0.6, 1.0, 0.8, 0.0); break;
+    case 88: S(0.0, 0.0, 0.64, 1.0); S(0.64, 0.0, 0.0, 1.0); break;
+    case 89: S(0.0, 0.0, 0.32, 0.52); S(0.64, 0.0, 0.32, 0.52); S(0.32, 0.52, 0.32, 1.0); break;
+    case 90: S(0.0, 0.0, 0.6, 0.0); S(0.6, 0.0, 0.0, 1.0); S(0.0, 1.0, 0.6, 1.0); break;
+    default: break;
+    }
+    return d;
+}
+
+float char_width(int c) {
+    if (c >= 1 && c <= 2) return 0.6;
+    if (c >= 3 && c <= 4) return 0.8;
+    if (c == 49) return 0.4;
+    if (c == 73) return 0.3;
+    if (c == 74) return 0.5;
+    if (c == 65 || c == 81 || c == 88 || c == 89 || c == 84 || c == 86) return 0.68;
+    if (c == 77 || c == 87) return 0.75;
+    if (c == 69 || c == 70 || c == 76) return 0.55;
+    return 0.6;
+}
+
+// Character j of label i.
+int label_char(int i, int j) {
+    int b = i * 6 + j;
+    return int((text[b >> 2] >> ((b & 3) * 8)) & 0xffu);
+}
+
+int label_length(int i) {
+    int n = 0;
+    while (n < 6 && label_char(i, n) != 0) {
+        ++n;
+    }
+    return n;
+}
+
+// Distance to label i centred at `centre`: cell height h at most, `max_width` wide at most.
+float text_label(vec2 p, int i, vec2 centre, float h, float max_width) {
+    int n = label_length(i);
+    if (n == 0) {
+        return 1e9;
+    }
+    float gap = 0.2;
+    float total = -gap;
+    for (int j = 0; j < n; ++j) {
+        total += char_width(label_char(i, j)) + gap;
+    }
+    h = min(h, max_width / total);
+    vec2 origin = centre - vec2(0.5 * total, 0.5) * h;
+    float d = 1e9;
+    float x = 0.0;
+    for (int j = 0; j < n; ++j) {
+        int c = label_char(i, j);
+        d = min(d, character(c, (p - origin) / h - vec2(x, 0.0)) * h);
+        x += char_width(c) + gap;
+    }
+    return d - h * 0.11;
+}
+
+// Xbox-style labels of one or two letters.
+float xbox_label(vec2 p, int c0, int c1, float h, float w) {
+    float gap = 0.22;
+    float w0 = char_width(c0);
+    float total = c1 == 0 ? w0 : w0 + gap + char_width(c1);
+    vec2 origin = vec2(-0.5 * total * h, -0.5 * h);
+    float d = character(c0, (p - origin) / h) * h;
+    if (c1 != 0) {
+        d = min(d, character(c1, (p - origin) / h - vec2(w0 + gap, 0.0)) * h);
+    }
+    return d - w;
+}
+
+// --- Shapes: signed distances (negative inside) of the black base, the white symbol, the grey
+// parts and the black ink drawn over white (labels on lit keys). ---
+struct Shape {
+    float base;
+    float white;
+    float grey;
+    float ink;
+};
+
+Shape xbox_icon(vec2 p, int icon) {
+    Shape s = Shape(length(p) - 0.94, 1e9, 1e9, 1e9);
+    p *= 1.25;
+    switch (icon) {
+    case A: s.white = xbox_label(p, 65, 0, 1.0, 0.1); return s;
+    case B: s.white = xbox_label(p, 66, 0, 1.0, 0.1); return s;
+    case X: s.white = xbox_label(p, 88, 0, 1.0, 0.1); return s;
+    case Y: s.white = xbox_label(p, 89, 0, 1.0, 0.1); return s;
+    case LB: s.white = xbox_label(p, 76, 66, 0.62, 0.078); return s;
+    case RB: s.white = xbox_label(p, 82, 66, 0.62, 0.078); return s;
+    case LT: s.white = xbox_label(p, 76, 84, 0.62, 0.078); return s;
+    case RT: s.white = xbox_label(p, 82, 84, 0.62, 0.078); return s;
+    case LS: s.white = xbox_label(p, 76, 83, 0.62, 0.078); return s;
+    case RS: s.white = xbox_label(p, 82, 83, 0.62, 0.078); return s;
     case MENU: {
         float d = seg(p, vec2(-0.38, -0.28), vec2(0.38, -0.28));
         d = min(d, seg(p, vec2(-0.38, 0.0), vec2(0.38, 0.0)));
         d = min(d, seg(p, vec2(-0.38, 0.28), vec2(0.38, 0.28)));
-        return d - 0.075;
+        s.white = d - 0.075;
+        return s;
     }
     case VIEW: {
         // Two overlapping windows: the back one as an outline, the front one filled.
         float back = abs(box(p - vec2(-0.13, -0.13), vec2(0.3, 0.24), 0.06)) - 0.05;
         float front = box(p - vec2(0.13, 0.13), vec2(0.3, 0.24), 0.06);
-        return min(max(back, -(front - 0.08)), front);
+        s.white = min(max(back, -(front - 0.08)), front);
+        return s;
     }
     case SHARE: {
         // A tray and an arrow out of it.
@@ -134,64 +212,351 @@ float symbol(vec2 p, out float grey) {
         d = min(d, seg(p, vec2(0.0, 0.2), vec2(0.0, -0.45)));
         d = min(d, seg(p, vec2(0.0, -0.45), vec2(-0.22, -0.23)));
         d = min(d, seg(p, vec2(0.0, -0.45), vec2(0.22, -0.23)));
-        return d - 0.07;
+        s.white = d - 0.07;
+        return s;
     }
     default:
         break;
     }
-    if (glyph >= DPAD_UP && glyph <= DPAD_UD) {
+    if (icon >= DPAD_UP && icon <= DPAD_UD) {
         float arm = 0.2;
         float body = min(box(p, vec2(arm, 0.66), 0.07), box(p, vec2(0.66, arm), 0.07));
-        grey = body;
-        bool up = glyph == DPAD_UP || glyph == DPAD_UD;
-        bool down = glyph == DPAD_DOWN || glyph == DPAD_UD;
-        bool left = glyph == DPAD_LEFT || glyph == DPAD_LR;
-        bool right = glyph == DPAD_RIGHT || glyph == DPAD_LR;
-        float lit = 1e9;
-        if (up) lit = min(lit, max(body, p.y + arm + 0.04));
-        if (down) lit = min(lit, max(body, -p.y + arm + 0.04));
-        if (left) lit = min(lit, max(body, p.x + arm + 0.04));
-        if (right) lit = min(lit, max(body, -p.x + arm + 0.04));
-        return lit;
+        s.grey = body;
+        if (icon == DPAD_UP || icon == DPAD_UD) s.white = min(s.white, max(body, p.y + arm + 0.04));
+        if (icon == DPAD_DOWN || icon == DPAD_UD) s.white = min(s.white, max(body, -p.y + arm + 0.04));
+        if (icon == DPAD_LEFT || icon == DPAD_LR) s.white = min(s.white, max(body, p.x + arm + 0.04));
+        if (icon == DPAD_RIGHT || icon == DPAD_LR) s.white = min(s.white, max(body, -p.x + arm + 0.04));
+        return s;
     }
     // Sticks: a ring and the letter; the wiggle frames move the stick left and right.
-    bool left_stick = glyph == STICK_L || (glyph >= WIGGLE_L && glyph < WIGGLE_R);
-    vec2 q = p;
-    if (glyph >= WIGGLE_L) {
-        int frame = (glyph - WIGGLE_L) % 4;
-        q.x -= frame == 0 ? -0.26 : frame == 2 ? 0.26 : 0.0;
+    bool left_stick = icon == STICK_L || (icon >= WIGGLE_L && icon < WIGGLE_R);
+    if (icon >= WIGGLE_L) {
+        int frame = (icon - WIGGLE_L) % 4;
+        p.x -= frame == 0 ? -0.26 : frame == 2 ? 0.26 : 0.0;
     }
-    float ring = abs(length(q) - 0.6) - 0.055;
-    return min(ring, label(q, left_stick ? 76 : 82, 0, 0.62, 0.075));
+    float ring = abs(length(p) - 0.6) - 0.055;
+    s.white = min(ring, xbox_label(p, left_stick ? 76 : 82, 0, 0.62, 0.075));
+    return s;
+}
+
+// A key: a black keycap with its label.
+Shape key_icon(vec2 p) {
+    Shape s = Shape(box(p, vec2(0.86), 0.24), 1e9, 1e9, 1e9);
+    s.grey = abs(box(p, vec2(0.78), 0.18)) - 0.025; // the cap's top edge
+    s.white = text_label(p, 0, vec2(0.0), 0.62, 1.3);
+    return s;
+}
+
+// The mouse: body outline and buttons (1 left, 2 middle, 3 right).
+float mouse_outline(vec2 p) {
+    float body = abs(box(p - vec2(0.0, 0.05), vec2(0.36, 0.56), 0.34)) - 0.05;
+    float split = min(seg(p, vec2(0.0, -0.51), vec2(0.0, -0.1)),
+                      seg(p, vec2(-0.33, -0.1), vec2(0.33, -0.1))) - 0.04;
+    return min(body, split);
+}
+float mouse_button(vec2 p, int button) {
+    float inside = box(p - vec2(0.0, 0.05), vec2(0.36, 0.56), 0.34);
+    if (button == 1) return max(max(inside, p.y + 0.1), p.x);
+    if (button == 3) return max(max(inside, p.y + 0.1), -p.x);
+    if (button == 2) return seg(p, vec2(0.0, -0.4), vec2(0.0, -0.22)) - 0.08;
+    return 1e9;
+}
+
+Shape mouse_icon(vec2 p, int button) {
+    Shape s = Shape(length(p) - 0.94, 1e9, 1e9, 1e9);
+    p *= 1.15;
+    s.white = min(mouse_outline(p), mouse_button(p, button));
+    // The split stays visible across a lit button.
+    if (button == 1 || button == 3) {
+        s.ink = min(seg(p, vec2(0.0, -0.51), vec2(0.0, -0.1)), seg(p, vec2(-0.33, -0.1), vec2(0.33, -0.1))) - 0.03;
+    }
+    return s;
+}
+
+// The mouse moving left and right (the camera); lit: 1 the left arrow, 2 the right one, 0 both.
+Shape mouse_move_icon(vec2 p, int lit) {
+    Shape s = Shape(length(p) - 0.94, 1e9, 1e9, 1e9);
+    s.white = mouse_outline(p * 1.7) / 1.7;
+    for (int side = 0; side < 2; ++side) {
+        float x = side == 0 ? -1.0 : 1.0;
+        vec2 tip = vec2(0.8 * x, 0.0);
+        float arrow = min(seg(p, tip, tip + vec2(-0.2 * x, -0.2)), seg(p, tip, tip + vec2(-0.2 * x, 0.2)));
+        arrow = min(arrow, seg(p, tip, vec2(0.48 * x, 0.0)));
+        if (lit == 0 || lit == side + 1) {
+            s.white = min(s.white, arrow - 0.055);
+        } else {
+            s.grey = min(s.grey, arrow - 0.045);
+        }
+    }
+    return s;
+}
+
+// Four keys as on a keyboard (labels 0..3: up, left, down, right); lit: bit 0 up, 1 left,
+// 2 down, 3 right.
+Shape keys_icon(vec2 p, int lit) {
+    Shape s = Shape(box(p, vec2(0.96, 0.72), 0.2), 1e9, 1e9, 1e9);
+    vec2 centres[4] = vec2[4](vec2(0.0, -0.32), vec2(-0.6, 0.32), vec2(0.0, 0.32), vec2(0.6, 0.32));
+    for (int i = 0; i < 4; ++i) {
+        float cap = box(p - centres[i], vec2(0.26), 0.08);
+        float label = text_label(p, i, centres[i], 0.3, 0.38);
+        if (((lit >> i) & 1) != 0) {
+            s.white = min(s.white, cap);
+            s.ink = min(s.ink, label);
+        } else {
+            s.white = min(s.white, min(abs(cap) - 0.03, label));
+        }
+    }
+    return s;
+}
+
+// --- The controller diagram (textures/common/ui/_ps4/controller_image*): line art in the game's
+// 812x524 layout, scaled to the image. Sixteen callouts run from the label rows of the game's text
+// (left 0-7, right 8-15, 58 apart) to a dot on the device; drawn like the game's: callouts black,
+// 2 wide, the device dark grey, 1.3 wide. ---
+
+const float DIAGRAM_W = 812.0, DIAGRAM_H = 524.0;
+const float DIAGRAM_GREY = 35.0 / 255.0;
+const int DIAGRAM_XBOX = 1, DIAGRAM_KEYBOARD = 2;
+
+float smin(float a, float b, float k) {
+    float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+    return mix(b, a, h) - k * h * (1.0 - h);
+}
+
+// p in the frame of a shape at c turned by a (radians).
+vec2 turned(vec2 p, vec2 c, float a) {
+    vec2 d = p - c;
+    float cs = cos(a), sn = sin(a);
+    return vec2(cs * d.x + sn * d.y, -sn * d.x + cs * d.y);
+}
+
+// The game's callouts: dot, and the x of the knee where a second (vertical) run starts (0: one
+// 45 degree run from the row to the dot).
+const vec3 PS_CALLOUTS[16] = vec3[16](
+    vec3(406, 223, 0), vec3(203, 110, 0), vec3(183, 145, 0), vec3(211, 244, 0),
+    vec3(179, 271, 0), vec3(211, 300, 0), vec3(245, 271, 195), vec3(306, 364, 0),
+    vec3(533, 207, 606), vec3(609, 110, 0), vec3(629, 145, 0), vec3(617, 225, 0),
+    vec3(665, 277, 0), vec3(617, 318, 0), vec3(553, 287, 616), vec3(505, 364, 0));
+
+// The Xbox controller's dots by Xbox icon (A ... DPAD_RIGHT), each row's own button with its knee.
+const vec2 XBOX_DOTS[17] = vec2[17](
+    vec2(619, 329), vec2(668, 272), vec2(562, 290), vec2(619, 215),
+    vec2(165, 152), vec2(647, 152), vec2(182, 112), vec2(630, 112),
+    vec2(306, 355), vec2(506, 355), vec2(456, 203), vec2(356, 203), vec2(406, 234),
+    vec2(211, 246), vec2(211, 298), vec2(185, 272), vec2(237, 272));
+const int XBOX_ROW_BUTTON[16] = int[16](VIEW, LT, LB, DPAD_UP, DPAD_LEFT, DPAD_DOWN, DPAD_RIGHT, LS,
+                                        MENU, RT, RB, Y, B, A, X, RS);
+const float XBOX_ROW_KNEE[16] = float[16](271, 0, 0, 0, 0, 0, 187, 0, 541, 0, 0, 0, 0, 0, 620, 0);
+
+// Distance to the line of callout i ending at dot.
+float callout(vec2 p, int i, vec2 dot, float knee) {
+    bool left = i < 8;
+    float y = 45.0 + 58.0 * float(i & 7);
+    vec2 start = vec2(left ? 43.0 : 769.0, y);
+    vec2 bend = dot;
+    if (knee == 0.0) {
+        knee = dot.x + (left ? -1.0 : 1.0) * abs(dot.y - y);
+    } else {
+        bend = vec2(dot.x, y + sign(dot.y - y) * abs(knee - dot.x));
+    }
+    vec2 k = vec2(knee, y);
+    vec4 bounds = vec4(min(start.x, dot.x), min(y, dot.y), max(start.x, dot.x), max(y, dot.y));
+    if (any(lessThan(p, bounds.xy - 4.0)) || any(greaterThan(p, bounds.zw + 4.0))) {
+        return 1e9;
+    }
+    return min(min(seg(p, start, k), seg(p, k, bend)), seg(p, bend, dot));
+}
+
+// Byte i of the text (the diagram's per-callout bytes).
+int text_byte(int i) {
+    return int((text[i >> 2] >> ((i & 3) * 8)) & 0xffu);
+}
+
+// Ink of the Xbox controller: distance to its strokes (grey) and to its letters (grey, bolder).
+vec2 xbox_controller(vec2 p) {
+    if (p.x < 70.0 || p.x > 742.0 || p.y < 80.0 || p.y > 452.0) {
+        return vec2(1e9);
+    }
+    // Shapes symmetric about the middle are drawn in the left half.
+    vec2 q = vec2(406.0 - abs(p.x - 406.0), p.y);
+    float body = box(p - vec2(406.0, 270.0), vec2(258.0, 128.0), 95.0);
+    body = smin(body, seg(q, vec2(212.0, 262.0), vec2(148.0, 382.0)) - 64.0, 55.0);
+    // The arch between the grips.
+    body = -smin(-body, length(p - vec2(406.0, 520.0)) - 140.0, 30.0);
+    float bumper = box(turned(q, vec2(205.0, 140.0), -0.28), vec2(72.0, 15.0), 14.0);
+    float trigger = box(turned(q, vec2(194.0, 112.0), -0.17), vec2(42.0, 24.0), 18.0);
+    // Bumpers in front of the body, the body in front of the triggers.
+    float d = abs(bumper);
+    if (bumper > 0.0) {
+        d = min(d, abs(body));
+        if (body > 0.0) {
+            d = min(d, abs(trigger));
+        }
+    }
+    // Sticks: the well, the cap and its dished top.
+    float stick = length(q - vec2(306.0, 355.0));
+    d = min(d, min(abs(stick - 38.0), min(abs(stick - 27.0), abs(stick - 19.0))));
+    // D-pad in its dish.
+    vec2 c = p - vec2(211.0, 272.0);
+    d = min(d, abs(length(c) - 46.0));
+    d = min(d, abs(min(box(c, vec2(12.0, 34.0), 4.0), box(c, vec2(34.0, 12.0), 4.0))));
+    // Xbox (guide), View, Menu and Share buttons.
+    d = min(d, min(abs(length(p - vec2(406.0, 178.0)) - 20.0), abs(length(p - vec2(406.0, 178.0)) - 15.0)));
+    d = min(d, abs(length(q - vec2(356.0, 216.0)) - 13.0));
+    float back = abs(box(p - vec2(352.5, 213.0), vec2(4.5, 3.5), 1.0));
+    float front = box(p - vec2(359.5, 219.0), vec2(4.5, 3.5), 1.0);
+    d = min(d, min(abs(front), front < 0.0 ? 1e9 : back));
+    for (int i = -1; i <= 1; ++i) {
+        d = min(d, seg(p, vec2(450.0, 216.0 + 4.5 * float(i)), vec2(462.0, 216.0 + 4.5 * float(i))));
+    }
+    d = min(d, abs(box(p - vec2(406.0, 234.0), vec2(9.0, 5.0), 5.0)));
+    // Face buttons and the letters.
+    float letters = 1e9;
+    const vec2 face[4] = vec2[4](vec2(606.0, 316.0), vec2(650.0, 272.0), vec2(562.0, 272.0), vec2(606.0, 228.0));
+    const int names[4] = int[4](65, 66, 88, 89);
+    for (int i = 0; i < 4; ++i) {
+        d = min(d, abs(length(p - face[i]) - 18.0));
+        letters = min(letters, xbox_label(p - face[i], names[i], 0, 15.0, 0.0));
+    }
+    // Bumper and trigger names, along them.
+    letters = min(letters, xbox_label(turned(p, vec2(206.0, 104.0), -0.17), 76, 84, 11.0, 0.0));
+    letters = min(letters, xbox_label(turned(p, vec2(606.0, 104.0), 0.17), 82, 84, 11.0, 0.0));
+    letters = min(letters, xbox_label(turned(p, vec2(220.0, 136.0), -0.28), 76, 66, 11.0, 0.0));
+    letters = min(letters, xbox_label(turned(p, vec2(592.0, 136.0), 0.28), 82, 66, 11.0, 0.0));
+    return vec2(d, letters);
+}
+
+// Callout i's key or mouse button for the keyboard (label i; 17-19: mouse left, middle, right):
+// x the outline (grey), y the label or the lit button (black), z the inside (hides the line).
+vec3 keyboard_mark(vec2 p, int i, vec2 c) {
+    int first = label_char(i, 0);
+    if (first == 0 || abs(p.x - c.x) > 34.0 || abs(p.y - c.y) > 18.0) {
+        return vec3(1e9);
+    }
+    vec2 l = p - c;
+    if (first >= 17 && first <= 19) {
+        vec2 m = l / 24.0 - vec2(0.0, 0.05);
+        float body = box(m, vec2(0.36, 0.56), 0.34) * 24.0;
+        float split = min(seg(l, vec2(0.0, -12.0), vec2(0.0, -1.2)), seg(l, vec2(-8.6, -1.2), vec2(8.6, -1.2)));
+        float outline = min(abs(body), split);
+        float lit = 1e9;
+        if (first == 17 || first == 19) {
+            float half_side = first == 17 ? l.x : -l.x;
+            lit = max(max(body + 1.4, l.y + 2.6), half_side + 1.4);
+        } else {
+            lit = seg(l, vec2(0.0, -9.0), vec2(0.0, -5.0)) - 2.0;
+        }
+        return vec3(outline, lit, body);
+    }
+    int n = label_length(i);
+    float total = -0.2;
+    for (int j = 0; j < n; ++j) {
+        total += char_width(label_char(i, j)) + 0.2;
+    }
+    float half_width = max(11.0, 5.5 * total + 6.0);
+    float cap = box(l, vec2(half_width, 11.0), 4.0);
+    // text_label strokes are 0.11 h thick a side; these 0.85.
+    return vec3(abs(cap), text_label(p, i, c, 11.0, 2.0 * half_width - 8.0) + 0.36, cap);
+}
+
+// Grey (x) and black (y) ink of one sample of the diagram.
+bvec2 diagram_sample(vec2 p) {
+    int style = arg >> 16;
+    bool grey = false, black = false;
+    if (style == DIAGRAM_XBOX) {
+        vec2 art = xbox_controller(p);
+        grey = art.x < 0.65 || art.y < 0.95;
+    } else {
+        // Keys and mouse buttons at the game's dots; no callout runs inside them.
+        for (int i = 0; i < 16; ++i) {
+            if (((arg >> i) & 1) != 0) {
+                vec3 m = keyboard_mark(p, i, PS_CALLOUTS[i].xy);
+                grey = grey || m.x < 0.7;
+                black = black || m.y < 0.0;
+                if (m.z < 0.0) {
+                    return bvec2(grey && !black, black);
+                }
+            }
+        }
+    }
+    for (int i = 0; i < 16; ++i) {
+        if (((arg >> i) & 1) == 0) {
+            continue;
+        }
+        vec2 dot = PS_CALLOUTS[i].xy;
+        float knee = PS_CALLOUTS[i].z;
+        bool mark = style == DIAGRAM_KEYBOARD && label_char(i, 0) != 0;
+        if (style == DIAGRAM_XBOX) {
+            int button = text_byte(i);
+            dot = XBOX_DOTS[button];
+            knee = button == XBOX_ROW_BUTTON[i] ? XBOX_ROW_KNEE[i] : 0.0;
+        }
+        black = black || callout(p, i, dot, knee) < 1.0 || (!mark && length(p - dot) < 3.2);
+    }
+    return bvec2(grey && !black, black);
+}
+
+void draw_diagram(ivec2 pixel) {
+    ivec2 extent = ivec2(size, pad0);
+    if (pixel.x >= extent.x || pixel.y >= extent.y) {
+        return;
+    }
+    vec2 scale = vec2(DIAGRAM_W, DIAGRAM_H) / vec2(extent);
+    float grey = 0.0, black = 0.0;
+    for (int sy = 0; sy < 4; ++sy) {
+        for (int sx = 0; sx < 4; ++sx) {
+            bvec2 ink = diagram_sample((vec2(pixel) + (vec2(sx, sy) + 0.5) / 4.0) * scale);
+            grey += ink.x ? 1.0 : 0.0;
+            black += ink.y ? 1.0 : 0.0;
+        }
+    }
+    float cover = (grey + black) / 16.0;
+    float value = grey + black > 0.0 ? DIAGRAM_GREY * grey / (grey + black) : 0.0;
+    imageStore(dst, pixel, vec4(vec3(value), cover));
+}
+
+Shape icon(vec2 p) {
+    switch (kind) {
+    case KIND_KEY: return key_icon(p);
+    case KIND_MOUSE: return mouse_icon(p, arg);
+    case KIND_KEYS: return keys_icon(p, arg);
+    case KIND_MOUSE_MOVE: return mouse_move_icon(p, arg);
+    default: return xbox_icon(p, arg);
+    }
 }
 
 void main() {
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    if (kind == KIND_DIAGRAM) {
+        draw_diagram(pixel);
+        return;
+    }
     if (pixel.x >= size || pixel.y >= size) {
         return;
     }
     // 4x4 samples per pixel: the small mips stay clean.
     float px = 2.0 / float(size);
-    float disc = 0.0, white = 0.0, grey_cover = 0.0;
+    float base = 0.0, white = 0.0, grey = 0.0;
     for (int sy = 0; sy < 4; ++sy) {
         for (int sx = 0; sx < 4; ++sx) {
             vec2 p = (vec2(pixel) + (vec2(sx, sy) + 0.5) / 4.0) * px - 1.0;
-            float r = length(p);
-            disc += r < 0.94 ? 1.0 : 0.0;
-            float grey;
-            float d = symbol(p * 1.25, grey);
-            white += d < 0.0 && r < 0.94 ? 1.0 : 0.0;
-            grey_cover += grey < 0.0 && r < 0.94 ? 1.0 : 0.0;
+            Shape s = icon(p);
+            bool inside = s.base < 0.0;
+            bool w = inside && s.white < 0.0;
+            base += inside ? 1.0 : 0.0;
+            white += w && !(s.ink < 0.0) ? 1.0 : 0.0;
+            grey += inside && !w && s.grey < 0.0 ? 1.0 : 0.0;
         }
     }
-    disc /= 16.0;
+    base /= 16.0;
     white /= 16.0;
-    grey_cover /= 16.0;
-    // A faint rim keeps the disc visible on dark backgrounds.
+    grey /= 16.0;
+    float cover = max(base, 1e-4);
+    // A faint rim keeps the round icons visible on dark backgrounds.
     vec2 centre = (vec2(pixel) + 0.5) * px - 1.0;
-    float rim = smoothstep(0.86, 0.93, length(centre)) * 0.22;
-    float value = max(rim, 0.0);
-    value = mix(value, 0.38, grey_cover / max(disc, 1e-4)); // d-pad body (sRGB-encoded grey)
-    value = mix(value, 1.0, white / max(disc, 1e-4));
-    imageStore(dst, pixel, vec4(vec3(clamp(value, 0.0, 1.0)), disc));
+    bool keycap = kind == KIND_KEY || kind == KIND_KEYS;
+    float value = keycap ? 0.0 : smoothstep(0.86, 0.93, length(centre)) * 0.22;
+    value = mix(value, 0.38, grey / cover); // grey parts (sRGB-encoded)
+    value = mix(value, 1.0, white / cover);
+    imageStore(dst, pixel, vec4(vec3(clamp(value, 0.0, 1.0)), base));
 }

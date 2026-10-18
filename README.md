@@ -38,7 +38,7 @@ de que o jogo precisa, no estilo do [bloodborne_pc](https://github.com/Supermedo
 
 | Versão | Melhorias e correções |
 |---|---|
-| **1.0.0** | **Primeiro release do fork:** **controle Xbox completo** (ícones do Xbox nítidos desenhados por shader, troca na hora ao conectar ou usar outro controle, vibração igual à do PS4), instalador e zip, compilação com um comando (`build.cmd`), som com a biblioteca própria do port, tudo da 0.57-opt6 e 0.57-opt7. |
+| **1.0.0** | **Primeiro release do fork:** **controle Xbox completo** (ícones do Xbox, ou das teclas e do mouse, nítidos e desenhados por shader, também no esquema de Controles, troca na hora ao conectar ou usar outro dispositivo, vibração igual à do PS4), instalador e zip, compilação com um comando (`build.cmd`), som com a biblioteca própria do port, tudo da 0.57-opt6 e 0.57-opt7. |
 | **0.57-opt7** | **Menos CPU por quadro para i5/GTX 1050:** o processador de comandos não gira mais esperando (−20% do tempo dele no santuário), o thread de desenho reaproveita os render targets e não repete push descriptors iguais, o mixer de som gasta menos no reverb; o launcher escolhe 810p numa GTX 1050 e 900p numa 1050 Ti. |
 | **0.57-opt6** | **PCs de 4 núcleos e placas fracas:** os workers do jogo não tomam mais os núcleos do render (7 → 3,5 núcleos ocupados no santuário), barycentrics via geometry shader passthrough (GTX 10: −14% de GPU), resolução de render 900/810/720p, shaders compilados uma vez a partir de um pacote, o launcher desempacota dumps .pkg (jogo, atualização e todas as DLC). |
 | **0.57-opt5** | **Sessões longas estáveis:** memória de buffers sem uso devolvida à GPU (30 minutos de demo: pico 3,4 GB estável, antes 4,3–4,4 GB e subindo). **Mundo aberto ~2% mais rápido** (envio antecipado). **Correção de queda rara** ao carregar o save ("write-only"). |
@@ -97,7 +97,7 @@ normalmente, a 30 FPS.
   modo PS4 Pro (o jogo oferece Cinematográfico/Desempenho no próprio menu), efeitos (vinheta,
   névoa, SSAO) e opções de desempenho.
 - **Controles:** controle (DualShock 4, DualSense, Xbox) automático, com os ícones dos botões do
-  controle em uso e vibração; câmera no mouse;
+  dispositivo em uso (também as teclas e o mouse) e vibração; câmera no mouse;
   **troca de teclas** clicando na ação e apertando a tecla nova.
 - **Avançado:** cvars do motor Bluepoint, diagnóstico, atalho na área de trabalho (com o ícone
   do seu jogo). O registro de cada sessão fica em `user/last_run.log`.
@@ -139,7 +139,7 @@ game needs, in the style of [bloodborne_pc](https://github.com/Supermedo/bloodbo
 
 | Version | Improvements and fixes |
 |---|---|
-| **1.0.0** | **First release of the fork:** **full Xbox controller support** (sharp shader-drawn Xbox button icons, switching as soon as another controller is connected or used, PS4-accurate rumble), installer and zip, one-command build (`build.cmd`), sound through the port's own library, everything from 0.57-opt6 and 0.57-opt7. |
+| **1.0.0** | **First release of the fork:** **full Xbox controller support** (sharp shader-drawn Xbox, or key and mouse, button icons, the Controls diagram included, switching as soon as another device is connected or used, PS4-accurate rumble), installer and zip, one-command build (`build.cmd`), sound through the port's own library, everything from 0.57-opt6 and 0.57-opt7. |
 | **0.57-opt7** | **Less CPU per frame for i5/GTX 1050:** the command processor no longer spins while it waits (−20% of its time at the shrine), the draw thread keeps its render targets and drops repeated push descriptors, the sound mixer spends less on reverb; the launcher picks 810p on a GTX 1050 and 900p on a 1050 Ti. |
 | **0.57-opt6** | **4-core PCs and weak cards:** the game's workers no longer take the render cores (7 → 3.5 cores busy at the shrine), barycentrics through a passthrough geometry shader (GTX 10: −14% GPU), 900/810/720p render resolution, shaders built once from a pack, the launcher unpacks .pkg dumps (game, update and every DLC). |
 | **0.57-opt5** | **Stable long sessions:** unused buffer memory is given back to the GPU (30-minute demo: peak 3.4 GB and flat, before 4.3–4.4 GB and rising). **Open world ~2% faster** (early submit). **Fix for a rare crash** while loading the save ("write-only"). |
@@ -187,7 +187,7 @@ The patch modes (60 FPS, 16x filtering) only apply to EU 1.01; other versions ru
 
 Game library and automatic search, `.pkg` unpacking, shadPS4 save import, 720p–1080p render
 resolution (automatic on weak cards), 720p–4K output (FSR 1 + RCAS), PS4 Pro mode, 60 FPS and 16x AF modes, controller support
-(DualShock 4, DualSense, Xbox; the game shows the buttons of the controller in use) with rumble and mouse camera, key remapping, Bluepoint engine cvars, desktop
+(DualShock 4, DualSense, Xbox; the game shows the buttons of the device in use, keys and mouse included) with rumble and mouse camera, key remapping, Bluepoint engine cvars, desktop
 shortcut and a session log in `user/last_run.log`.
 
 In 60 FPS mode the title-screen attract demo averages ~67 FPS on an RTX 2060 SUPER, with

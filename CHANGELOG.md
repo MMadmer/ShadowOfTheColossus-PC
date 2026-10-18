@@ -3,14 +3,17 @@
 ## 1.0.0 — 2026-10-18 (fork MMadmer)
 Primeiro release do fork [MMadmer/ShadowOfTheColossus-PC](https://github.com/MMadmer/ShadowOfTheColossus-PC),
 com tudo da 0.57-opt6 e 0.57-opt7.
-- **Controle Xbox completo:** com um controle Xbox (ou genérico) em uso, o jogo mostra os botões do
-  Xbox (A/B/X/Y, LB/RB, LT/RT, LS/RS, Menu, View, direcional) no lugar dos do PlayStation: brancos
-  num círculo preto, desenhados por um shader na partida (com a montagem dos shaders) e bem mais
-  finos que os do jogo, nítidos em qualquer resolução. As texturas de ícone do jogo são
-  reconhecidas pelo conteúdo quando sobem para a GPU e a troca é feita no bind; a memória e os
-  arquivos do jogo não mudam. A troca é na hora: conectar ou usar um controle passa para os
-  ícones dele, teclado e mouse voltam aos do PlayStation (`SOTC_PAD_GLYPHS=xbox|ps` fixa; opção
-  **Ícones dos botões** em Controles).
+- **Controle Xbox completo e os botões do dispositivo em uso:** com um controle Xbox (ou
+  genérico), o jogo mostra os botões do Xbox (A/B/X/Y, LB/RB, LT/RT, LS/RS, Menu, View, direcional),
+  brancos num círculo preto; no teclado e mouse, as teclas e os botões do mouse configurados, no
+  mesmo estilo (o direcional e o analógico esquerdo como as quatro teclas, com a da direção acesa;
+  a câmera como o mouse); com DualShock ou DualSense, os do jogo. O esquema de Opções > Controles
+  vira um controle Xbox, ou as teclas e o mouse de cada linha. Tudo é desenhado por um shader na
+  partida (com a montagem dos shaders), bem mais fino que o do jogo e nítido em qualquer
+  resolução. As texturas do jogo são reconhecidas pelo conteúdo quando sobem para a GPU e a troca
+  é feita no bind; a memória e os arquivos do jogo não mudam. A troca é na hora: conectar,
+  desconectar ou usar outro dispositivo troca os botões mostrados e o controle
+  (`SOTC_PAD_GLYPHS=xbox|ps|keyboard` fixa; opção **Ícones dos botões** em Controles).
 - **Vibração** igual à do PS4 em qualquer controle: o valor que o jogo pede fica até ele mudar
   (antes acabava em 1 s) e passa para um controle conectado no meio.
 - **Instalador e zip:** `SotC-PC-Setup-<versão>.exe` instala para o usuário (sem administrador),
