@@ -31,6 +31,26 @@ void AddMotion(std::atomic<float>& total, float delta) {
     while (!total.compare_exchange_weak(old, old + delta, std::memory_order_relaxed)) {
     }
 }
+
+// sotc: SOTC_WINDOW_MODE: windowed, borderless (a borderless window over the monitor at its own
+// resolution) or fullscreen (exclusive: the monitor switches to the window's size, the output
+// resolution). Without it BB_FULLSCREEN=1 is borderless, as before.
+enum class WindowMode { Windowed, Borderless, Fullscreen };
+WindowMode RequestedWindowMode() {
+    if (const char* v = std::getenv("SOTC_WINDOW_MODE")) {
+        if (!std::strcmp(v, "fullscreen")) {
+            return WindowMode::Fullscreen;
+        }
+        if (!std::strcmp(v, "borderless")) {
+            return WindowMode::Borderless;
+        }
+        if (!std::strcmp(v, "windowed")) {
+            return WindowMode::Windowed;
+        }
+    }
+    const char* fullscreen = std::getenv("BB_FULLSCREEN");
+    return fullscreen && fullscreen[0] == '1' ? WindowMode::Borderless : WindowMode::Windowed;
+}
 } // namespace
 
 WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}, height{height_} {
@@ -48,12 +68,25 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
     SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_HEIGHT_NUMBER, height_);
     SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_RESIZABLE_BOOLEAN, true);
     SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_VULKAN_BOOLEAN, true);
-    const char* fullscreen = std::getenv("BB_FULLSCREEN");
-    SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_FULLSCREEN_BOOLEAN, fullscreen && fullscreen[0] == '1');
+    const WindowMode mode = RequestedWindowMode();
+    SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_FULLSCREEN_BOOLEAN, mode == WindowMode::Borderless);
     base_title = title;
     window = SDL_CreateWindowWithProperties(props);
     SDL_DestroyProperties(props);
     ASSERT_MSG(window, "Failed to create window: {}", SDL_GetError());
+    if (mode == WindowMode::Fullscreen) {
+        // The display mode nearest the output resolution at the desktop's refresh rate.
+        SDL_DisplayMode display_mode{};
+        if (SDL_GetClosestFullscreenDisplayMode(SDL_GetDisplayForWindow(window), width_, height_, 0.0f, false,
+                                                &display_mode)) {
+            SDL_SetWindowFullscreenMode(window, &display_mode);
+        } else {
+            LOG_WARNING(Frontend, "No {}x{} display mode ({}): fullscreen at the desktop's", width_, height_,
+                        SDL_GetError());
+        }
+        SDL_SetWindowFullscreen(window, true);
+        SDL_SyncWindow(window);
+    }
 
     const char* driver = SDL_GetCurrentVideoDriver();
     const SDL_PropertiesID wp = SDL_GetWindowProperties(window);
@@ -78,7 +111,8 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
     SDL_GetWindowSizeInPixels(window, &w, &h);
     width = w;
     height = h;
-    LOG_INFO(Frontend, "Window {}x{} on {}", w, h, driver);
+    static constexpr const char* mode_names[] = {"windowed", "borderless fullscreen", "fullscreen"};
+    LOG_INFO(Frontend, "Window {}x{} on {}, {}", w, h, driver, mode_names[static_cast<int>(mode)]);
 }
 
 WindowSDL::~WindowSDL() {
