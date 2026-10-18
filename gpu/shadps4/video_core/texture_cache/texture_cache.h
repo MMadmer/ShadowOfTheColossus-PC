@@ -22,6 +22,7 @@
 #include "video_core/texture_cache/image.h"
 #include "video_core/texture_cache/image_view.h"
 #include "video_core/texture_cache/sampler.h"
+#include "video_core/texture_cache/sotc_pad_glyphs.h"
 #include "video_core/texture_cache/tile_manager.h"
 
 namespace AmdGpu {
@@ -636,6 +637,7 @@ private:
     PageManager& tracker;
     BlitHelper blit_helper;
     TileManager tile_manager;
+    PadGlyphs pad_glyphs; // sotc: Xbox button icons (sotc_pad_glyphs.h)
     Common::SlotVector<Image> slot_images;
     Common::SlotVector<ImageView> slot_image_views;
     tsl::robin_map<u64, Sampler> samplers;
@@ -689,6 +691,15 @@ public:
     /// sotc: bumped by every image (un)registration.
     [[nodiscard]] u64 ImageSetGeneration() const noexcept {
         return image_set_generation;
+    }
+    /// sotc: the Xbox button icons (BindTextures samples them for the marked images).
+    [[nodiscard]] const PadGlyphs& PadGlyphIcons() const noexcept {
+        return pad_glyphs;
+    }
+    /// sotc: the icons changed: binds kept by the reuse (and memos) are made again.
+    void BumpImageSetGeneration() {
+        std::scoped_lock lk{mutex};
+        ++image_set_generation;
     }
 
 private:

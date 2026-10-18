@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.0.0 — 2026-10-18 (fork MMadmer)
+Primeiro release do fork [MMadmer/ShadowOfTheColossus-PC](https://github.com/MMadmer/ShadowOfTheColossus-PC),
+com tudo da 0.57-opt6 e 0.57-opt7.
+- **Controle Xbox completo:** com um controle Xbox (ou genérico) em uso, o jogo mostra os botões do
+  Xbox (A/B/X/Y, LB/RB, LT/RT, LS/RS, Menu, View, direcional) no lugar dos do PlayStation: brancos
+  num círculo preto, desenhados por um shader na partida (com a montagem dos shaders) e bem mais
+  finos que os do jogo, nítidos em qualquer resolução. As texturas de ícone do jogo são
+  reconhecidas pelo conteúdo quando sobem para a GPU e a troca é feita no bind; a memória e os
+  arquivos do jogo não mudam. A troca é na hora: conectar ou usar um controle passa para os
+  ícones dele, teclado e mouse voltam aos do PlayStation (`SOTC_PAD_GLYPHS=xbox|ps` fixa; opção
+  **Ícones dos botões** em Controles).
+- **Vibração** igual à do PS4 em qualquer controle: o valor que o jogo pede fica até ele mudar
+  (antes acabava em 1 s) e passa para um controle conectado no meio.
+- **Instalador e zip:** `SotC-PC-Setup-<versão>.exe` instala para o usuário (sem administrador),
+  com atalhos e desinstalador que mantém saves e configurações; o zip é a mesma pasta, portátil.
+- **Compilar com um comando:** `build.cmd` baixa um MSYS2 próprio em `.deps`, instala os pacotes,
+  os submódulos e o PkgTool, compila e abre o lançador; `build.cmd -Package` gera o zip e o
+  instalador. Banco de testes em `tools/bench`.
+- O som usa a biblioteca própria do port; os módulos de som do console são opcionais.
+- Guia em russo: `docs/README_RU.md` (vai no pacote como `README_RU.md`).
+
 ## 0.57-opt7 — 2026-10-18
 - **Processador de comandos sem espera ativa:** quando todos os pacotes esperam (WAIT_REG_MEM,
   semáforos, contadores CE/DE), ele girava a 100% (relógio e lock a cada volta: um terço do seu

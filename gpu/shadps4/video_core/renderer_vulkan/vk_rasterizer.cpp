@@ -696,6 +696,11 @@ bool Rasterizer::BindResources(const Pipeline* pipeline) {
         return false;
     }
 
+    // sotc: when the button icons change (PadGlyphs), the binds the reuse kept are made again.
+    if (const bool xbox = VideoCore::PadGlyphs::XboxActive(); xbox != pad_glyphs_xbox) {
+        pad_glyphs_xbox = xbox;
+        texture_cache.BumpImageSetGeneration();
+    }
     if (TryReuseBindings(pipeline)) {
         return true;
     }
@@ -1744,8 +1749,18 @@ void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
             image.usage.storage |= is_storage;
             image.usage.texture |= !is_storage;
 
-            image_infos.emplace_back(VK_NULL_HANDLE, *image_view.image_view,
-                                     image.backing->state.layout);
+            // sotc: the Xbox icon in place of the game's PlayStation one (PadGlyphs).
+            vk::ImageView view = *image_view.image_view;
+            vk::ImageLayout layout = image.backing->state.layout;
+            if (image.sotc_glyph && !is_storage && pad_glyphs_xbox) {
+                const bool array = image_view.info.type == AmdGpu::ImageType::Color2DArray;
+                if (const auto icon = texture_cache.PadGlyphIcons().IconView(
+                        image.sotc_glyph, image_view.info.format, array)) {
+                    view = icon;
+                    layout = vk::ImageLayout::eShaderReadOnlyOptimal;
+                }
+            }
+            image_infos.emplace_back(VK_NULL_HANDLE, view, layout);
             // sotc: the descriptor holds the layout the reuse transits back to.
             if (!bind_memo.images.empty() && bind_memo.images.back().id == image_id &&
                 image.backing->state.layout != bind_memo.images.back().layout) {

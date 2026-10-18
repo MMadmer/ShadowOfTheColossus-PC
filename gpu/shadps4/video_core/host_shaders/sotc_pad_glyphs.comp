@@ -1,0 +1,197 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// sotc: Xbox button icons in place of the game's PlayStation ones (video_core/texture_cache/
+// sotc_pad_glyphs.cpp): a white symbol on a black disc, drawn from distance functions, one
+// dispatch per mip level. The image is RGBA8 UNORM and holds sRGB-encoded values (it is sampled
+// through an sRGB view, like the game's textures); alpha is coverage.
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0, rgba8) uniform writeonly image2D dst;
+layout(push_constant) uniform Params {
+    int glyph;
+    int size;
+};
+
+// Glyph ids (sotc_pad_glyphs.h).
+const int A = 0, B = 1, X = 2, Y = 3, LB = 4, RB = 5, LT = 6, RT = 7, LS = 8, RS = 9;
+const int MENU = 10, VIEW = 11, SHARE = 12;
+const int DPAD_UP = 13, DPAD_DOWN = 14, DPAD_LEFT = 15, DPAD_RIGHT = 16, DPAD_LR = 17, DPAD_UD = 18;
+const int STICK_L = 19, STICK_R = 20, WIGGLE_L = 21, WIGGLE_R = 25;
+
+float seg(vec2 p, vec2 a, vec2 b) {
+    vec2 pa = p - a, ba = b - a;
+    float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+    return length(pa - ba * h);
+}
+
+// Arc of radius r around c from angle a0 to a1 (radians, a1 > a0, y down: 0 right, pi/2 down).
+float arc(vec2 p, vec2 c, float r, float a0, float a1) {
+    vec2 d = p - c;
+    float a = atan(d.y, d.x);
+    while (a < a0) {
+        a += 6.2831853;
+    }
+    if (a <= a1) {
+        return abs(length(d) - r);
+    }
+    vec2 e0 = c + r * vec2(cos(a0), sin(a0));
+    vec2 e1 = c + r * vec2(cos(a1), sin(a1));
+    return min(length(p - e0), length(p - e1));
+}
+
+const float PI = 3.14159265;
+
+// Distance to the centre line of a letter in a cell (u right, v down, 0..1 tall) and its width.
+float letter(int ch, vec2 q) {
+    float d = 1e9;
+    if (ch == 65) { // A
+        d = min(seg(q, vec2(0.0, 1.0), vec2(0.4, 0.0)), seg(q, vec2(0.4, 0.0), vec2(0.8, 1.0)));
+        d = min(d, seg(q, vec2(0.17, 0.64), vec2(0.63, 0.64)));
+    } else if (ch == 66) { // B
+        d = seg(q, vec2(0.0, 0.0), vec2(0.0, 1.0));
+        d = min(d, seg(q, vec2(0.0, 0.0), vec2(0.38, 0.0)));
+        d = min(d, arc(q, vec2(0.38, 0.24), 0.24, -0.5 * PI, 0.5 * PI));
+        d = min(d, seg(q, vec2(0.0, 0.48), vec2(0.42, 0.48)));
+        d = min(d, arc(q, vec2(0.42, 0.74), 0.26, -0.5 * PI, 0.5 * PI));
+        d = min(d, seg(q, vec2(0.0, 1.0), vec2(0.42, 1.0)));
+    } else if (ch == 88) { // X
+        d = min(seg(q, vec2(0.0, 0.0), vec2(0.76, 1.0)), seg(q, vec2(0.76, 0.0), vec2(0.0, 1.0)));
+    } else if (ch == 89) { // Y
+        d = min(seg(q, vec2(0.0, 0.0), vec2(0.38, 0.52)), seg(q, vec2(0.76, 0.0), vec2(0.38, 0.52)));
+        d = min(d, seg(q, vec2(0.38, 0.52), vec2(0.38, 1.0)));
+    } else if (ch == 76) { // L
+        d = min(seg(q, vec2(0.0, 0.0), vec2(0.0, 1.0)), seg(q, vec2(0.0, 1.0), vec2(0.6, 1.0)));
+    } else if (ch == 82) { // R
+        d = seg(q, vec2(0.0, 0.0), vec2(0.0, 1.0));
+        d = min(d, seg(q, vec2(0.0, 0.0), vec2(0.38, 0.0)));
+        d = min(d, arc(q, vec2(0.38, 0.26), 0.26, -0.5 * PI, 0.5 * PI));
+        d = min(d, seg(q, vec2(0.0, 0.52), vec2(0.38, 0.52)));
+        d = min(d, seg(q, vec2(0.3, 0.52), vec2(0.7, 1.0)));
+    } else if (ch == 83) { // S
+        d = arc(q, vec2(0.35, 0.26), 0.26, 0.5 * PI, 1.85 * PI);
+        d = min(d, arc(q, vec2(0.35, 0.74), 0.26, -0.5 * PI, 0.85 * PI));
+    } else if (ch == 84) { // T
+        d = min(seg(q, vec2(0.0, 0.0), vec2(0.76, 0.0)), seg(q, vec2(0.38, 0.0), vec2(0.38, 1.0)));
+    }
+    return d;
+}
+
+float letter_width(int ch) {
+    return ch == 65 ? 0.8 : ch == 66 ? 0.68 : ch == 88 || ch == 89 || ch == 84 ? 0.76 :
+           ch == 76 ? 0.6 : ch == 82 ? 0.7 : 0.62;
+}
+
+// Distance to a label of one or two letters centred at the origin, cell height h, stroke half
+// width w.
+float label(vec2 p, int c0, int c1, float h, float w) {
+    float gap = 0.22;
+    float w0 = letter_width(c0);
+    float total = c1 == 0 ? w0 : w0 + gap + letter_width(c1);
+    vec2 origin = vec2(-0.5 * total * h, -0.5 * h);
+    float d = letter(c0, (p - origin) / h) * h;
+    if (c1 != 0) {
+        d = min(d, letter(c1, (p - origin) / h - vec2(w0 + gap, 0.0)) * h);
+    }
+    return d - w;
+}
+
+float box(vec2 p, vec2 half_size, float r) {
+    vec2 q = abs(p) - half_size + r;
+    return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
+}
+
+// Signed distance of the white symbol (negative inside); `grey` returns the d-pad body.
+float symbol(vec2 p, out float grey) {
+    grey = 1e9;
+    switch (glyph) {
+    case A: return label(p, 65, 0, 1.0, 0.1);
+    case B: return label(p, 66, 0, 1.0, 0.1);
+    case X: return label(p, 88, 0, 1.0, 0.1);
+    case Y: return label(p, 89, 0, 1.0, 0.1);
+    case LB: return label(p, 76, 66, 0.62, 0.078);
+    case RB: return label(p, 82, 66, 0.62, 0.078);
+    case LT: return label(p, 76, 84, 0.62, 0.078);
+    case RT: return label(p, 82, 84, 0.62, 0.078);
+    case LS: return label(p, 76, 83, 0.62, 0.078);
+    case RS: return label(p, 82, 83, 0.62, 0.078);
+    case MENU: {
+        float d = seg(p, vec2(-0.38, -0.28), vec2(0.38, -0.28));
+        d = min(d, seg(p, vec2(-0.38, 0.0), vec2(0.38, 0.0)));
+        d = min(d, seg(p, vec2(-0.38, 0.28), vec2(0.38, 0.28)));
+        return d - 0.075;
+    }
+    case VIEW: {
+        // Two overlapping windows: the back one as an outline, the front one filled.
+        float back = abs(box(p - vec2(-0.13, -0.13), vec2(0.3, 0.24), 0.06)) - 0.05;
+        float front = box(p - vec2(0.13, 0.13), vec2(0.3, 0.24), 0.06);
+        return min(max(back, -(front - 0.08)), front);
+    }
+    case SHARE: {
+        // A tray and an arrow out of it.
+        float d = seg(p, vec2(-0.4, 0.05), vec2(-0.4, 0.42));
+        d = min(d, seg(p, vec2(-0.4, 0.42), vec2(0.4, 0.42)));
+        d = min(d, seg(p, vec2(0.4, 0.42), vec2(0.4, 0.05)));
+        d = min(d, seg(p, vec2(0.0, 0.2), vec2(0.0, -0.45)));
+        d = min(d, seg(p, vec2(0.0, -0.45), vec2(-0.22, -0.23)));
+        d = min(d, seg(p, vec2(0.0, -0.45), vec2(0.22, -0.23)));
+        return d - 0.07;
+    }
+    default:
+        break;
+    }
+    if (glyph >= DPAD_UP && glyph <= DPAD_UD) {
+        float arm = 0.2;
+        float body = min(box(p, vec2(arm, 0.66), 0.07), box(p, vec2(0.66, arm), 0.07));
+        grey = body;
+        bool up = glyph == DPAD_UP || glyph == DPAD_UD;
+        bool down = glyph == DPAD_DOWN || glyph == DPAD_UD;
+        bool left = glyph == DPAD_LEFT || glyph == DPAD_LR;
+        bool right = glyph == DPAD_RIGHT || glyph == DPAD_LR;
+        float lit = 1e9;
+        if (up) lit = min(lit, max(body, p.y + arm + 0.04));
+        if (down) lit = min(lit, max(body, -p.y + arm + 0.04));
+        if (left) lit = min(lit, max(body, p.x + arm + 0.04));
+        if (right) lit = min(lit, max(body, -p.x + arm + 0.04));
+        return lit;
+    }
+    // Sticks: a ring and the letter; the wiggle frames move the stick left and right.
+    bool left_stick = glyph == STICK_L || (glyph >= WIGGLE_L && glyph < WIGGLE_R);
+    vec2 q = p;
+    if (glyph >= WIGGLE_L) {
+        int frame = (glyph - WIGGLE_L) % 4;
+        q.x -= frame == 0 ? -0.26 : frame == 2 ? 0.26 : 0.0;
+    }
+    float ring = abs(length(q) - 0.6) - 0.055;
+    return min(ring, label(q, left_stick ? 76 : 82, 0, 0.62, 0.075));
+}
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    if (pixel.x >= size || pixel.y >= size) {
+        return;
+    }
+    // 4x4 samples per pixel: the small mips stay clean.
+    float px = 2.0 / float(size);
+    float disc = 0.0, white = 0.0, grey_cover = 0.0;
+    for (int sy = 0; sy < 4; ++sy) {
+        for (int sx = 0; sx < 4; ++sx) {
+            vec2 p = (vec2(pixel) + (vec2(sx, sy) + 0.5) / 4.0) * px - 1.0;
+            float r = length(p);
+            disc += r < 0.94 ? 1.0 : 0.0;
+            float grey;
+            float d = symbol(p * 1.25, grey);
+            white += d < 0.0 && r < 0.94 ? 1.0 : 0.0;
+            grey_cover += grey < 0.0 && r < 0.94 ? 1.0 : 0.0;
+        }
+    }
+    disc /= 16.0;
+    white /= 16.0;
+    grey_cover /= 16.0;
+    // A faint rim keeps the disc visible on dark backgrounds.
+    vec2 centre = (vec2(pixel) + 0.5) * px - 1.0;
+    float rim = smoothstep(0.86, 0.93, length(centre)) * 0.22;
+    float value = max(rim, 0.0);
+    value = mix(value, 0.38, grey_cover / max(disc, 1e-4)); // d-pad body (sRGB-encoded grey)
+    value = mix(value, 1.0, white / max(disc, 1e-4));
+    imageStore(dst, pixel, vec4(vec3(clamp(value, 0.0, 1.0)), disc));
+}

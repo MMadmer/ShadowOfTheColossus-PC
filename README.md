@@ -1,4 +1,4 @@
-# Shadow of the Colossus — PC (port nativo / native port) · v0.57-opt7 · MMadmer fork
+# Shadow of the Colossus — PC (port nativo / native port) · v1.0.0 · MMadmer fork
 
 **[Português](#português)** · **[English](#english)** · [Releases](../../releases) · [Changelog](CHANGELOG.md)
 
@@ -38,6 +38,7 @@ de que o jogo precisa, no estilo do [bloodborne_pc](https://github.com/Supermedo
 
 | Versão | Melhorias e correções |
 |---|---|
+| **1.0.0** | **Primeiro release do fork:** **controle Xbox completo** (ícones do Xbox nítidos desenhados por shader, troca na hora ao conectar ou usar outro controle, vibração igual à do PS4), instalador e zip, compilação com um comando (`build.cmd`), som com a biblioteca própria do port, tudo da 0.57-opt6 e 0.57-opt7. |
 | **0.57-opt7** | **Menos CPU por quadro para i5/GTX 1050:** o processador de comandos não gira mais esperando (−20% do tempo dele no santuário), o thread de desenho reaproveita os render targets e não repete push descriptors iguais, o mixer de som gasta menos no reverb; o launcher escolhe 810p numa GTX 1050 e 900p numa 1050 Ti. |
 | **0.57-opt6** | **PCs de 4 núcleos e placas fracas:** os workers do jogo não tomam mais os núcleos do render (7 → 3,5 núcleos ocupados no santuário), barycentrics via geometry shader passthrough (GTX 10: −14% de GPU), resolução de render 900/810/720p, shaders compilados uma vez a partir de um pacote, o launcher desempacota dumps .pkg (jogo, atualização e todas as DLC). |
 | **0.57-opt5** | **Sessões longas estáveis:** memória de buffers sem uso devolvida à GPU (30 minutos de demo: pico 3,4 GB estável, antes 4,3–4,4 GB e subindo). **Mundo aberto ~2% mais rápido** (envio antecipado). **Correção de queda rara** ao carregar o save ("write-only"). |
@@ -54,35 +55,34 @@ Detalhes de cada versão no [CHANGELOG](CHANGELOG.md).
 
 ### Problemas conhecidos
 
-- Na primeira abertura depois de atualizar, os shaders são compilados de novo: o primeiro
-  carregamento demora e engasga.
 - Placas **AMD**: a 0.57 traz a correção das cores verdes/rosas ([#7](../../issues/7)), ainda sem
   teste numa AMD. Se continuar, mande o seu `user/last_run.log` na issue.
-- Com 8 GB de memória de vídeo, o uso fica perto do limite em áreas grandes.
 
 ### Download e uso
 
-1. Baixe o `SotC-PC.zip` da página [Releases](../../releases) e descompacte numa pasta.
+1. Na página [Releases](../../releases), baixe o instalador `SotC-PC-Setup-<versão>.exe`
+   (instala para o seu usuário, sem administrador, com atalhos) ou o `SotC-PC-<versão>.zip`
+   (descompacte numa pasta).
 2. Abra o **`SotC.exe`**. Na primeira vez o lançador procura sozinho, nos discos do PC:
-   - a pasta do jogo (o dump CUSA08809, com `eboot.bin`, `sce_module` e `sce_sys`);
-   - os módulos de som (`libSceNgs2.sprx` e `libSceUlt.sprx`) de um shadPS4 que você já
-     tenha, na pasta `user/sys_modules`, e copia para a pasta de dados do port;
+   - a pasta do jogo (o dump CUSA08809, com `eboot.bin`, `sce_module` e `sce_sys`), ou os
+     pacotes `.pkg` do jogo, da atualização e das DLC, que ele desempacota;
    - um save do jogo no shadPS4, que ele oferece importar;
    - as DLCs do jogo, se houver: a pasta `addcont` do shadPS4, ou uma pasta com uma subpasta por DLC.
      Também dá para escolher em **Jogo e saves > Pasta de DLC**.
 3. Confira a página **Jogo e saves**. A **biblioteca de jogos** funciona como a do shadPS4:
    adicione as pastas dos seus jogos e escolha o jogo na lista.
-4. Clique em **JOGAR**.
+4. Ajuste a imagem em **Imagem e FPS** e clique em **JOGAR**. Na primeira vez os shaders são
+   montados uma vez, numa janela de progresso.
 
 Requisitos: Windows 10/11 64-bit, placa de vídeo com **Vulkan 1.3** (NVIDIA, AMD ou Intel
-com driver recente). Não precisa instalar Python.
+com driver recente). Não precisa instalar Python. Guia em russo: [docs/README_RU.md](docs/README_RU.md).
 
 #### Os arquivos que você precisa ter
 
 | O quê | De onde | Para quê |
 |---|---|---|
 | Dump do jogo CUSA08809 (EU 1.01 de preferência) | o seu PS4, pelo GoldHEN | o jogo |
-| `libSceNgs2.sprx`, `libSceUlt.sprx` decriptados | o seu PS4 (`/system/common/lib/`, FTP do GoldHEN), ou o `user/sys_modules` do shadPS4 | som (sem eles o jogo roda mudo) |
+| `libSceNgs2.sprx`, `libSceUlt.sprx` decriptados (opcional) | o seu PS4 (`/system/common/lib/`, FTP do GoldHEN), ou o `user/sys_modules` do shadPS4 | som do próprio console em vez da biblioteca do port |
 
 Os modos de patch (60 FPS, filtro 16x) só valem para a versão EU 1.01; nas outras o jogo roda
 normalmente, a 30 FPS.
@@ -92,10 +92,12 @@ normalmente, a 30 FPS.
 - **Jogar:** confere a versão do jogo, o som, os saves e a placa de vídeo antes de abrir;
   opções rápidas de saída, upscaler, 60 FPS, filtro 16x e tela cheia.
 - **Jogo e saves:** biblioteca de jogos, busca automática no PC, importação de saves do shadPS4.
-- **Imagem e FPS:** saída 720p a 4K (o jogo renderiza em 1080p e o FSR 1 + RCAS amplia),
+- **Imagem e FPS:** resolução de render 720p a 1080p (automática em placas fracas), saída 720p a
+  4K (FSR 1 + RCAS amplia),
   modo PS4 Pro (o jogo oferece Cinematográfico/Desempenho no próprio menu), efeitos (vinheta,
   névoa, SSAO) e opções de desempenho.
-- **Controles:** controle (DualShock 4, DualSense, Xbox) automático; câmera no mouse;
+- **Controles:** controle (DualShock 4, DualSense, Xbox) automático, com os ícones dos botões do
+  controle em uso e vibração; câmera no mouse;
   **troca de teclas** clicando na ação e apertando a tecla nova.
 - **Avançado:** cvars do motor Bluepoint, diagnóstico, atalho na área de trabalho (com o ícone
   do seu jogo). O registro de cada sessão fica em `user/last_run.log`.
@@ -122,8 +124,6 @@ normalmente, a 30 FPS.
   sozinhas na NVIDIA: o envio periódico à GPU e as leituras antecipadas. Em **Imagem e FPS >
   Envio de trabalho à GPU**, escolha **Ligado** para usá-las numa AMD ou Intel. Se a tela ficar
   preta, volte para **Automático**.
-- **Por que não vem o som pronto?** Os dois `.sprx` são firmware da Sony; distribuí-los não é
-  permitido. O lançador acha e copia os seus automaticamente.
 - **O jogo fechou sozinho.** Abra uma *issue* com o arquivo `user/last_run.log`.
 
 ---
@@ -139,6 +139,7 @@ game needs, in the style of [bloodborne_pc](https://github.com/Supermedo/bloodbo
 
 | Version | Improvements and fixes |
 |---|---|
+| **1.0.0** | **First release of the fork:** **full Xbox controller support** (sharp shader-drawn Xbox button icons, switching as soon as another controller is connected or used, PS4-accurate rumble), installer and zip, one-command build (`build.cmd`), sound through the port's own library, everything from 0.57-opt6 and 0.57-opt7. |
 | **0.57-opt7** | **Less CPU per frame for i5/GTX 1050:** the command processor no longer spins while it waits (−20% of its time at the shrine), the draw thread keeps its render targets and drops repeated push descriptors, the sound mixer spends less on reverb; the launcher picks 810p on a GTX 1050 and 900p on a 1050 Ti. |
 | **0.57-opt6** | **4-core PCs and weak cards:** the game's workers no longer take the render cores (7 → 3.5 cores busy at the shrine), barycentrics through a passthrough geometry shader (GTX 10: −14% GPU), 900/810/720p render resolution, shaders built once from a pack, the launcher unpacks .pkg dumps (game, update and every DLC). |
 | **0.57-opt5** | **Stable long sessions:** unused buffer memory is given back to the GPU (30-minute demo: peak 3.4 GB and flat, before 4.3–4.4 GB and rising). **Open world ~2% faster** (early submit). **Fix for a rare crash** while loading the save ("write-only"). |
@@ -155,61 +156,75 @@ Full details in the [CHANGELOG](CHANGELOG.md) (in Portuguese).
 
 ### Known issues
 
-- The first start after updating rebuilds the shaders: the first load is slow and stutters.
 - **AMD** GPUs: 0.57 has the fix for the green/pink tint ([#7](../../issues/7)), not yet tested
   on an AMD card. If it persists, attach your `user/last_run.log` to the issue.
-- With 8 GB of video memory, usage gets close to the limit in large areas.
 
 ### Download and use
 
-1. Download `SotC-PC.zip` from [Releases](../../releases) and unzip it into a folder.
+1. From [Releases](../../releases), get the installer `SotC-PC-Setup-<version>.exe` (installs
+   for your user, no administrator rights, with shortcuts) or `SotC-PC-<version>.zip` (unzip it
+   into a folder).
 2. Run **`SotC.exe`**. On first start the launcher searches the PC's drives for:
-   - the game folder (the CUSA08809 dump with `eboot.bin`, `sce_module` and `sce_sys`);
-   - the sound modules (`libSceNgs2.sprx` and `libSceUlt.sprx`) of an installed shadPS4
-     (`user/sys_modules`), which it copies to the port's data folder;
+   - the game folder (the CUSA08809 dump with `eboot.bin`, `sce_module` and `sce_sys`), or the
+     `.pkg` files of the game, update and DLC, which it unpacks;
    - a shadPS4 save of the game, which it offers to import;
    - the game's DLCs, if any (shadPS4's `addcont` folder, or a folder with one subfolder per DLC).
 3. Check the **Game and saves** page. The **game library** works like shadPS4's.
-4. Click **PLAY**.
+4. Set the picture up under **Display & FPS** and click **PLAY**. On first start the shaders are
+   built once, behind a progress window.
 
 Requirements: Windows 10/11 64-bit and a **Vulkan 1.3** GPU (NVIDIA, AMD or Intel with a recent
-driver). No Python install needed.
+driver). No Python install needed. Russian guide: [docs/README_RU.md](docs/README_RU.md).
 
 | What | Where from | What for |
 |---|---|---|
 | CUSA08809 game dump (EU 1.01 preferred) | your PS4, through GoldHEN | the game |
-| decrypted `libSceNgs2.sprx`, `libSceUlt.sprx` | your PS4 (`/system/common/lib/`, GoldHEN FTP), or shadPS4's `user/sys_modules` | sound (silent without them) |
+| decrypted `libSceNgs2.sprx`, `libSceUlt.sprx` (optional) | your PS4 (`/system/common/lib/`, GoldHEN FTP), or shadPS4's `user/sys_modules` | the console's own sound instead of the port's library |
 
 The patch modes (60 FPS, 16x filtering) only apply to EU 1.01; other versions run at 30 FPS.
 
 ### Launcher features
 
-Game library and automatic search, shadPS4 save import, 720p–4K output (the game renders at
-1080p, upscaled with FSR 1 + RCAS), PS4 Pro mode, 60 FPS and 16x AF modes, controller support
-(DualShock 4, DualSense, Xbox) with mouse camera, key remapping, Bluepoint engine cvars, desktop
+Game library and automatic search, `.pkg` unpacking, shadPS4 save import, 720p–1080p render
+resolution (automatic on weak cards), 720p–4K output (FSR 1 + RCAS), PS4 Pro mode, 60 FPS and 16x AF modes, controller support
+(DualShock 4, DualSense, Xbox; the game shows the buttons of the controller in use) with rumble and mouse camera, key remapping, Bluepoint engine cvars, desktop
 shortcut and a session log in `user/last_run.log`.
 
 In 60 FPS mode the title-screen attract demo averages ~67 FPS on an RTX 2060 SUPER, with
 29–34 FPS in its heaviest section. Vulkan only (no DirectX). AMD and Intel can enable the
 NVIDIA-only submission options under **Image and FPS > GPU work submission**.
 
-**Why no sound files?** The two `.sprx` files are Sony firmware and may not be redistributed;
-the launcher finds and copies yours automatically. **The game closed by itself?** Open an issue
-with `user/last_run.log`.
+**The game closed by itself?** Open an issue with `user/last_run.log`.
 
 ---
 
 ## Compilar / Building
 
-Windows com / with [MSYS2](https://www.msys2.org/) (CLANG64). Pacotes / packages:
-[packaging/windows/README.md](packaging/windows/README.md). Para congelar o `SotC.exe` / to
-freeze `SotC.exe`: um Python do Windows com PyInstaller e Pillow / a Windows Python with
-PyInstaller and Pillow (`WINPYTHON`).
+Um comando, no Windows 10/11 / one command on Windows 10/11 (Git for Windows to clone):
 
 ```
-bash build.sh                              # out/bb-probe.exe
-bash packaging/windows/package_sotc.sh     # dist/SotC-PC.zip
+git clone https://github.com/MMadmer/ShadowOfTheColossus-PC
+cd ShadowOfTheColossus-PC
+build.cmd
 ```
+
+`build.cmd` baixa um MSYS2 próprio em `.deps` (nada é instalado no sistema; ~1,5 GB na primeira
+vez), instala os pacotes, os submódulos e o PkgTool, compila `out/bb-probe.exe` e abre o lançador
+direto do código / downloads a private MSYS2 into `.deps` (nothing is installed system-wide;
+~1.5 GB the first time), the packages, submodules and PkgTool, builds `out/bb-probe.exe` and starts
+the launcher from the source tree. Depois só recompila o que mudou / later runs only rebuild what
+changed.
+
+- `build.cmd -NoLaunch`: só compilar / build only.
+- `build.cmd -Package`: também / also `dist/SotC-PC-<versão>.zip` e / and
+  `dist/SotC-PC-Setup-<versão>.exe` (precisa de / needs Python for Windows for PyInstaller).
+- `MSYS2_ROOT=<pasta>`: usar o seu MSYS2 / use your own MSYS2 (packages:
+  [packaging/windows/README.md](packaging/windows/README.md)).
+
+Por onde começar / where to start: [CLAUDE.md](CLAUDE.md) (arquitetura / architecture overview:
+loader, runtime, GPU library), [CHANGELOG](CHANGELOG.md) (o que cada variável `SOTC_*` faz /
+what each `SOTC_*` switch does), `tools/bench/` (benchmark com cenários / scenario benchmark:
+shrine, colossus fight, attract demo; `tools/profile_tree.py` for call trees).
 
 O empacotamento recusa qualquer `.sprx`/`.prx` / packaging refuses any `.sprx`/`.prx`: Sony
 firmware never goes into the package. Ferramentas de teste / test tools: `tools/`. Variáveis de

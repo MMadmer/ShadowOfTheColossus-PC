@@ -13,17 +13,15 @@ Este pacote **não contém o jogo nem firmware da Sony**. Você precisa ter os s
 - Python não é necessário para o `SotC.exe`; só o `SotC.bat` precisa de
   [Python 3](https://www.python.org/downloads/).
 - O **seu dump** do jogo CUSA08809 (pasta com `eboot.bin`, `sce_module`, `sce_sys`...).
-- Para ter som, `libSceNgs2.sprx` e `libSceUlt.sprx` do **seu próprio console**, decriptados.
-  São os mesmos arquivos da pasta `user/sys_modules` do shadPS4; num PS4 com GoldHEN ficam em
-  `/system/common/lib/` (FTP na porta 2121). Sem eles o jogo funciona, mas sem som.
+- Opcional: `libSceNgs2.sprx` e `libSceUlt.sprx` do **seu próprio console**, decriptados, para o
+  som usar a biblioteca do console em vez da do port. São os mesmos arquivos da pasta
+  `user/sys_modules` do shadPS4; num PS4 com GoldHEN ficam em `/system/common/lib/`.
 
 ## Como jogar
 
 1. Abra `SotC.exe`, o lançador.
 2. Na primeira vez ele **procura sozinho** nos discos do PC:
    - a pasta do jogo (CUSA08809);
-   - os dois `.sprx` de som de um shadPS4 instalado (pasta `user/sys_modules`), que ele copia
-     para a pasta de dados do port;
    - um save do jogo no shadPS4, que ele oferece importar;
    - as DLCs do jogo (pasta `addcont` do shadPS4 ou uma pasta com uma subpasta por DLC).
 3. Confira em **Jogo e saves**. A **biblioteca de jogos** funciona como no shadPS4: adicione as
@@ -96,7 +94,7 @@ As entradas são:
 ## Estado
 
 Funcionam: logos, abertura, menus com texto, carregar save, exploração a cavalo,
-som (com os módulos do usuário).
+som, controles DualShock, DualSense e Xbox (com os ícones e a vibração de cada um).
 
 Desempenho medido no demo da tela de título, modo 60 FPS, i9-13900K + RTX 2060 SUPER:
 média de ~67 FPS; o trecho mais pesado (a ponte do cânion) fica em 29–34 FPS. No modo
@@ -111,8 +109,6 @@ normal o jogo roda travado em 30 FPS, como no PS4.
   sozinhas na NVIDIA (o envio periódico de trabalho à GPU e as leituras antecipadas).
   Em **Imagem e FPS > Envio de trabalho à GPU**, escolha **Ligado** para testá-las na AMD ou
   Intel; se a tela ficar preta, volte para **Automático**.
-- **Por que o som precisa de arquivos meus?** `libSceNgs2.sprx` e `libSceUlt.sprx` são firmware
-  da Sony e não podem ser distribuídos. Eles saem do seu PS4 (ou do shadPS4 que você já usa).
 
 ## Créditos
 

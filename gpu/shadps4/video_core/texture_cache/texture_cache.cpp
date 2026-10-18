@@ -54,6 +54,7 @@ TextureCache::TextureCache(const Vulkan::Instance& instance_, Vulkan::Scheduler&
     : instance{instance_}, scheduler{scheduler_}, runtime{runtime_}, liverpool{liverpool_},
       buffer_cache{buffer_cache_}, tracker{tracker_}, blit_helper{instance, scheduler},
       tile_manager{instance, scheduler, runtime, buffer_cache.GetStreamBuffer()},
+      pad_glyphs{instance},
       readback_linear_images{EmulatorSettings.IsReadbackLinearImagesEnabled()} {
 
     u32 max_samplers = instance.GetMaxSamplerAllocationCount();
@@ -992,6 +993,9 @@ void TextureCache::RefreshImage(Image& image) {
         }
         image.hash = hash;
     }
+
+    // sotc: a button icon the Xbox ones stand in for (PadGlyphs), checked on every upload.
+    image.sotc_glyph = PadGlyphs::Identify(image.info, image.info.guest_address);
 
     const u32 num_layers = image.info.resources.layers;
     const u32 num_mips = image.info.resources.levels;

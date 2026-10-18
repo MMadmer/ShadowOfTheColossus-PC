@@ -30,7 +30,7 @@ CONFIG_DIR = Path(os.environ.get('APPDATA', Path.home())) / 'sotc-launcher'
 CONFIG_FILE = CONFIG_DIR / 'settings.json'
 GAME_ID, GAME_VERSION = 'CUSA08809', '01.01'
 SYS_MODULES = ('libSceUlt.sprx', 'libSceNgs2.sprx')
-VERSION = '0.57-opt7'
+VERSION = '1.0.0'
 MAX_LOG_LINES = 6000
 NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 
@@ -104,7 +104,7 @@ def windows_language():
 APP_DEFAULTS = {'ui_language': '', 'game_dir': str(PORT_DIR.parent / GAME_ID), 'sys_modules': '',
                 'user_dir': '', 'af16': True, 'fps60': False, 'fullscreen': False,
                 'present_mode': 'Mailbox', 'language': '', 'player_name': '', 'show_fps': False,
-                'readbacks': '', 'extra_env': '', 'close_on_play': False, 'gamepad': '',
+                'readbacks': '', 'extra_env': '', 'close_on_play': False, 'gamepad': '', 'pad_glyphs': '',
                 'output_res': '1920x1080', 'render_res': '', 'upscaler': 'fsr1', 'sharpness': '250', 'mouse': True,
                 'mouse_sens': '1.0', 'mouse_invert': False, 'neo': False, 'fx_vignette': True,
                 'fx_fog': True, 'fx_ssao': True, 'engine_cvars': '', 'perf_culling': True,
@@ -201,6 +201,10 @@ def weak_gpu_render_res(gpu_line):
     return ''
 
 
+# Button icons in the game (SOTC_PAD_GLYPHS, gpu texture_cache/sotc_pad_glyphs.cpp).
+PAD_GLYPHS = [('', ('Automáticos (Xbox com um controle Xbox ou genérico)', 'Automatic (Xbox with an Xbox or generic gamepad)')),
+              ('xbox', ('Sempre Xbox', 'Always Xbox')),
+              ('ps', ('Sempre PlayStation', 'Always PlayStation'))]
 UPSCALERS = [('fsr1', ('FSR 1 (AMD, qualquer placa)', 'FSR 1 (AMD, any GPU)')),
              ('bilinear', ('Bilinear (simples)', 'Bilinear (plain)'))]
 SHARPNESS = [('0', ('Alta', 'High')), ('250', ('Média (padrão)', 'Medium (default)')), ('600', ('Baixa', 'Low')),
@@ -373,6 +377,8 @@ def game_environment(s):
     env['SOTC_MOUSE_INVERT'] = '1' if s.get('mouse_invert') else '0'
     if str(s.get('gamepad', '')).strip():
         env['BB_GAMEPAD'] = str(s['gamepad']).strip()
+    if s.get('pad_glyphs') in ('xbox', 'ps'):
+        env['SOTC_PAD_GLYPHS'] = s['pad_glyphs']
     env['BB_CONFIG'] = str(PORT_DIR / 'sotc.ini')
     for item in str(s['extra_env']).split():
         if '=' in item:
@@ -755,8 +761,8 @@ class Launcher:
     def build_game(self):
         ttk = self.ttk
         f = self.scrolled_page('game', _('Jogo e saves', 'Game & saves'),
-                               _('O seu dump do jogo, os módulos de som do seu console e a pasta dos saves.',
-                                 'Your game dump, your console\'s sound modules and the saves folder.'))
+                               _('O seu dump do jogo, a pasta dos saves e, se quiser, os módulos de som do seu console.',
+                                 'Your game dump, the saves folder and, if you like, your console\'s sound modules.'))
         self.section(f, _('Biblioteca de jogos', 'Game library'), top=4)
         self.note(f, _('Como no shadPS4: adicione as pastas onde ficam os seus jogos e escolha o Shadow of the '
                        'Colossus na lista (duplo clique).',
@@ -796,12 +802,12 @@ class Launcher:
         self.section(f, _('Som', 'Sound'))
         self.folder(f, 'sys_modules', _('Módulos de som', 'Sound modules'),
                     _('Pasta com libSceNgs2.sprx e libSceUlt.sprx', 'Folder with libSceNgs2.sprx and libSceUlt.sprx'),
-                    _('libSceNgs2.sprx e libSceUlt.sprx do SEU console, decriptados. O lançador procura sozinho num '
-                      'shadPS4 instalado no PC (user/sys_modules) e copia para a pasta de dados do port. São firmware '
-                      'da Sony e nunca vêm com o port. Sem eles o jogo roda sem som.',
-                      'libSceNgs2.sprx and libSceUlt.sprx from YOUR console, decrypted. The launcher looks for them in '
-                      'a shadPS4 installed on this PC (user/sys_modules) and copies them to the port\'s data folder. '
-                      'They are Sony firmware and never come with the port. Without them the game is silent.'),
+                    _('Opcional: o port tem a sua própria biblioteca de som. Com libSceNgs2.sprx e libSceUlt.sprx do '
+                      'SEU console (decriptados) o jogo usa a do console. O lançador procura num shadPS4 instalado '
+                      '(user/sys_modules). São firmware da Sony e nunca vêm com o port.',
+                      'Optional: the port has its own sound library. With libSceNgs2.sprx and libSceUlt.sprx from YOUR '
+                      'console (decrypted) the game uses the console\'s instead. The launcher looks in an installed '
+                      'shadPS4 (user/sys_modules). They are Sony firmware and never come with the port.'),
                     on_change=self.refresh_status)
         self.section(f, _('DLC', 'DLC'))
         self.folder(f, 'dlc_dir', _('Pasta de DLC', 'DLC folder'), _('Pasta com as DLCs do jogo', "Folder with the game's DLC"),
@@ -904,6 +910,12 @@ class Launcher:
         self.row(f, _('Controle preferido', 'Preferred gamepad'), ttk.Entry(f, textvariable=self.var('gamepad'), width=30),
                  _('Nome (ou parte) do controle a usar quando houver vários; vazio = o primeiro.',
                    'Name (or part of it) of the gamepad to use when several are connected; empty = the first.'))
+        self.row(f, _('Ícones dos botões', 'Button icons'), self.choice(f, 'pad_glyphs', PAD_GLYPHS, 44),
+                 _('Com um controle Xbox (ou genérico) em uso o jogo mostra os botões do Xbox; com teclado, '
+                   'DualShock ou DualSense, os do PlayStation. Troca na hora ao conectar ou usar outro controle.',
+                   'With an Xbox (or generic) gamepad in use the game shows Xbox buttons; with the keyboard, a '
+                   'DualShock or a DualSense, the PlayStation ones. It switches as soon as another one is '
+                   'connected or used.'))
         self.section(f, _('Mouse', 'Mouse'))
         self.check(f, 'mouse', _('Câmera no mouse', 'Mouse camera'),
                    _('Clique na janela do jogo para capturar o mouse; Esc solta. Botão esquerdo = R1 (agarrar), '
@@ -1044,10 +1056,9 @@ class Launcher:
                      '⚠ {} version {}: the port targets {} {}; the modes do not apply').format(*info, GAME_ID, GAME_VERSION)
         modules = Path(self.var('sys_modules').get() or '.')
         if self.var('sys_modules').get() and all((modules / m).is_file() for m in SYS_MODULES):
-            sound = _('✓ Módulos de som encontrados', '✓ Sound modules found')
+            sound = _('✓ Som: módulos do seu console', '✓ Sound: your console\'s modules')
         else:
-            sound = _('⚠ Sem os módulos de som do seu console: o jogo fica mudo (Jogo e saves)',
-                      '⚠ No sound modules from your console: the game is silent (Game & saves)')
+            sound = _('✓ Som: biblioteca própria do port', '✓ Sound: the port\'s own library')
         user = user_dir({'user_dir': self.var('user_dir').get()})
         saves = user / 'savedata' / '1' / GAME_ID
         save = (_('✓ Saves em {}', '✓ Saves in {}').format(saves) if saves.is_dir() and any(saves.iterdir())
@@ -1111,8 +1122,8 @@ class Launcher:
         render = weak_gpu_render_res(gpu_line)
         if render and not self.var('render_res').get():
             self.var('render_res').set(render)
-            self.gpu_text += _(' — render {} escolhido para esta placa (Gráficos)',
-                               ' — {} render chosen for this card (Graphics)').format(render[3:] + 'p')
+            self.gpu_text += _(' — render {} escolhido para esta placa (Imagem e FPS)',
+                               ' — {} render chosen for this card (Display & FPS)').format(render[3:] + 'p')
         self.collect()
         self.refresh_status()
 
@@ -1371,9 +1382,8 @@ class Launcher:
              else _('DLC: nenhuma encontrada na pasta do jogo', 'DLC: none found in the game folder')),
             ('✓', _('Saves: {}', 'Saves: {}').format(short_path(saves)) + (
                 _('  (copiado do shadPS4)', '  (copied from shadPS4)') if result['save'] else '')),
-            ('✓' if result['sound'] else '⚠',
-             _('Som: pronto', 'Sound: ready') if result['sound'] else
-             _('Som: módulos não encontrados — o jogo roda mudo', 'Sound: modules not found — the game runs silent')),
+            ('✓', _('Som: módulos do seu console', 'Sound: your console\'s modules') if result['sound'] else
+             _('Som: biblioteca própria do port', 'Sound: the port\'s own library')),
         ]
         for mark, text in lines:
             color = GOLD if mark == '✓' else '#d9b441' if mark == '⚠' else MUTED
@@ -1383,9 +1393,6 @@ class Launcher:
             tk.Label(row, text=text, bg=BG, fg=TEXT, font=('Segoe UI', 11)).pack(side='left')
         buttons = tk.Frame(self.setup_results, bg=BG)
         buttons.pack(pady=(20, 0))
-        if not result['sound']:
-            ttk.Button(buttons, text=_('Escolher a pasta do som…', 'Choose the sound folder…'),
-                       command=self.choose_sound_for_setup).pack(side='left', padx=(0, 8))
         ttk.Button(buttons, text=_('Começar', 'Start'), style='Play.TButton', command=self.finish_setup).pack(side='left')
         self.setup_button.configure(state='normal', text=_('Trocar a pasta do jogo…', 'Change the game folder…'))
         self.collect()

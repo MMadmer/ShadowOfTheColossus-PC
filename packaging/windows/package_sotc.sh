@@ -6,7 +6,7 @@
 # Freezing uses a Windows Python with PyInstaller and Pillow (WINPYTHON, default C:\PyBuild312).
 set -euo pipefail
 cd -- "$(dirname -- "$0")/../.."
-export MSYS2_ROOT=${MSYS2_ROOT:-/i/msys64}
+export MSYS2_ROOT=${MSYS2_ROOT:-/c/msys64}
 export PATH="$MSYS2_ROOT/clang64/bin:$MSYS2_ROOT/usr/bin:$PATH"
 [[ -f out/bb-probe.exe && -f out/bb-gpu-capabilities.exe ]] || { echo 'Build first: bash build.sh' >&2; exit 1; }
 python=${WINPYTHON:-/c/PyBuild312/python.exe}
@@ -38,8 +38,8 @@ cp scripts/prepare.py scripts/link_libc.py scripts/link_modules.py scripts/conte
    scripts/sotc_cpu.py scripts/sotc_modes.py "$dest/scripts/"
 cp sotc.py SotC.bat LICENSE CHANGELOG.md "$dest/"
 # sotc: PkgTool (LibOrbisPkg, LGPL-3.0, with its license) unpacks the player's .pkg dumps
-# (launcher/sotc_pkg.py); PKGTOOL_DIR, default tools/PkgTool next to the repository.
-pkgtool=${PKGTOOL_DIR:-../tools/PkgTool}
+# (launcher/sotc_pkg.py); PKGTOOL_DIR, default tools/PkgTool (build.cmd downloads it there).
+pkgtool=${PKGTOOL_DIR:-tools/PkgTool}
 if [[ -f $pkgtool/PkgTool.exe ]]; then
     mkdir -p "$dest/tools/PkgTool"
     cp "$pkgtool/PkgTool.exe" "$pkgtool/LibOrbisPkg.dll" "$pkgtool/LICENSE.txt" "$dest/tools/PkgTool/"
@@ -51,6 +51,7 @@ if [[ -d ${SHADER_PACK_DIR:-} ]]; then
     cp -r "$SHADER_PACK_DIR" "$dest/shaderpack"
 fi
 cp docs/sotc/README-SotC.md "$dest/README.md"
+cp docs/README_RU.md "$dest/README_RU.md"
 cat > "$dest/sotc.ini" <<'EOF'
 # Shadow of the Colossus PC - settings (see README.md)
 # Folder of your game dump (the one with eboot.bin):
@@ -73,6 +74,6 @@ mkdir -p dist/SotC-PC
 cp -r "$dest/bin" "$dest/scripts" "$dest/launcher" "$dest/_internal" dist/SotC-PC/
 [[ -d $dest/tools ]] && cp -r "$dest/tools" dist/SotC-PC/
 [[ -d $dest/shaderpack ]] && cp -r "$dest/shaderpack" dist/SotC-PC/
-cp "$dest/SotC.exe" "$dest/sotc.py" "$dest/SotC.bat" "$dest/README.md" "$dest/LICENSE" "$dest/CHANGELOG.md" dist/SotC-PC/
+cp "$dest/SotC.exe" "$dest/sotc.py" "$dest/SotC.bat" "$dest/README.md" "$dest/README_RU.md" "$dest/LICENSE" "$dest/CHANGELOG.md" dist/SotC-PC/
 [[ -f dist/SotC-PC/sotc.ini ]] || cp "$dest/sotc.ini" dist/SotC-PC/
 echo "dist/SotC-PC.zip ($(du -h dist/SotC-PC.zip | cut -f1)) and dist/SotC-PC/"

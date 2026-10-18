@@ -73,3 +73,7 @@ census*.txt
 .vscode/
 .idea/
 .claude/
+# Downloaded by build.cmd (MSYS2, Python for packaging, Inno Setup, PkgTool) and bench output
+.deps/
+tools/PkgTool/
+tools/bench/work/

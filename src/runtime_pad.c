@@ -15,6 +15,7 @@
 #include <pthread.h>
 #include <time.h>
 #include <SDL3/SDL.h>
+#include <stdatomic.h>
 #include <sys/stat.h>
 
 #define ERR_INVALID_ARG ((int32_t)0x80920001)
@@ -60,6 +61,20 @@ static int initialized, opened, sdl_ready;
 static SDL_Gamepad *gamepad;
 static size_t reads;
 static uint8_t connected_count;
+static int gamepad_new; /* set when a gamepad was just opened (it becomes the active device) */
+
+/* sotc: the button icons the game shows (gpu/shadps4/video_core/texture_cache/sotc_pad_glyphs.cpp):
+ * 1 = Xbox while a gamepad other than a PlayStation one is the active device (it connected or was
+ * used last), 0 = the game's own PlayStation icons (keyboard and mouse, DualShock, DualSense).
+ * SOTC_PAD_GLYPHS=xbox or ps fixes the choice. */
+static _Atomic int glyph_style;
+int runtime_pad_glyph_style(void) { return atomic_load_explicit(&glyph_style,memory_order_relaxed); }
+
+/* sotc: scePadSetVibration holds until the game changes it, as on the PS4; SDL rumble needs a
+ * duration, so a running effect is renewed while the game reads the pad (and is given to a
+ * gamepad that connects meanwhile). */
+static uint8_t rumble_large, rumble_small;
+static uint64_t rumble_at;
 
 static uint64_t now_us(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t); return (uint64_t)t.tv_sec*1000000u+(uint64_t)t.tv_nsec/1000u; }
 static uint8_t axis(int16_t v) { int x=(v+32768)>>8; return (uint8_t)(x<0 ? 0 : x>255 ? 255 : x); }
@@ -107,6 +122,7 @@ static SDL_Gamepad *current_gamepad(void) {
             on_preferred=want && gamepad && is_preferred(ids[pick],want);
             if (gamepad) {
                 ++connected_count;
+                gamepad_new=1;
                 printf("Runtime: gamepad connected: %s%s\n",SDL_GetGamepadName(gamepad),
                        !want ? "" : on_preferred ? " (the chosen one)" : " (the chosen one is not connected)");
             }
@@ -271,7 +287,7 @@ static void apply_keyboard(PadData *d, const bool *k) {
 
 /* sotc: the captured mouse turns the camera (right stick) and presses its bound buttons.
  * SOTC_MOUSE_SENS (default 1.0) scales the motion, SOTC_MOUSE_INVERT=1 inverts the vertical. */
-static void apply_mouse(PadData *d) {
+static int apply_mouse(PadData *d) { /* 1: the mouse moved or pressed a bound button */
     static float sensitivity=-1, smooth_x, smooth_y; static int invert;
     if (sensitivity<0) {
         const char *v=getenv("SOTC_MOUSE_SENS");
@@ -280,11 +296,13 @@ static void apply_mouse(PadData *d) {
         invert=getenv("SOTC_MOUSE_INVERT") && getenv("SOTC_MOUSE_INVERT")[0]=='1';
     }
     float dx=0, dy=0; unsigned held=0;
-    if (!bbgpu_mouse_take(&dx,&dy,&held)) { smooth_x=smooth_y=0; return; }
+    if (!bbgpu_mouse_take(&dx,&dy,&held)) { smooth_x=smooth_y=0; return 0; }
+    int used=dx*dx+dy*dy>9.0f;
     static int told;
     if (!told && (dx!=0 || dy!=0)) { told=1; puts("Runtime: mouse motion reaches the pad"); }
     for (int i=IN_CROSS;i<=IN_RIGHT;++i) {
         if (!(bindings[i].mouse & held)) continue;
+        used=1;
         if (i==IN_L2) d->l2=255;
         else if (i==IN_R2) d->r2=255;
         else if (i==IN_TOUCHPAD) touch_click(d,0);
@@ -312,6 +330,32 @@ static void apply_mouse(PadData *d) {
         ++shown;
         printf("SOTC mouse sample: dx=%.1f dy=%.1f -> right %u,%u\n",dx,dy,d->right_x,d->right_y);
     }
+    return used;
+}
+
+static int playstation_pad(SDL_Gamepad *g) {
+    const SDL_GamepadType type=SDL_GetGamepadType(g);
+    return type==SDL_GAMEPAD_TYPE_PS3 || type==SDL_GAMEPAD_TYPE_PS4 || type==SDL_GAMEPAD_TYPE_PS5;
+}
+/* The active device decides the icons; called under lock with this sample's input. */
+static void update_glyphs(SDL_Gamepad *g, int pad_used, int keys_used) {
+    static int mode=-1, pad_active;
+    if (mode<0) {
+        const char *v=getenv("SOTC_PAD_GLYPHS");
+        mode=!v ? 0 : !SDL_strcasecmp(v,"xbox") ? 1 : !SDL_strcasecmp(v,"ps") ? 2 : 0;
+    }
+    if (gamepad_new || pad_used) pad_active=1;
+    else if (keys_used) pad_active=0;
+    gamepad_new=0;
+    const int style=mode==1 ? 1 : mode==2 ? 0 : g && pad_active && !playstation_pad(g);
+    if (atomic_exchange_explicit(&glyph_style,style,memory_order_relaxed)!=style)
+        printf("Runtime: button icons: %s\n",style ? "Xbox" : "PlayStation");
+}
+static void rumble(SDL_Gamepad *g, uint64_t now) {
+    if (!g) return;
+    const int on=rumble_large || rumble_small;
+    SDL_RumbleGamepad(g,(uint16_t)(rumble_large*257),(uint16_t)(rumble_small*257),on ? 2000 : 0);
+    rumble_at=now;
 }
 
 static void sample_host(PadData *d) {
@@ -321,17 +365,25 @@ static void sample_host(PadData *d) {
     d->connected=1; d->connected_count=connected_count ? connected_count : 1;
     d->timestamp=now_us();
     SDL_Gamepad *g=current_gamepad();
+    if ((rumble_large || rumble_small) && d->timestamp-rumble_at>1000000) rumble(g,d->timestamp);
+    if (gamepad_new && (rumble_large || rumble_small)) rumble(g,d->timestamp);
     if (!bindings_ready) { load_bindings(); bindings_ready=1; }
     if (bbgpu_overlay_captures_input()) return; /* settings menu open: neutral input */
     const bool *k=SDL_WasInit(SDL_INIT_VIDEO) ? SDL_GetKeyboardState(NULL) : NULL;
+    int pad_used=0, keys_used=0;
     if (g) {
         int touch_right=0;
         for (int i=IN_CROSS;i<=IN_RIGHT;++i) {
             const int v=pad_value(g,i);
             if (i==IN_L2) d->l2=(uint8_t)v;
             if (i==IN_R2) d->r2=(uint8_t)v;
+            if (v>30) pad_used=1;
             if (i==IN_TOUCHPAD_RIGHT) touch_right=v>30;
             else if (v>30) d->buttons|=input_buttons[i];
+        }
+        for (int a=SDL_GAMEPAD_AXIS_LEFTX;a<=SDL_GAMEPAD_AXIS_RIGHTY;++a) {
+            const int v=SDL_GetGamepadAxis(g,(SDL_GamepadAxis)a);
+            if (v>12000 || v<-12000) pad_used=1;
         }
         d->left_x=axis(SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_LEFTX)); d->left_y=axis(SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_LEFTY));
         d->right_x=axis(SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_RIGHTX)); d->right_y=axis(SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_RIGHTY));
@@ -350,8 +402,12 @@ static void sample_host(PadData *d) {
         if ((d->buttons & BTN_TOUCHPAD) && !d->touch_count) touch_click(d,0);
         if (touch_right) touch_click(d,1);
     }
-    if (k) apply_keyboard(d,k);
-    apply_mouse(d);
+    if (k) {
+        apply_keyboard(d,k);
+        for (int i=0;i<SDL_SCANCODE_COUNT && !keys_used;++i) keys_used=k[i];
+    }
+    if (apply_mouse(d)) keys_used=1;
+    update_glyphs(g,pad_used,keys_used);
 }
 
 /* BB_PAD_FILE=<file>: scripted input for automated runs. The file holds whitespace-separated
@@ -566,8 +622,9 @@ static ABI int32_t pad_vibration(int32_t handle, const uint8_t *param) {
     if (handle!=PAD_HANDLE || !opened) return ERR_INVALID_HANDLE;
     if (!param) return ERR_INVALID_ARG;
     pthread_mutex_lock(&lock);
-    SDL_Gamepad *g=current_gamepad();
-    if (g) SDL_RumbleGamepad(g,(uint16_t)(param[0]*257),(uint16_t)(param[1]*257),1000);
+    rumble_large=param[0];
+    rumble_small=param[1];
+    rumble(current_gamepad(),now_us());
     pthread_mutex_unlock(&lock);
     return 0;
 }

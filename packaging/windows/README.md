@@ -5,6 +5,9 @@ on Linux. Players: see `docs/sotc/README-SotC.md` (it ships in the package as `R
 
 ## Build
 
+The short way: `build.cmd` in the repository root does everything below with a private MSYS2 in
+`.deps` (and `build.cmd -Package` also makes the zip and the installer). By hand:
+
 Install [MSYS2](https://www.msys2.org) (`winget install MSYS2.MSYS2`), open the
 **MSYS2 CLANG64** shell and install the toolchain and libraries (the counterpart of
 `shell.nix`):
