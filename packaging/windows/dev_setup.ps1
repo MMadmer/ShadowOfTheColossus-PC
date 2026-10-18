@@ -111,9 +111,10 @@ if ($Package) {
     # Inno Setup, portable in .deps: the per-user installer (no administrator rights).
     $iscc = Join-Path $Deps 'inno\ISCC.exe'
     if (-not (Test-Path $iscc)) {
-        Step 'Downloading Inno Setup (portable, into .deps)'
-        $setup = Join-Path $Deps 'innosetup.exe'
-        Fetch 'https://jrsoftware.org/download.php/is.exe' $setup ''
+        Step 'Downloading Inno Setup 6.7.3 (portable, into .deps)'
+        $setup = Join-Path $Deps 'innosetup-6.7.3.exe'
+        Fetch 'https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe' $setup `
+            '9C73C3BAE7ED48D44112A0F48E66742C00090BDB5BEF71D9D3C056C66E97B732'
         Start-Process -Wait -FilePath $setup -ArgumentList '/PORTABLE=1', '/VERYSILENT', '/SUPPRESSMSGBOXES',
             '/CURRENTUSER', '/NOICONS', ('/DIR=' + (Quoted (Join-Path $Deps 'inno')))
     }
