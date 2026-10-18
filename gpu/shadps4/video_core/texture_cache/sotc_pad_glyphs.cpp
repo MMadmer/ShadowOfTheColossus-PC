@@ -200,16 +200,18 @@ struct KeyMark {
 };
 KeyMark KeyMarkOf(const char* input) {
     const Bound bound = BindingOf(input);
+    // runtime_pad keeps a button as 1 << SDL_BUTTON_* (not SDL_BUTTON_MASK).
+    const auto bound_to = [&bound](int button) { return (bound.mouse >> button) & 1; };
     KeyMark mark;
-    if (bound.mouse & SDL_BUTTON_MASK(SDL_BUTTON_LEFT)) {
+    if (bound_to(SDL_BUTTON_LEFT)) {
         mark.mouse = 1;
-    } else if (bound.mouse & SDL_BUTTON_MASK(SDL_BUTTON_RIGHT)) {
+    } else if (bound_to(SDL_BUTTON_RIGHT)) {
         mark.mouse = 3;
-    } else if (bound.mouse & SDL_BUTTON_MASK(SDL_BUTTON_MIDDLE)) {
+    } else if (bound_to(SDL_BUTTON_MIDDLE)) {
         mark.mouse = 2;
-    } else if (bound.mouse & SDL_BUTTON_MASK(SDL_BUTTON_X1)) {
+    } else if (bound_to(SDL_BUTTON_X1)) {
         std::strcpy(mark.label, "M4");
-    } else if (bound.mouse & SDL_BUTTON_MASK(SDL_BUTTON_X2)) {
+    } else if (bound_to(SDL_BUTTON_X2)) {
         std::strcpy(mark.label, "M5");
     } else {
         std::memcpy(mark.label, bound.key, sizeof(mark.label));
