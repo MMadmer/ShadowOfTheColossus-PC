@@ -69,7 +69,10 @@ if (-not (Test-Path $stamp)) {
     InMsys 'pacman -Scc --noconfirm --noprogressbar'  # the downloaded packages, ~500 MB
     New-Item -ItemType File -Force $stamp | Out-Null
 }
-$MsysPosix = (& (Join-Path $Msys 'usr\bin\cygpath.exe') -u $Msys).Trim()
+# /d/... form of the MSYS2 folder for the scripts' PATH: cygpath gives "/" for MSYS2's own root,
+# and "//clang64/bin" would be a network path.
+$MsysFull = [IO.Path]::GetFullPath($Msys)
+$MsysPosix = '/' + $MsysFull.Substring(0, 1).ToLower() + ($MsysFull.Substring(2) -replace '\\', '/').TrimEnd('/')
 
 # --- PkgTool (LibOrbisPkg, LGPL-3.0): the launcher unpacks .pkg dumps with it --------------------
 $PkgTool = Join-Path $Repo 'tools\PkgTool'
