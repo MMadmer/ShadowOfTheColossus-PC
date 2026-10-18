@@ -14,6 +14,9 @@ Set-Location $Repo
 
 function Step([string]$text) { Write-Host "==> $text" -ForegroundColor Cyan }
 
+# Start-Process passes its arguments unquoted: paths with spaces need their own quotes.
+function Quoted([string]$path) { '"' + $path + '"' }
+
 function Fetch([string]$url, [string]$file, [string]$sha256) {
     if (-not (Test-Path $file)) {
         Invoke-WebRequest -UseBasicParsing $url -OutFile "$file.part"
@@ -43,7 +46,7 @@ if (-not (Test-Path $Bash)) {
     Step 'Downloading MSYS2 into .deps (once, ~100 MB)'
     $sfx = Join-Path $Deps 'msys2-base.sfx.exe'
     Fetch 'https://github.com/msys2/msys2-installer/releases/download/nightly-x86_64/msys2-base-x86_64-latest.sfx.exe' $sfx ''
-    Start-Process -Wait -NoNewWindow -FilePath $sfx -ArgumentList '-y', "-o$Deps"
+    Start-Process -Wait -NoNewWindow -FilePath $sfx -ArgumentList '-y', ('-o' + (Quoted $Deps))
     InMsys 'true'  # first start: keyring and home directory
 }
 
@@ -106,7 +109,7 @@ if ($Package) {
         $setup = Join-Path $Deps 'innosetup.exe'
         Fetch 'https://jrsoftware.org/download.php/is.exe' $setup ''
         Start-Process -Wait -FilePath $setup -ArgumentList '/PORTABLE=1', '/VERYSILENT', '/SUPPRESSMSGBOXES',
-            '/CURRENTUSER', '/NOICONS', "/DIR=$(Join-Path $Deps 'inno')"
+            '/CURRENTUSER', '/NOICONS', ('/DIR=' + (Quoted (Join-Path $Deps 'inno')))
     }
     & $iscc /Q "/DAppVersion=$version" "/DSourceDir=$(Join-Path $Repo 'out\stage\SotC-PC')" `
         "/O$(Join-Path $Repo 'dist')" (Join-Path $Repo 'packaging\windows\sotc_installer.iss')
@@ -120,5 +123,5 @@ if (-not $NoLaunch) {
     $env:MSYS2_ROOT = $Msys  # sotc.py and the launcher take the DLLs from its clang64\bin
     $env:PATH = (Join-Path $Msys 'clang64\bin') + ';' + $env:PATH
     Start-Process -FilePath (Join-Path $Msys 'clang64\bin\pythonw.exe') `
-        -ArgumentList (Join-Path $Repo 'launcher\sotc_launcher_win.py') -WorkingDirectory $Repo
+        -ArgumentList (Quoted (Join-Path $Repo 'launcher\sotc_launcher_win.py')) -WorkingDirectory $Repo
 }
