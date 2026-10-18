@@ -106,7 +106,7 @@ if ($Package) {
     }
     $winPythonPosix = (& (Join-Path $Msys 'usr\bin\cygpath.exe') -u $winPython).Trim()
     InMsys "export MSYS2_ROOT='$MsysPosix' WINPYTHON='$winPythonPosix' PKGTOOL_DIR=tools/PkgTool; bash packaging/windows/package_sotc.sh"
-    Rename-Item -Force (Join-Path $Repo 'dist\SotC-PC.zip') "SotC-PC-$version.zip"
+    Move-Item -Force (Join-Path $Repo 'dist\SotC-PC.zip') (Join-Path $Repo "dist\SotC-PC-$version.zip")
 
     # Inno Setup, portable in .deps: the per-user installer (no administrator rights).
     $iscc = Join-Path $Deps 'inno\ISCC.exe'
