@@ -1497,6 +1497,8 @@ vk::ImageView UpscaleScene(Scheduler& scheduler, Runtime& runtime,
     options.outputHeight = out_h;
     options.colorBuffersHDR = sl::Boolean::eTrue;
     options.useAutoExposure = sl::Boolean::eTrue;
+    // The composite may read the scene's alpha: it is upscaled too.
+    options.alphaUpscalingEnabled = sl::Boolean::eTrue;
     sl::DLSSOptimalSettings optimal{};
     if (api.dlss_optimal(options, optimal) == sl::Result::eOk && optimal.renderWidthMax &&
         (in_w < optimal.renderWidthMin || in_w > optimal.renderWidthMax ||
@@ -1602,7 +1604,9 @@ vk::ImageView UpscaleScene(Scheduler& scheduler, Runtime& runtime,
 
     // Streamline on the real command buffer, in stream order (the recording thread when there
     // is one): options, constants, tags and the evaluation together.
-    const auto scene_view = *scene.FindView(VideoCore::ImageViewInfo{}).image_view;
+    VideoCore::ImageViewInfo scene_view_info{};
+    scene_view_info.format = scene.info.pixel_format;
+    const auto scene_view = *scene.FindView(scene_view_info).image_view;
     const vk::Image scene_image = scene.GetImage();
     const vk::Format scene_format = scene.info.pixel_format;
     const VkImageUsageFlags sampled = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
