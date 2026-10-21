@@ -76,7 +76,24 @@ Oussama268, DUDUYG, jownatan e AjncSystem**, cujos commits entram com a autoria 
 - **Sem som quando o dispositivo de saída ainda não existe ao abrir** (fone Bluetooth, #214): o
   port tenta de novo a cada segundo.
 - **Salvar no menu dentro do jogo apagava do `sotc.ini`** as teclas, os remapeamentos do controle
-  e os ajustes do `sotc.py`; agora só as linhas do menu são reescritas.
+  e os ajustes do `sotc.py`; agora só as linhas do menu são reescritas, e o `sotc.ini` e as
+  configurações do lançador são gravados por um arquivo novo que substitui o antigo (uma gravação
+  interrompida não perde nada).
+- **GTX 10 (Pascal):** os shaders lidos do cache não traziam as entradas do pixel shader, e as
+  pipelines montadas depois com eles ficavam sem o geometry shader das barycentrics (imagem
+  errada); agora o cache guarda essas informações.
+- **Final do jogo (#146):** a proteção das listas livres dos heaps criados pelo mundo volta a
+  acompanhar cada mudança delas.
+- **Memória de vídeo esgotada:** depois de uma falha total, o jogo não repete a coleta de texturas
+  com espera da GPU a cada desenho (o que o travava) e tenta de novo após 250 ms.
+- **DLSS:** se a avaliação falhar, a cena aparece esticada como no próprio jogo em vez de uma
+  imagem indefinida, e depois de 8 falhas seguidas o DLSS se desliga (o menu mostra o motivo); os
+  cortes de câmera voltam a limpar o histórico do DLSS.
+- **Cache do driver** gravado também ao fechar a janela do jogo.
+- **PCs com placas de fabricantes diferentes** (notebook Intel + NVIDIA, APU + GeForce) ou com
+  `BB_GPU_ID`: a geração de quadros e o DLSS seguem a placa que o jogo vai usar.
+- **Tela cheia pelo menu** podia travar o jogo; o F11 funciona com o menu aberto; a câmera no mouse
+  liga e desliga na hora pelo menu.
 
 **Desempenho**
 - **GTX 10 (Pascal):** o geometry shader que entrega as barycentrics passa os vértices adiante sem
