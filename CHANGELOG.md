@@ -79,6 +79,10 @@ Oussama268, DUDUYG, jownatan e AjncSystem**, cujos commits entram com a autoria 
   e os ajustes do `sotc.py`; agora só as linhas do menu são reescritas, e o `sotc.ini` e as
   configurações do lançador são gravados por um arquivo novo que substitui o antigo (uma gravação
   interrompida não perde nada).
+- **Correções de CPU nas Intel:** com a emulação de BMI do projeto original, a tabela de funções
+  do jogo se perdia ao ler as dos módulos, e as instruções SSE4a curtas e as funções que usam a
+  área abaixo da pilha ficavam sem correção; voltaram. Uma instrução corrigida durante o jogo não
+  trava mais o tratador de exceções.
 - **GTX 10 (Pascal):** os shaders lidos do cache não traziam as entradas do pixel shader, e as
   pipelines montadas depois com eles ficavam sem o geometry shader das barycentrics (imagem
   errada); agora o cache guarda essas informações.
