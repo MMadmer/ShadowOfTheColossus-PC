@@ -166,7 +166,7 @@ APP_DEFAULTS = {'ui_language': '', 'game_dir': str(PORT_DIR.parent / GAME_ID), '
                 'mouse_sens': '1.0', 'mouse_invert': False, 'neo': False, 'fx_vignette': True,
                 'fx_fog': True, 'fx_ssao': True, 'engine_cvars': '', 'perf_culling': True,
                 'perf_record_thread': True, 'perf_dma': True, 'gpu_submit': 'auto', 'vram_use': 'normal', 'volume': '100', 'shadow_reuse': '0', 'library_dirs': [], 'keys': {},
-                'auto_setup': True, 'dlc_dir': '', 'framegen': 'off',
+                'auto_setup': True, 'dlc_dir': '', 'framegen': 'off', 'dlssg_mult': '2',
                 'check_updates': True, 'skip_version': '', 'dlss': 'off', 'vibration': '100',
                 'mouse_buttons': {}, 'gpu_name': ''}
 # Keyboard bindings (src/runtime_pad.c): PS4 input, its default SDL key name, label.
@@ -357,6 +357,11 @@ def gpu_has_dlss_g(gpu_name):
     return bool(re.search(r'RTX\s*(40|50)\d\d', str(gpu_name), re.I))
 
 
+def gpu_has_mfg(gpu_name):
+    """DLSS multi frame generation (x3, x4): RTX 50 series."""
+    return bool(re.search(r'RTX\s*50\d\d', str(gpu_name), re.I))
+
+
 def is_16_9(size):
     """True for a WxH of the 16:9 shape (within 2%)."""
     try:
@@ -405,6 +410,9 @@ FRAMEGEN = [('off', ('Desligada', 'Off')),
             ('fsr', ('AMD FSR 3.1', 'AMD FSR 3.1'))]
 # Without DLSS-G (a card known not to be an RTX 40/50): automatic means FSR 3.1.
 FRAMEGEN_FSR = [FRAMEGEN[0], FRAMEGEN[1], FRAMEGEN[3]]
+# DLSS-G frames shown per game frame (SOTC_DLSSG_MULT): x3 and x4 need an RTX 50 (multi frame
+# generation; the game keeps x2 where the card does less).
+DLSSG_MULT = [('2', ('x2', 'x2')), ('3', ('x3', 'x3')), ('4', ('x4', 'x4'))]
 SHARPNESS = [('0', ('Alta', 'High')), ('250', ('Média (padrão)', 'Medium (default)')), ('600', ('Baixa', 'Low')),
              ('off', ('Desligada', 'Off'))]
 MOUSE_SENS = [('0.5', ('0,5 (lenta)', '0.5 (slow)')), ('0.75', ('0,75', '0.75')), ('1.0', ('1,0 (padrão)', '1.0 (default)')),
@@ -705,6 +713,7 @@ def game_environment(s):
     if framegen == 'dlss' and s.get('gpu_name') and not gpu_has_dlss_g(s['gpu_name']):
         framegen = 'auto'  # FSR 3.1 on a card without DLSS-G
     env['SOTC_FRAMEGEN'] = framegen
+    env['SOTC_DLSSG_MULT'] = str(s.get('dlssg_mult') or '2')
     # sotc: high quality textures: the texture banks sampled since the last report read as sampled
     # (sotc_lod_stats.h; before, none ever did and the game never streamed its fine mips: blurry
     # leaves and rocks). Off: the old behaviour, for cards short of video memory.
@@ -1253,6 +1262,10 @@ class Launcher:
         self.row(f, _('Geração de quadros', 'Frame generation'), self.framegen_boxes[-1],
                  _('Recurso experimental; só tem efeito com o limite de 30 FPS.',
                    'Experimental feature; effective only with the 30 FPS limit.'))
+        self.mult_box = self.choice(f, 'dlssg_mult', DLSSG_MULT)
+        self.row(f, _('Multiplicador de quadros', 'Frame multiplier'), self.mult_box,
+                 _('NVIDIA DLSS-G; x3 e x4 em placas GeForce RTX 50.',
+                   'NVIDIA DLSS-G; x3 and x4 on GeForce RTX 50 series cards.'))
         self.window_icon_row(f)
         self.section(f, _('Resolução', 'Resolution'))
         self.render_boxes.append(self.choice(f, 'render_res', RENDER_RES))
@@ -1558,6 +1571,9 @@ class Launcher:
             self.var('framegen').set('auto')
         for box in self.framegen_boxes:
             box.set_options(FRAMEGEN if dlss_g else FRAMEGEN_FSR)
+        if getattr(self, 'mult_box', None):
+            mfg = not self.gpu_name or gpu_has_mfg(self.gpu_name)
+            self.mult_box.configure(state='readonly' if mfg else 'disabled')
         self.refresh_upscaling()
 
     def refresh_upscaling(self):
@@ -2079,8 +2095,8 @@ class Launcher:
         self.output.put((code,))
 
     # Quick settings the in-game menu may have changed (it writes them to the settings file).
-    LIVE_KEYS = ('fps_mode', 'framegen', 'hq_textures', 'shadow_reuse', 'volume', 'fx_vignette', 'fx_fog',
-                 'fx_ssao', 'perf_dma')
+    LIVE_KEYS = ('fps_mode', 'framegen', 'dlssg_mult', 'hq_textures', 'shadow_reuse', 'volume', 'fx_vignette',
+                 'fx_fog', 'fx_ssao', 'perf_dma')
 
     def reload_live_settings(self):
         saved = load_json(settings_in_use, {})

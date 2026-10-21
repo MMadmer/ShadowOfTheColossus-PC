@@ -941,6 +941,20 @@ TEXTS = {
         'フレーム生成',
         '프레임 생성',
     ),
+    'Multiplicador de quadros': (
+        'Multiplicador de fotogramas',
+        'Множитель кадров',
+        '帧数倍增',
+        'フレーム倍率',
+        '프레임 배수',
+    ),
+    'NVIDIA DLSS-G; x3 e x4 em placas GeForce RTX 50.': (
+        'NVIDIA DLSS-G; x3 y x4 en tarjetas GeForce RTX serie 50.',
+        'NVIDIA DLSS-G; x3 и x4 на видеокартах GeForce RTX 50.',
+        'NVIDIA DLSS-G；x3 和 x4 适用于 GeForce RTX 50 系列显卡。',
+        'NVIDIA DLSS-G。x3 と x4 は GeForce RTX 50 シリーズで利用できます。',
+        'NVIDIA DLSS-G; x3 및 x4는 GeForce RTX 50 시리즈에서 사용할 수 있습니다.',
+    ),
     'Recurso experimental; só tem efeito com o limite de 30 FPS.': (
         'Función experimental; solo tiene efecto con el límite de 30 FPS.',
         'Экспериментальная функция; действует только при ограничении 30 FPS.',

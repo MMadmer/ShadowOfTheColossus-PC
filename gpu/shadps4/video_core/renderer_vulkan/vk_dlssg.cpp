@@ -856,10 +856,24 @@ sl::Resource SlImage(vk::Image image, VkDeviceMemory memory, vk::ImageView view,
     return r;
 }
 
+/// sotc: frames generated per game frame: the multiplier asked minus one, at most what the card
+/// does (multi frame generation, RTX 50).
+u32 GeneratedFrames() {
+    u32 multiplier = SotcStats::fg_multiplier.load(std::memory_order_relaxed);
+    if (!multiplier) {
+        const char* v = std::getenv("SOTC_DLSSG_MULT");
+        multiplier = std::clamp(v ? static_cast<u32>(std::atoi(v)) : 2u, 2u, 4u);
+        SotcStats::fg_multiplier.store(multiplier, std::memory_order_relaxed);
+    }
+    return std::min(multiplier - 1, SotcStats::fg_max_generated.load(std::memory_order_relaxed));
+}
+u32 generated_set = 0; ///< numFramesToGenerate of the last options (present thread)
+
 void SetOptions(bool on) {
     sl::DLSSGOptions options{};
     options.mode = on ? sl::DLSSGMode::eOn : sl::DLSSGMode::eOff;
-    options.numFramesToGenerate = 1;
+    options.numFramesToGenerate = GeneratedFrames();
+    generated_set = options.numFramesToGenerate;
     options.flags = sl::DLSSGFlags::eRetainResourcesWhenOff;
     // SOTC_DLSSG_ONLY_GENERATED=1: only the generated frames are shown (checking them).
     static const bool only_generated = [] {
@@ -879,8 +893,9 @@ void SetOptions(bool on) {
     if (r != sl::Result::eOk) {
         std::fprintf(stderr, "SOTC DLSSG: slDLSSGSetOptions(%s) failed (%d)\n", on ? "on" : "off",
                      static_cast<int>(r));
-    } else if (log_level >= 1 || !options_set) {
-        std::fprintf(stderr, "SOTC DLSSG: frame generation %s\n", on ? "on" : "off");
+    } else if (log_level >= 1 || !options_set || (on && generated_set > 1)) {
+        std::fprintf(stderr, "SOTC DLSSG: frame generation %s (x%u)\n", on ? "on" : "off",
+                     generated_set + 1);
     }
     fg_on = on;
     options_set = true;
@@ -1331,7 +1346,7 @@ void BeforePresent(u32 frame_id, vk::Rect2D rect, vk::Extent2D extent) {
     FrameSlot& f = frames[frame_id];
     valid_streak = f.sl_valid ? valid_streak + 1 : 0;
     const bool want = valid_streak >= 2;
-    if (want != fg_on || !options_set) {
+    if (want != fg_on || !options_set || (want && GeneratedFrames() != generated_set)) {
         SetOptions(want);
     }
     if (f.index == 0) {
@@ -1456,6 +1471,8 @@ void AfterPresent(u32 frame_id) {
         return;
     }
     SotcStats::ov_fg_frames.store(state.numFramesActuallyPresented, std::memory_order_relaxed);
+    SotcStats::fg_max_generated.store(std::max(state.numFramesToGenerateMax, 1u),
+                                      std::memory_order_relaxed);
     SotcStats::ov_fg_status.store(static_cast<u32>(state.status), std::memory_order_relaxed);
     if (fg_on && state.status != sl::DLSSGStatus::eOk) {
         SotcStats::ov_fg_state.store(2, std::memory_order_relaxed);

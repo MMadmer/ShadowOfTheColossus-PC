@@ -427,6 +427,23 @@ void QuickSettings() {
         }
         ImGui::EndCombo();
     }
+    // sotc: multi frame generation (RTX 50): DLSS-G shows up to 4 frames per game frame.
+    if (const u32 max_shown = SotcStats::fg_max_generated.load(std::memory_order_relaxed) + 1;
+        fg == Mode::Dlss && max_shown > 2) {
+        static constexpr const char* multipliers[] = {"x2", "x3", "x4"};
+        const u32 now = std::clamp(SotcStats::fg_multiplier.load(std::memory_order_relaxed), 2u,
+                                   max_shown);
+        if (ImGui::BeginCombo(T("Multiplicador de quadros", "Frame multiplier"),
+                              multipliers[now - 2])) {
+            for (u32 m = 2; m <= std::min(max_shown, 4u); ++m) {
+                if (ImGui::Selectable(multipliers[m - 2], m == now)) {
+                    SotcStats::fg_multiplier.store(m, std::memory_order_relaxed);
+                    SaveLauncherSetting("dlssg_mult", "\"" + std::to_string(m) + "\"");
+                }
+            }
+            ImGui::EndCombo();
+        }
+    }
 
     static const int env_linger = [] {
         const char* v = std::getenv("SOTC_LOD_LINGER");
