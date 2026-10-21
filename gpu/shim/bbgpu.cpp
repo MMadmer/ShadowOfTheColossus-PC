@@ -17,9 +17,12 @@
 #include "video_core/renderdoc.h"
 #ifdef _WIN32
 #include <windows.h>
+#include <tlhelp32.h>
 #include "../third_party/renderdoc/renderdoc_app.h"
 #endif
+#include <array>
 #include <cstring>
+#include <cwchar>
 #include <mutex>
 #include <string>
 #include <chrono>
@@ -294,8 +297,137 @@ static void StartProfileWriter() {
 }
 #endif
 
+#ifdef _WIN32
+extern "C" uintptr_t runtime_guest_image_base; // src/probe.c
+
+namespace {
+
+// sotc: hang report. Windows has no watchdog: a game that stopped for good left nothing in the
+// log. When no game frame came for 60 s (a hang, or an unusually long load), the stack of every
+// thread goes to the log once per stall: rip and the rbp frame chain, by module or as an offset
+// in the game image. Threads are suspended one at a time and nothing is allocated or locked
+// while one is (it may hold the heap or loader lock).
+struct ThreadStack {
+    DWORD id{};
+    wchar_t name[64]{};
+    u32 depth{};
+    std::array<u64, 16> frames{};
+};
+
+void DescribeAddress(u64 address, char* out, size_t size) {
+    const u64 image = runtime_guest_image_base;
+    HMODULE module{};
+    wchar_t path[MAX_PATH]{};
+    if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                               GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           reinterpret_cast<LPCWSTR>(address), &module) &&
+        GetModuleFileNameW(module, path, MAX_PATH)) {
+        const wchar_t* base = std::wcsrchr(path, L'\\');
+        std::snprintf(out, size, "%ls+%#llx", base ? base + 1 : path,
+                      static_cast<unsigned long long>(address - reinterpret_cast<u64>(module)));
+    } else if (image && address >= image && address - image < (u64{1} << 31)) {
+        std::snprintf(out, size, "game+%#llx", static_cast<unsigned long long>(address - image));
+    } else {
+        std::snprintf(out, size, "%#llx", static_cast<unsigned long long>(address));
+    }
+}
+
+void DumpThreadStacks(u64 seconds) {
+    std::vector<ThreadStack> stacks;
+    const HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) {
+        return;
+    }
+    THREADENTRY32 entry{.dwSize = sizeof(entry)};
+    const DWORD process = GetCurrentProcessId(), self = GetCurrentThreadId();
+    for (BOOL more = Thread32First(snapshot, &entry); more; more = Thread32Next(snapshot, &entry)) {
+        if (entry.th32OwnerProcessID == process && entry.th32ThreadID != self) {
+            stacks.push_back({.id = entry.th32ThreadID});
+        }
+    }
+    CloseHandle(snapshot);
+    for (auto& stack : stacks) {
+        const HANDLE thread = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT |
+                                             THREAD_QUERY_LIMITED_INFORMATION,
+                                         FALSE, stack.id);
+        if (!thread) {
+            continue;
+        }
+        if (PWSTR description{}; SUCCEEDED(GetThreadDescription(thread, &description))) {
+            if (description) {
+                wcsncpy_s(stack.name, description, _TRUNCATE);
+                LocalFree(description);
+            }
+        }
+        if (SuspendThread(thread) != static_cast<DWORD>(-1)) {
+            CONTEXT context{.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER};
+            if (GetThreadContext(thread, &context)) {
+                u64 rip = context.Rip, rbp = context.Rbp;
+                for (; stack.depth < stack.frames.size(); ++stack.depth) {
+                    stack.frames[stack.depth] = rip;
+                    u64 frame[2]{};
+                    SIZE_T read{};
+                    if (!rbp || !ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(rbp),
+                                                   frame, sizeof(frame), &read) ||
+                        read != sizeof(frame) || frame[0] <= rbp) {
+                        ++stack.depth;
+                        break;
+                    }
+                    rbp = frame[0];
+                    rip = frame[1];
+                }
+            }
+            ResumeThread(thread);
+        }
+        CloseHandle(thread);
+    }
+    std::fprintf(stderr, "SOTC HANG: no game frame for %llu s; thread stacks (rip, then callers):\n",
+                 static_cast<unsigned long long>(seconds));
+    char where[MAX_PATH + 32];
+    for (const auto& stack : stacks) {
+        std::fprintf(stderr, "  thread %lu '%ls':", stack.id, stack.name);
+        for (u32 i = 0; i < stack.depth; ++i) {
+            DescribeAddress(stack.frames[i], where, sizeof(where));
+            std::fprintf(stderr, " %s", where);
+        }
+        std::fprintf(stderr, "\n");
+    }
+    std::fflush(stderr);
+}
+
+void StartHangMonitor() {
+    std::thread([] {
+        Common::SetCurrentThreadName("sotc:hang-monitor");
+        u64 seen = SotcStats::flip_count.load(std::memory_order_relaxed);
+        auto since = std::chrono::steady_clock::now();
+        bool reported = false;
+        for (;;) {
+            std::this_thread::sleep_for(std::chrono::seconds(5));
+            const u64 flips = SotcStats::flip_count.load(std::memory_order_relaxed);
+            const auto now = std::chrono::steady_clock::now();
+            if (flips != seen || flips == 0) {
+                seen = flips;
+                since = now;
+                reported = false;
+                continue;
+            }
+            const auto stalled = std::chrono::duration_cast<std::chrono::seconds>(now - since);
+            if (!reported && stalled >= std::chrono::seconds(60)) {
+                reported = true;
+                DumpThreadStacks(static_cast<u64>(stalled.count()));
+            }
+        }
+    }).detach();
+}
+
+} // namespace
+#endif
+
 extern "C" int bbgpu_init(const BbGpuConfig* config) {
     BbSettings::Load();
+#ifdef _WIN32
+    StartHangMonitor();
+#endif
 #ifdef BB_PGO_GENERATE
     StartProfileWriter();
 #endif
