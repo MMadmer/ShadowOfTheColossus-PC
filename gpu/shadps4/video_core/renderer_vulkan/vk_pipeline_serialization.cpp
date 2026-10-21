@@ -235,7 +235,11 @@ bool PipelineCache::LoadComputePipeline(Serialization::Archive& ar) {
     }
 
     const auto [it, is_new] = compute_pipelines.try_emplace(compute_key);
-    ASSERT(is_new);
+    // sotc: two stored keys that load as the same pipeline (a cache written by another build)
+    // closed the game at every start until the cache was deleted (#88): the copy is skipped.
+    if (!is_new) {
+        return false;
+    }
 
     {
         WarmUpTimer timer{warmup_times.pipelines};
@@ -343,7 +347,11 @@ bool PipelineCache::LoadGraphicsPipeline(Serialization::Archive& ar) {
     }
 
     const auto [it, is_new] = graphics_pipelines.try_emplace(graphics_key);
-    ASSERT(is_new);
+    // sotc: two stored keys that load as the same pipeline (a cache written by another build)
+    // closed the game at every start until the cache was deleted (#88): the copy is skipped.
+    if (!is_new) {
+        return false;
+    }
 
     // sotc: built by a pipeline worker; the map entry stays null (draws skipped, full-screen
     // passes built on the command processor) until the command processor collects it
