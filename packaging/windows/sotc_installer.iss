@@ -20,6 +20,10 @@ AppPublisherURL=https://github.com/MMadmer/ShadowOfTheColossus-PC
 AppSupportURL=https://github.com/MMadmer/ShadowOfTheColossus-PC/issues
 AppUpdatesURL=https://github.com/MMadmer/ShadowOfTheColossus-PC/releases
 DefaultDirName={localappdata}\Programs\SotC-PC
+; The folder is always asked (an update over an earlier install offers that folder): with the
+; default "auto" the page was skipped once the game had been installed, and every update went to
+; the first folder without a choice.
+DisableDirPage=no
 DefaultGroupName=Shadow of the Colossus PC
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
