@@ -112,6 +112,7 @@ bool vsync_off = true;  // eVSyncOffRequired
 int log_level = 0;      // SOTC_DLSSG_LOG
 const Instance* g_instance{};
 Pending pending;                     // command processor thread
+Pending sr_pending;                  // sotc: DLSS SR's (UpscaleScene)
 std::array<FrameSlot, kMaxFrames> frames;
 u32 next_index = 0;                  // command processor thread
 bool have_prev = false;              // command processor thread
@@ -1030,7 +1031,12 @@ bool WantsImmediatePresent() {
 
 void NoteDraw(const AmdGpu::Regs& regs, u32 mrt_mask, VideoCore::ImageId depth_id,
               VideoCore::ImageId mvec_id, VideoCore::TextureCache& texture_cache) {
-    if (pending.captured || !(mrt_mask & (1u << 4)) || !depth_id || !mvec_id || !Capturing()) {
+    // sotc: DLSS SR keeps a capture of its own, taken after each composite it consumed it at,
+    // so that it never depends on when the flip consumes frame generation's.
+    const bool want_fg = !pending.captured;
+    const bool want_sr = !sr_pending.captured && SrOn();
+    if ((!want_fg && !want_sr) || !(mrt_mask & (1u << 4)) || !depth_id || !mvec_id ||
+        !Capturing()) {
         return;
     }
     const auto& cb4 = regs.color_buffers[4];
@@ -1061,7 +1067,12 @@ void NoteDraw(const AmdGpu::Regs& regs, u32 mrt_mask, VideoCore::ImageId depth_i
     p.yscale = regs.viewport_control.yscale_enable ? vp.yscale : 1.0f;
     p.zscale = regs.viewport_control.zscale_enable ? vp.zscale : 1.0f;
     p.zoffset = regs.viewport_control.zoffset_enable ? vp.zoffset : 0.0f;
-    pending = p;
+    if (want_fg) {
+        pending = p;
+    }
+    if (want_sr) {
+        sr_pending = p;
+    }
 }
 
 void PrepareInputs(u32 frame_id, vk::CommandBuffer cmdbuf, VideoCore::TextureCache& texture_cache,
@@ -1471,12 +1482,13 @@ bool SrActive() {
 vk::ImageView UpscaleScene(Scheduler& scheduler, Runtime& runtime,
                            VideoCore::TextureCache& texture_cache, VideoCore::ImageId scene_id,
                            u32 out_w, u32 out_h) {
-    if (!SrOn() || !pending.captured) {
+    const Pending p = std::exchange(sr_pending, Pending{});
+    if (!SrOn() || !p.captured) {
         return {};
     }
     VideoCore::Image& scene = texture_cache.GetImage(scene_id);
-    VideoCore::Image* depth = texture_cache.TryGetImage(pending.depth_id, pending.depth_uid);
-    VideoCore::Image* mvec = texture_cache.TryGetImage(pending.mvec_id, pending.mvec_uid);
+    VideoCore::Image* depth = texture_cache.TryGetImage(p.depth_id, p.depth_uid);
+    VideoCore::Image* mvec = texture_cache.TryGetImage(p.mvec_id, p.mvec_uid);
     const u32 in_w = scene.info.size.width, in_h = scene.info.size.height;
     // The G-buffer must have the scene's size (it has in every render resolution mode).
     if (!depth || !mvec || depth->info.size.width != in_w || depth->info.size.height != in_h ||
@@ -1518,9 +1530,9 @@ vk::ImageView UpscaleScene(Scheduler& scheduler, Runtime& runtime,
                              options.outputHeight != sr_state.options.outputHeight;
     sr_state.options = options;
     sr_state.options_set = true;
-    if (!sr_state.constants_ok || sr_state.serial != pending.serial) {
-        sr_state.serial = pending.serial;
-        sr_state.constants_ok = MakeConstants(pending, in_w, in_h, sr_state.constants);
+    if (!sr_state.constants_ok || sr_state.serial != p.serial) {
+        sr_state.serial = p.serial;
+        sr_state.constants_ok = MakeConstants(p, in_w, in_h, sr_state.constants);
         if (!sr_state.constants_ok) {
             return {};
         }
