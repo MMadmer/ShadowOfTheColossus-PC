@@ -294,6 +294,7 @@ private:
         bool recording{};
         bool uses_dma{};
         u64 image_generation{};
+        u64 sampler_epoch{}; ///< the kept descriptors hold sampler handles
         u64 binding_epoch{};
         u64 ta_bc_base{};
         u64 bind_key{};
@@ -335,6 +336,9 @@ private:
     VAddr hudless_vo{};          ///< this draw: the video out image it renders to, 0 none
     vk::Format hudless_vo_format{};
     u32 hudless_vo_width{}, hudless_vo_height{};
+    /// sotc: video out images drawn to (BeginRendering): DLSS SR only for a composite into one.
+    std::array<VAddr, 4> vo_targets{};
+    u32 vo_target_next{};
 };
 
 } // namespace Vulkan

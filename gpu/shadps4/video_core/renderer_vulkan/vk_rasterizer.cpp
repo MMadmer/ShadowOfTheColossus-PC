@@ -1072,7 +1072,8 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset, const Pipeline* resolve
         return;
     }
     // sotc: the composite samples DLSS's upscale of the scene instead (outside a render pass).
-    if (sr_scene_info >= 0) {
+    if (sr_scene_info >= 0 &&
+        std::ranges::find(vo_targets, regs.color_buffers[0].Address()) != vo_targets.end()) {
         scheduler.EndRendering();
         if (const vk::ImageView upscaled = Dlssg::UpscaleScene(
                 scheduler, runtime, texture_cache, sr_scene_id, sr_out_width, sr_out_height)) {
@@ -1505,6 +1506,10 @@ void Rasterizer::RefreshImageLayouts() {
 }
 
 bool Rasterizer::BindResources(const Pipeline* pipeline) {
+    // sotc: only this bind's BindTextures marks the composite (indirect draws and dispatches
+    // after it would keep the bind memo off).
+    hudless_ui_info = -1;
+    sr_scene_info = -1;
     if (IsComputeImageCopy(pipeline) || IsComputeMetaClear(pipeline) ||
         IsComputeImageClear(pipeline)) {
         static const bool drop_trace = std::getenv("SOTC_DROP_TRACE") != nullptr;
@@ -2277,6 +2282,7 @@ void Rasterizer::FinishBindMemo(const Pipeline* pipeline, bool uses_dma) {
     memo.ta_bc_base = liverpool->DrawRegs().ta_bc_base.Address();
     memo.binding_epoch = buffer_cache.BindingEpoch();
     memo.image_generation = texture_cache.ImageSetGeneration();
+    memo.sampler_epoch = texture_cache.SamplerEpoch();
     memo.valid = true;
 }
 
@@ -2311,7 +2317,8 @@ bool Rasterizer::TryReuseBindings(const Pipeline* pipeline) {
     if (memo.binding_epoch != buffer_cache.BindingEpoch()) {
         return reject(4);
     }
-    if (memo.image_generation != texture_cache.ImageSetGeneration()) {
+    if (memo.image_generation != texture_cache.ImageSetGeneration() ||
+        memo.sampler_epoch != texture_cache.SamplerEpoch()) {
         return reject(5);
     }
     for (const auto& special : memo.specials) {
@@ -2824,7 +2831,10 @@ RenderState Rasterizer::BeginRendering(const GraphicsPipeline* pipeline) {
         attachment.is_clear = is_clear;
 
         image->usage.render_target = 1u;
-        if (cb == 0 && image->usage.vo_surface) { // sotc: TakeHudless
+        if (cb == 0 && image->usage.vo_surface) { // sotc: TakeHudless, DLSS SR
+            if (std::ranges::find(vo_targets, image->info.guest_address) == vo_targets.end()) {
+                vo_targets[vo_target_next++ % vo_targets.size()] = image->info.guest_address;
+            }
             hudless_vo = image->info.guest_address;
             hudless_vo_format = image_view.info.format;
             hudless_vo_width = image->info.size.width;

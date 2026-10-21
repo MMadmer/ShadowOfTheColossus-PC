@@ -513,6 +513,10 @@ const char* DlssProblem(const char* problem) {
         return T("sem suporte nesta placa de vídeo ou neste driver",
                  "not supported by this graphics card or driver");
     }
+    if (reason == "DLSS evaluation failed") {
+        return T("o DLSS falhou nesta sessão (veja o registro)",
+                 "DLSS failed in this session (see the log)");
+    }
     return problem;
 }
 

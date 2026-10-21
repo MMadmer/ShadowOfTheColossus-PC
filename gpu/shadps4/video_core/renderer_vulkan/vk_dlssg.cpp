@@ -14,6 +14,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <string>
 #include <vector>
 #include <vk_mem_alloc.h>
@@ -115,8 +116,15 @@ Pending pending;                     // command processor thread
 Pending sr_pending;                  // sotc: DLSS SR's (UpscaleScene)
 std::array<FrameSlot, kMaxFrames> frames;
 u32 next_index = 0;                  // command processor thread
-bool have_prev = false;              // command processor thread
-double prev_pos[3]{}, prev_fwd[3]{}; // command processor thread
+// sotc: the camera of the last capture, for cuts. DLSS SR and frame generation may both make
+// constants for one capture (or SR the next one first): the cut is found once per capture.
+struct CameraHistory {
+    std::mutex mutex;
+    bool have_prev = false;
+    double pos[3]{}, fwd[3]{};
+    u64 serial = ~0ull; ///< Pending::serial the cut below was found for
+    bool reset = false;
+} camera_history;
 u32 bad_cameras = 0;
 // Present thread.
 bool fg_on = false;
@@ -126,6 +134,15 @@ u64 presents = 0;
 LARGE_INTEGER present_start{};
 double present_ms_sum = 0.0, present_ms_max = 0.0;
 u32 present_ms_count = 0;
+
+// sotc: Streamline is called from the draw, recording and present threads, and its calls are
+// not documented as thread-safe: one at a time (but Reflex's sleep, which waits).
+std::mutex sl_mutex;
+template <typename F, typename... Args>
+auto Sl(F fn, Args&&... args) {
+    std::scoped_lock lock{sl_mutex};
+    return fn(std::forward<Args>(args)...);
+}
 
 void LogCallback(sl::LogType type, const char* msg) {
     if (type == sl::LogType::eInfo && log_level < 2) {
@@ -168,7 +185,7 @@ bool ResolveFeature(T*& out, sl::Feature feature, const char* name) {
 
 sl::FrameToken* Token(u32 index) {
     sl::FrameToken* token{};
-    if (api.frame_token(token, &index) != sl::Result::eOk) {
+    if (Sl(api.frame_token, token, &index) != sl::Result::eOk) {
         return nullptr;
     }
     return token;
@@ -179,7 +196,7 @@ void Marker(sl::PCLMarker marker, u32 index) {
         return;
     }
     if (sl::FrameToken* token = Token(index)) {
-        api.pcl_marker(marker, *token);
+        Sl(api.pcl_marker, marker, *token);
     }
 }
 
@@ -440,12 +457,25 @@ bool MakeConstants(const Pending& p, u32 width, u32 height, sl::Constants& out) 
     out.motionVectorsDilated = sl::Boolean::eFalse;
     out.motionVectorsJittered = sl::Boolean::eFalse;
 
-    // A cut: the camera jumped or turned a lot since the last frame.
-    bool reset = !have_prev;
-    if (have_prev) {
-        const double d[3] = {p.cam.pos[0] - prev_pos[0], p.cam.pos[1] - prev_pos[1],
-                             p.cam.pos[2] - prev_pos[2]};
-        reset = Dot3(d, d) > 50.0 * 50.0 || Dot3(fwd, prev_fwd) < 0.8;
+    // A cut: the camera jumped or turned a lot since the last capture.
+    bool reset;
+    {
+        auto& h = camera_history;
+        std::scoped_lock lock{h.mutex};
+        if (h.serial != p.serial) {
+            reset = !h.have_prev;
+            if (h.have_prev) {
+                const double d[3] = {p.cam.pos[0] - h.pos[0], p.cam.pos[1] - h.pos[1],
+                                     p.cam.pos[2] - h.pos[2]};
+                reset = Dot3(d, d) > 50.0 * 50.0 || Dot3(fwd, h.fwd) < 0.8;
+            }
+            h.serial = p.serial;
+            h.reset = reset;
+            h.have_prev = true;
+            std::memcpy(h.pos, p.cam.pos, sizeof(h.pos));
+            std::memcpy(h.fwd, fwd, sizeof(h.fwd));
+        }
+        reset = h.reset;
     }
     out.reset = reset ? sl::Boolean::eTrue : sl::Boolean::eFalse;
     // SOTC_CAM_LOG=1: the camera position every 10 frames with a millisecond clock, for scripted
@@ -462,9 +492,6 @@ bool MakeConstants(const Pending& p, u32 width, u32 height, sl::Constants& out) 
                      static_cast<long long>(t.QuadPart * 1000 / f.QuadPart), p.cam.pos[0],
                      p.cam.pos[1], p.cam.pos[2]);
     }
-    have_prev = true;
-    std::memcpy(prev_pos, p.cam.pos, sizeof(prev_pos));
-    std::memcpy(prev_fwd, fwd, sizeof(prev_fwd));
 
     if (log_level >= 1) {
         static u32 logged = 0;
@@ -756,36 +783,43 @@ struct SrState {
     u32 last_index{}; ///< frame index of the last evaluation
 } sr_state;
 
-void DestroySrImages() {
+// sotc: set by the recording thread. A failed slDLSSSetOptions is retried with the next frame;
+// after kSrMaxFailures evaluations in a row fail, DLSS SR stays off (the game's own stretch).
+std::atomic<bool> sr_options_failed{false};
+std::atomic<u32> sr_failures{0};
+constexpr u32 kSrMaxFailures = 8;
+
+void DestroySrImages(SrImages& images) {
     const vk::Device device = g_instance->GetDevice();
-    for (vk::ImageView view : {sr.depth_view, sr.mvec_view, sr.out_view}) {
+    for (vk::ImageView view : {images.depth_view, images.mvec_view, images.out_view}) {
         if (view) {
             device.destroyImageView(view);
         }
     }
-    if (sr.depth) {
-        vmaDestroyImage(g_instance->GetAllocator(), sr.depth, sr.depth_alloc);
+    if (images.depth) {
+        vmaDestroyImage(g_instance->GetAllocator(), images.depth, images.depth_alloc);
     }
-    if (sr.mvec) {
-        vmaDestroyImage(g_instance->GetAllocator(), sr.mvec, sr.mvec_alloc);
+    if (images.mvec) {
+        vmaDestroyImage(g_instance->GetAllocator(), images.mvec, images.mvec_alloc);
     }
-    if (sr.out) {
-        vmaDestroyImage(g_instance->GetAllocator(), sr.out, sr.out_alloc);
+    if (images.out) {
+        vmaDestroyImage(g_instance->GetAllocator(), images.out, images.out_alloc);
     }
-    sr = SrImages{};
+    images = SrImages{};
 }
 
-bool EnsureSrImages(vk::Format depth_format, vk::Format mvec_format, u32 in_w, u32 in_h,
-                    u32 out_w, u32 out_h) {
+bool EnsureSrImages(Scheduler& scheduler, vk::Format depth_format, vk::Format mvec_format,
+                    u32 in_w, u32 in_h, u32 out_w, u32 out_h) {
     if (sr.out && sr.depth_format == depth_format && sr.mvec_format == mvec_format &&
         sr.in_w == in_w && sr.in_h == in_h && sr.out_w == out_w && sr.out_h == out_h) {
         return true;
     }
-    // The GPU may still read the old ones (a size change is rare: a resolution switch).
+    // The GPU and evaluations not recorded yet may still use the old ones (a size change is rare:
+    // a resolution switch): freed once the GPU is past this tick.
     if (sr.out) {
-        g_instance->GetDevice().waitIdle();
+        scheduler.DeferOperation([old = sr]() mutable { DestroySrImages(old); });
+        sr = SrImages{};
     }
-    DestroySrImages();
     if (!CreateImage(depth_format, in_w, in_h, true, sr.depth, sr.depth_alloc, sr.depth_memory,
                      sr.depth_view) ||
         !CreateImage(mvec_format, in_w, in_h, false, sr.mvec, sr.mvec_alloc, sr.mvec_memory,
@@ -794,7 +828,7 @@ bool EnsureSrImages(vk::Format depth_format, vk::Format mvec_format, u32 in_w, u
                      sr.out_memory, sr.out_view)) {
         std::fprintf(stderr, "SOTC DLSS: cannot create the images %ux%u -> %ux%u\n", in_w, in_h,
                      out_w, out_h);
-        DestroySrImages();
+        DestroySrImages(sr);
         return false;
     }
     sr.depth_format = depth_format;
@@ -841,7 +875,7 @@ void SetOptions(bool on) {
     if (Parallel()) {
         options.queueParallelismMode = sl::DLSSGQueueParallelismMode::eBlockNoClientQueues;
     }
-    const sl::Result r = api.dlssg_set_options(sl::ViewportHandle{0}, options);
+    const sl::Result r = Sl(api.dlssg_set_options, sl::ViewportHandle{0}, options);
     if (r != sl::Result::eOk) {
         std::fprintf(stderr, "SOTC DLSSG: slDLSSGSetOptions(%s) failed (%d)\n", on ? "on" : "off",
                      static_cast<int>(r));
@@ -1137,8 +1171,7 @@ void PrepareInputs(u32 frame_id, vk::CommandBuffer cmdbuf, VideoCore::TextureCac
         return;
     }
     sl::Constants constants{};
-    // sotc: DLSS SR made this capture's constants already (MakeConstants keeps the camera of the
-    // last call to find cuts: a second call would never see one).
+    // sotc: DLSS SR made this capture's constants already.
     const bool sr_made = sr_state.constants_ok && sr_state.serial == p.serial;
     if (sr_made) {
         constants = sr_state.constants;
@@ -1242,7 +1275,7 @@ void PrepareInputs(u32 frame_id, vk::CommandBuffer cmdbuf, VideoCore::TextureCac
         return;
     }
     if (sl::FrameToken* token = Token(f.index)) {
-        const sl::Result r = api.set_constants(constants, *token, sl::ViewportHandle{0});
+        const sl::Result r = Sl(api.set_constants, constants, *token, sl::ViewportHandle{0});
         if (r != sl::Result::eOk) {
             static u32 errors = 0;
             if (errors++ < 5) {
@@ -1367,7 +1400,8 @@ void BeforePresent(u32 frame_id, vk::Rect2D rect, vk::Extent2D extent) {
                             sl::ResourceLifecycle::eValidUntilPresent, &back},
         };
         const u32 count = whole ? 3 : 4;
-        const sl::Result r = api.set_tag(*token, sl::ViewportHandle{0}, tags.data(), count, nullptr);
+        const sl::Result r =
+            Sl(api.set_tag, *token, sl::ViewportHandle{0}, tags.data(), count, nullptr);
         if (r != sl::Result::eOk) {
             static u32 errors = 0;
             if (errors++ < 5) {
@@ -1383,9 +1417,9 @@ void BeforePresent(u32 frame_id, vk::Rect2D rect, vk::Extent2D extent) {
             sl::ResourceTag{nullptr, sl::kBufferTypeHUDLessColor,
                             sl::ResourceLifecycle::eValidUntilPresent},
         };
-        api.set_tag(*token, sl::ViewportHandle{0}, tags.data(), 3, nullptr);
+        Sl(api.set_tag, *token, sl::ViewportHandle{0}, tags.data(), 3, nullptr);
     }
-    api.pcl_marker(sl::PCLMarker::ePresentStart, *token);
+    Sl(api.pcl_marker, sl::PCLMarker::ePresentStart, *token);
     QueryPerformanceCounter(&present_start);
 }
 
@@ -1411,7 +1445,7 @@ void AfterPresent(u32 frame_id) {
         return;
     }
     sl::DLSSGState state{};
-    if (api.dlssg_get_state(sl::ViewportHandle{0}, state, nullptr) != sl::Result::eOk) {
+    if (Sl(api.dlssg_get_state, sl::ViewportHandle{0}, state, nullptr) != sl::Result::eOk) {
         return;
     }
     if (track) {
@@ -1477,7 +1511,7 @@ bool GetFrameInputs(u32 frame_id, FrameInputs& out) {
 }
 
 bool SrActive() {
-    return SrOn();
+    return SrOn() && sr_failures.load(std::memory_order_relaxed) < kSrMaxFailures;
 }
 
 vk::ImageView UpscaleScene(Scheduler& scheduler, Runtime& runtime,
@@ -1499,8 +1533,8 @@ vk::ImageView UpscaleScene(Scheduler& scheduler, Runtime& runtime,
     }
     BbSettings::Get().active_render_width.store(static_cast<int>(in_w), std::memory_order_relaxed);
     BbSettings::Get().active_render_height.store(static_cast<int>(in_h), std::memory_order_relaxed);
-    if (!EnsureSrImages(depth->info.pixel_format, mvec->info.pixel_format, in_w, in_h, out_w,
-                        out_h)) {
+    if (!EnsureSrImages(scheduler, depth->info.pixel_format, mvec->info.pixel_format, in_w, in_h,
+                        out_w, out_h)) {
         return {};
     }
     // The mode, checked against the render sizes DLSS takes for it.
@@ -1512,8 +1546,24 @@ vk::ImageView UpscaleScene(Scheduler& scheduler, Runtime& runtime,
     options.useAutoExposure = sl::Boolean::eTrue;
     // The composite may read the scene's alpha: it is upscaled too.
     options.alphaUpscalingEnabled = sl::Boolean::eTrue;
-    sl::DLSSOptimalSettings optimal{};
-    if (api.dlss_optimal(options, optimal) == sl::Result::eOk && optimal.renderWidthMax &&
+    // Asked once per mode and output size.
+    static struct {
+        sl::DLSSMode mode{};
+        u32 out_w{}, out_h{};
+        bool ok{};
+        sl::DLSSOptimalSettings settings{};
+    } optimal_memo;
+    if (!optimal_memo.out_w || optimal_memo.mode != options.mode || optimal_memo.out_w != out_w ||
+        optimal_memo.out_h != out_h) {
+        optimal_memo.mode = options.mode;
+        optimal_memo.out_w = out_w;
+        optimal_memo.out_h = out_h;
+        optimal_memo.settings = {};
+        optimal_memo.ok =
+            Sl(api.dlss_optimal, options, optimal_memo.settings) == sl::Result::eOk;
+    }
+    const sl::DLSSOptimalSettings& optimal = optimal_memo.settings;
+    if (optimal_memo.ok && optimal.renderWidthMax &&
         (in_w < optimal.renderWidthMin || in_w > optimal.renderWidthMax ||
          in_h < optimal.renderHeightMin || in_h > optimal.renderHeightMax)) {
         if (!sr_state.reported) {
@@ -1528,7 +1578,8 @@ vk::ImageView UpscaleScene(Scheduler& scheduler, Runtime& runtime,
     }
     const bool new_options = !sr_state.options_set || options.mode != sr_state.options.mode ||
                              options.outputWidth != sr_state.options.outputWidth ||
-                             options.outputHeight != sr_state.options.outputHeight;
+                             options.outputHeight != sr_state.options.outputHeight ||
+                             sr_options_failed.exchange(false, std::memory_order_relaxed);
     sr_state.options = options;
     sr_state.options_set = true;
     if (!sr_state.constants_ok || sr_state.serial != p.serial) {
@@ -1542,10 +1593,6 @@ vk::ImageView UpscaleScene(Scheduler& scheduler, Runtime& runtime,
     sl::Constants constants = sr_state.constants;
     constants.jitterOffset = sl::float2(0.0f, 0.0f);
     const u32 index = next_index + 1; // the index PrepareInputs gives this frame
-    sl::FrameToken* token = Token(index);
-    if (!token) {
-        return {};
-    }
     // Frames without an evaluation since the last one (switched off, loading screens): its
     // history is stale.
     if (sr_state.last_index + 1 != index) {
@@ -1632,9 +1679,45 @@ vk::ImageView UpscaleScene(Scheduler& scheduler, Runtime& runtime,
                                       VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     scheduler.RecordDeferred([=, images = sr](vk::CommandBuffer cmd) {
         const sl::ViewportHandle viewport{1};
-        if (new_options && api.dlss_set_options(viewport, options) != sl::Result::eOk) {
-            std::fprintf(stderr, "SOTC DLSS: slDLSSSetOptions failed\n");
+        // The scene stretched into the output, as the game would show it.
+        const auto stretch = [&] {
+            const auto layout = [&](vk::ImageLayout from, vk::ImageLayout to,
+                                    vk::PipelineStageFlags2 src_stage, vk::AccessFlags2 src_access,
+                                    vk::PipelineStageFlags2 dst_stage, vk::AccessFlags2 dst_access) {
+                const vk::ImageMemoryBarrier2 b{
+                    .srcStageMask = src_stage, .srcAccessMask = src_access,
+                    .dstStageMask = dst_stage, .dstAccessMask = dst_access,
+                    .oldLayout = from, .newLayout = to, .image = scene_image,
+                    .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}};
+                cmd.pipelineBarrier2(
+                    vk::DependencyInfo{.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &b});
+            };
+            layout(vk::ImageLayout::eShaderReadOnlyOptimal, vk::ImageLayout::eTransferSrcOptimal,
+                   vk::PipelineStageFlagBits2::eAllCommands, vk::AccessFlagBits2::eNone,
+                   vk::PipelineStageFlagBits2::eBlit, vk::AccessFlagBits2::eTransferRead);
+            const vk::ImageBlit region{
+                .srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+                .srcOffsets = std::array{vk::Offset3D{0, 0, 0},
+                                         vk::Offset3D{s32(in_w), s32(in_h), 1}},
+                .dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+                .dstOffsets = std::array{vk::Offset3D{0, 0, 0},
+                                         vk::Offset3D{s32(images.out_w), s32(images.out_h), 1}}};
+            cmd.blitImage(scene_image, vk::ImageLayout::eTransferSrcOptimal, images.out,
+                          vk::ImageLayout::eGeneral, region, vk::Filter::eLinear);
+            layout(vk::ImageLayout::eTransferSrcOptimal, vk::ImageLayout::eShaderReadOnlyOptimal,
+                   vk::PipelineStageFlagBits2::eBlit, vk::AccessFlagBits2::eTransferRead,
+                   vk::PipelineStageFlagBits2::eAllCommands, vk::AccessFlagBits2::eShaderRead);
+        };
+        sl::FrameToken* token = Token(index);
+        if (!token) {
+            stretch();
+            return;
         }
+        if (new_options && Sl(api.dlss_set_options, viewport, options) != sl::Result::eOk) {
+            std::fprintf(stderr, "SOTC DLSS: slDLSSSetOptions failed\n");
+            sr_options_failed.store(true, std::memory_order_relaxed);
+        }
+        std::scoped_lock lock{sl_mutex};
         api.set_constants(constants, *token, viewport);
         sl::Resource color_in = SlImage(scene_image, nullptr, scene_view,
                                         vk::ImageLayout::eShaderReadOnlyOptimal, scene_format, in_w,
@@ -1668,21 +1751,36 @@ vk::ImageView UpscaleScene(Scheduler& scheduler, Runtime& runtime,
             const sl::BaseStructure* evaluate_inputs[] = {&viewport};
             r = api.evaluate(sl::kFeatureDLSS, *token, evaluate_inputs, 1, sl_cmd);
         }
-        static u32 errors = 0;
-        if (r != sl::Result::eOk && errors++ < 5) {
-            std::fprintf(stderr, "SOTC DLSS: evaluation failed (%d)\n", static_cast<int>(r));
-        }
-        static bool first = true;
-        if (std::exchange(first, false)) {
-            std::fprintf(stderr, "SOTC DLSS: %ux%u -> %ux%u, mode %d\n", in_w, in_h,
-                         images.out_w, images.out_h, static_cast<int>(options.mode));
+        if (r != sl::Result::eOk) {
+            stretch();
+            const u32 failures = sr_failures.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (failures <= 5 || failures == kSrMaxFailures) {
+                std::fprintf(stderr, "SOTC DLSS: evaluation failed (%d)%s\n", static_cast<int>(r),
+                             failures == kSrMaxFailures ? ": DLSS off for this session" : "");
+            }
+            if (failures == kSrMaxFailures) {
+                // The in-game menu shows why (bbport_overlay.cpp DlssProblem).
+                auto& s = BbSettings::Get();
+                s.dlss_problem.store("DLSS evaluation failed", std::memory_order_relaxed);
+                s.dlss_supported.store(false, std::memory_order_relaxed);
+            }
+        } else {
+            if (sr_failures.load(std::memory_order_relaxed) < kSrMaxFailures) {
+                sr_failures.store(0, std::memory_order_relaxed);
+            }
+            static bool first = true;
+            if (std::exchange(first, false)) {
+                std::fprintf(stderr, "SOTC DLSS: %ux%u -> %ux%u, mode %d\n", in_w, in_h,
+                             images.out_w, images.out_h, static_cast<int>(options.mode));
+            }
         }
     });
     CommandRecorder::ForgetPushes();
     const vk::ImageMemoryBarrier2 to_read =
         barrier(sr.out, range(vk::ImageAspectFlagBits::eColor), vk::ImageLayout::eGeneral,
                 vk::ImageLayout::eShaderReadOnlyOptimal, vk::PipelineStageFlagBits2::eAllCommands,
-                vk::AccessFlagBits2::eShaderStorageWrite | vk::AccessFlagBits2::eShaderWrite,
+                vk::AccessFlagBits2::eShaderStorageWrite | vk::AccessFlagBits2::eShaderWrite |
+                    vk::AccessFlagBits2::eTransferWrite,
                 vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderRead);
     cmdbuf.pipelineBarrier2(
         vk::DependencyInfo{.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &to_read});

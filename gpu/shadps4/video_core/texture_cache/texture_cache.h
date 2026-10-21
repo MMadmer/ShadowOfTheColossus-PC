@@ -708,6 +708,10 @@ public:
     [[nodiscard]] u64 ImageSetGeneration() const noexcept {
         return image_set_generation;
     }
+    /// sotc: bumped whenever the garbage collector destroys samplers.
+    [[nodiscard]] u64 SamplerEpoch() const noexcept {
+        return sampler_epoch.load(std::memory_order_acquire);
+    }
     /// sotc: the Xbox button icons (BindTextures samples them for the marked images).
     [[nodiscard]] const PadGlyphs& PadGlyphIcons() const noexcept {
         return pad_glyphs;
