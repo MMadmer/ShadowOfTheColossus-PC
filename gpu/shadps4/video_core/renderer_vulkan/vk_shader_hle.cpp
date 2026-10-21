@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <vector>
+#include "bbport_copy.h"
 #include "core/memory.h"
 #include "shader_recompiler/info.h"
 #include "video_core/sotc_stats.h"
@@ -183,9 +184,30 @@ static bool ReplaceChangedPages(Rasterizer& rasterizer, VAddr address, const u8*
         return true;
     };
     const VAddr end = address + size;
+    const auto page_differs = [&](VAddr lo, VAddr hi) {
+        return std::memcmp(current + (lo - address), data.At(lo - address), hi - lo) != 0;
+    };
+    // sotc: tables of 1 MiB and more (~8 MB compared per frame at the Shrine) are compared on the
+    // copy threads, 256 KiB per task; the pages that differ are then replaced in order here.
+    const VAddr first_page = address & ~VAddr{4095};
+    const u64 pages = (end - first_page + 4095) / 4096;
+    static thread_local std::vector<u8> changed;
+    const bool parallel = size >= 1_MB && BbCopy::Enabled();
+    if (parallel) {
+        constexpr u64 PagesPerTask = 64;
+        changed.assign(pages, 0);
+        BbCopy::ParallelFor((pages + PagesPerTask - 1) / PagesPerTask, [&](std::size_t task) {
+            const u64 last = std::min<u64>(pages, (task + 1) * PagesPerTask);
+            for (u64 page = task * PagesPerTask; page < last; ++page) {
+                const VAddr lo = std::max<VAddr>(address, first_page + page * 4096);
+                const VAddr hi = std::min<VAddr>(first_page + (page + 1) * 4096, end);
+                changed[page] = page_differs(lo, hi);
+            }
+        });
+    }
     for (VAddr lo = address; lo < end;) {
         const VAddr hi = std::min<VAddr>((lo & ~VAddr{4095}) + 4096, end);
-        if (std::memcmp(current + (lo - address), data.At(lo - address), hi - lo) != 0) {
+        if (parallel ? changed[(lo - first_page) / 4096] != 0 : page_differs(lo, hi)) {
             if (run_end != lo && !flush()) {
                 return false;
             }
