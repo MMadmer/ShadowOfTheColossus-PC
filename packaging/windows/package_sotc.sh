@@ -65,8 +65,8 @@ fi
 if [[ -d ${SHADER_PACK_DIR:-} ]]; then
     cp -r "$SHADER_PACK_DIR" "$dest/shaderpack"
 fi
-cp docs/sotc/README-SotC.md "$dest/README.md"
-cp docs/README_RU.md "$dest/README_RU.md"
+cp README.md "$dest/README.md"
+cp README_RU.md "$dest/README_RU.md"
 cat > "$dest/sotc.ini" <<'EOF'
 # Shadow of the Colossus PC - settings (see README.md)
 # Folder of your game dump (the one with eboot.bin):
