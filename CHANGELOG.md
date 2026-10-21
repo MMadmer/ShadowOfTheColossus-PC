@@ -20,6 +20,9 @@
   o semáforo é sinalizado pela CPU: o jogo continua (as faixas sem memória são lidas como zeros).
 - Uma textura tirada da memória de vídeo cheia só grava de volta na memória do jogo os bytes que o
   jogo não mudou desde o pedido.
+- **Quadrado claro em volta dos ícones de botões** (Xbox, teclado e mouse) nas dicas: o jogo mistura a
+  interface com alfa pré-multiplicado, e a borda cinza fora dos ícones redondos era somada à imagem.
+  Os ícones agora são gravados com a cor pré-multiplicada pela cobertura.
 - **Progresso da extração dos pacotes (.pkg)** no lançador: saltava para 100% no primeiro segundo e
   parava ali até o fim (o PkgTool cria cada arquivo já com o tamanho final). Agora segue os bytes
   que o PkgTool realmente gravou.

@@ -27,6 +27,13 @@ const int STICK_L = 19, STICK_R = 20, WIGGLE_L = 21, WIGGLE_R = 25;
 
 const float PI = 3.14159265;
 
+// The game blends its interface with premultiplied alpha: colour where nothing is covered was
+// added as is (the faint rim outside the round icons made a light square around them). An
+// sRGB-encoded value times coverage, in linear light.
+float premultiplied(float srgb, float cover) {
+    return pow(pow(srgb, 2.2) * cover, 1.0 / 2.2);
+}
+
 float seg(vec2 p, vec2 a, vec2 b) {
     vec2 pa = p - a, ba = b - a;
     float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
@@ -512,7 +519,7 @@ void draw_diagram(ivec2 pixel) {
     }
     float cover = (grey + black) / 16.0;
     float value = grey + black > 0.0 ? DIAGRAM_GREY * grey / (grey + black) : 0.0;
-    imageStore(dst, pixel, vec4(vec3(value), cover));
+    imageStore(dst, pixel, vec4(vec3(premultiplied(value, cover)), cover));
 }
 
 Shape icon(vec2 p) {
@@ -558,5 +565,5 @@ void main() {
     float value = keycap ? 0.0 : smoothstep(0.86, 0.93, length(centre)) * 0.22;
     value = mix(value, 0.38, grey / cover); // grey parts (sRGB-encoded)
     value = mix(value, 1.0, white / cover);
-    imageStore(dst, pixel, vec4(vec3(clamp(value, 0.0, 1.0)), base));
+    imageStore(dst, pixel, vec4(vec3(premultiplied(clamp(value, 0.0, 1.0), base)), base));
 }
