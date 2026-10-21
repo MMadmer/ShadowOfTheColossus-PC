@@ -2,10 +2,12 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <array>
 #include <optional>
 #include <sirit/sirit.h>
 #include "shader_recompiler/backend/spirv/emit_spirv_quad_rect.h"
 #include "shader_recompiler/info.h"
+#include "shader_recompiler/profile.h"
 #include "shader_recompiler/runtime_info.h"
 
 namespace Shader::Backend::SPIRV {
@@ -376,9 +378,137 @@ bool NeedsBarycentricGs(const HwFragmentRuntimeInfo& fs_runtime, const Info& fs_
     return MakeBarycentricGsLayout(fs_runtime, fs_info).per_vertex_mask != 0;
 }
 
-std::vector<u32> EmitBarycentricGeometryShader(const HwFragmentRuntimeInfo& fs_runtime,
-                                               const Info& fs_info) {
+bool UsesPositionBarycentrics(const Profile& profile, const HwFragmentRuntimeInfo& fs_runtime,
+                              const Info& fs_info) {
+    return profile.barycentric_via_gs && profile.barycentric_gs_passthrough &&
+           MakeBarycentricGsLayout(fs_runtime, fs_info).Matrix() + 3 <= BaryPositionLocation;
+}
+
+bool WritesBaryPosition(const Profile& profile, const Info& vs_info, bool clip_distance_emulation) {
+    if (!profile.barycentric_gs_passthrough) {
+        return false;
+    }
+    const u32 offset = clip_distance_emulation ? 1 : 0;
+    for (u32 i = 0; i < IR::NumParams; ++i) {
+        if (i + offset == BaryPositionLocation && vs_info.stores.GetAny(IR::Attribute::Param0 + i)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+namespace {
+
+/// sotc: the position layout's geometry shader with VK_NV_geometry_shader_passthrough: the
+/// vertices go on untouched (with the clip position at BaryPositionLocation); per primitive it
+/// writes the inverse clip matrix rows and the vertex values of the per-vertex inputs.
+std::vector<u32> EmitPassthroughBarycentricGs(const HwFragmentRuntimeInfo& fs_runtime,
+                                              const BarycentricGsLayout& layout) {
+    Sirit::Module m{SPIRV_VERSION_1_5};
+    m.AddExtension("SPV_NV_geometry_shader_passthrough");
+    m.AddCapability(spv::Capability::Shader);
+    m.AddCapability(spv::Capability::Geometry);
+    m.AddCapability(spv::Capability::GeometryShaderPassthroughNV);
+    const Id void_id{m.TypeVoid()};
+    const Id float_id{m.TypeFloat(32)};
+    const Id uint_id{m.TypeUInt(32U)};
+    const Id int_id{m.TypeInt(32U, true)};
+    const Id vec3_id{m.TypeVector(float_id, 3)};
+    const Id vec4_id{m.TypeVector(float_id, 4)};
+    const Id vec4_arr3{m.TypeArray(vec4_id, m.Constant(uint_id, 3U))};
+    const Id in_vec4{m.TypePointer(spv::StorageClass::Input, vec4_id)};
+    const Id out_vec4{m.TypePointer(spv::StorageClass::Output, vec4_id)};
+    const auto index = [&](s32 value) { return m.Constant(int_id, value); };
+
+    std::vector<Id> interfaces;
+    const auto variable = [&](spv::StorageClass storage, Id type, u32 location) {
+        const Id id{m.AddGlobalVariable(m.TypePointer(storage, type), storage)};
+        m.Decorate(id, spv::Decoration::Location, location);
+        interfaces.push_back(id);
+        return id;
+    };
+    const auto passed = [&](u32 location) {
+        m.Decorate(variable(spv::StorageClass::Input, vec4_arr3, location),
+                   spv::Decoration::PassthroughNV);
+    };
+    const Id per_vertex{m.TypeStruct(vec4_id)};
+    m.Decorate(per_vertex, spv::Decoration::Block);
+    m.MemberDecorate(per_vertex, 0U, spv::Decoration::BuiltIn, u32(spv::BuiltIn::Position));
+    const Id gl_in{m.AddGlobalVariable(
+        m.TypePointer(spv::StorageClass::Input, m.TypeArray(per_vertex, m.Constant(uint_id, 3U))),
+        spv::StorageClass::Input)};
+    m.Decorate(gl_in, spv::Decoration::PassthroughNV);
+    interfaces.push_back(gl_in);
+
+    if (fs_runtime.clip_distance_emulation) {
+        passed(0U);
+    }
+    struct PerVertex {
+        Id in, out;
+    };
+    std::vector<PerVertex> per_vertex_params;
+    for (u32 i = 0; i < NumParams(fs_runtime); ++i) {
+        if (fs_runtime.inputs[i].IsDefault()) {
+            continue;
+        }
+        if (layout.per_vertex_mask & (1u << i)) {
+            per_vertex_params.push_back(
+                {variable(spv::StorageClass::Input, vec4_arr3, BindLocation(fs_runtime, i)),
+                 variable(spv::StorageClass::Output, vec4_arr3, layout.Location(i))});
+        } else {
+            passed(BindLocation(fs_runtime, i));
+        }
+    }
+    passed(BaryPositionLocation);
+    const Id matrix{variable(spv::StorageClass::Output, vec4_arr3, layout.Matrix())};
+
+    const Id main{m.OpFunction(void_id, spv::FunctionControlMask::MaskNone, m.TypeFunction(void_id))};
+    m.AddExecutionMode(main, spv::ExecutionMode::Triangles);
+    m.AddExecutionMode(main, spv::ExecutionMode::OutputTriangleStrip);
+    m.AddExecutionMode(main, spv::ExecutionMode::Invocations, 1U);
+    m.AddExecutionMode(main, spv::ExecutionMode::OutputVertices, 3U);
+    m.AddEntryPoint(spv::ExecutionModel::Geometry, main, "main", interfaces);
+    m.AddLabel(m.OpLabel());
+    // Rows of the inverse of [c0 c1 c2] (clip x, y, w as columns): b = M^-1 (x, y, w) at a
+    // fragment; the vertex w rides along for the screen-space barycentrics.
+    std::array<Id, 3> c{}, w{};
+    for (s32 k = 0; k < 3; ++k) {
+        const Id pos{m.OpLoad(vec4_id, m.OpAccessChain(in_vec4, gl_in, index(k), index(0)))};
+        c[k] = m.OpVectorShuffle(vec3_id, pos, pos, 0U, 1U, 3U);
+        w[k] = m.OpCompositeExtract(float_id, pos, 3U);
+    }
+    const std::array<Id, 3> cross{m.OpCross(vec3_id, c[1], c[2]), m.OpCross(vec3_id, c[2], c[0]),
+                                  m.OpCross(vec3_id, c[0], c[1])};
+    const Id inv_det{
+        m.OpFDiv(float_id, m.Constant(float_id, 1.0f), m.OpDot(float_id, c[0], cross[0]))};
+    for (s32 k = 0; k < 3; ++k) {
+        const Id row{m.OpVectorTimesScalar(vec3_id, cross[k], inv_det)};
+        m.OpStore(m.OpAccessChain(out_vec4, matrix, index(k)),
+                  m.OpCompositeConstruct(vec4_id, m.OpCompositeExtract(float_id, row, 0U),
+                                         m.OpCompositeExtract(float_id, row, 1U),
+                                         m.OpCompositeExtract(float_id, row, 2U), w[k]));
+    }
+    for (const PerVertex& param : per_vertex_params) {
+        for (s32 k = 0; k < 3; ++k) {
+            m.OpStore(m.OpAccessChain(out_vec4, param.out, index(k)),
+                      m.OpLoad(vec4_id, m.OpAccessChain(in_vec4, param.in, index(k))));
+        }
+    }
+    m.OpReturn();
+    m.OpFunctionEnd();
+    return m.Assemble();
+}
+
+} // Anonymous namespace
+
+std::vector<u32> EmitBarycentricGeometryShader(const Profile& profile,
+                                               const HwFragmentRuntimeInfo& fs_runtime,
+                                               const Info& fs_info, bool passthrough) {
     const BarycentricGsLayout layout = MakeBarycentricGsLayout(fs_runtime, fs_info);
+    const bool position_layout = UsesPositionBarycentrics(profile, fs_runtime, fs_info);
+    if (position_layout && passthrough) {
+        return EmitPassthroughBarycentricGs(fs_runtime, layout);
+    }
     Sirit::Module m{SPIRV_VERSION_1_5};
     m.AddCapability(spv::Capability::Shader);
     m.AddCapability(spv::Capability::Geometry);
@@ -443,9 +573,19 @@ std::vector<u32> EmitBarycentricGeometryShader(const HwFragmentRuntimeInfo& fs_r
         }
         params.push_back({in, out, false});
     }
-    const Id bary_smooth{variable(spv::StorageClass::Output, vec3_id, layout.Smooth())};
-    const Id bary_nopersp{variable(spv::StorageClass::Output, vec3_id, layout.NoPerspective())};
-    m.Decorate(bary_nopersp, spv::Decoration::NoPerspective);
+    // sotc: the position layout without passthrough (a vertex shader that does not write its
+    // position, or an auxiliary tessellation stage in between): unit "positions" and an identity
+    // matrix give the pixel shader the same barycentrics as the bary outputs below.
+    Id bary_smooth{}, bary_nopersp{}, bary_pos{}, bary_matrix{};
+    if (position_layout) {
+        bary_pos = variable(spv::StorageClass::Output, vec4_id, BaryPositionLocation);
+        bary_matrix = variable(spv::StorageClass::Output, vec4_arr3, layout.Matrix());
+        m.Decorate(bary_matrix, spv::Decoration::Flat);
+    } else {
+        bary_smooth = variable(spv::StorageClass::Output, vec3_id, layout.Smooth());
+        bary_nopersp = variable(spv::StorageClass::Output, vec3_id, layout.NoPerspective());
+        m.Decorate(bary_nopersp, spv::Decoration::NoPerspective);
+    }
 
     const Id main{m.OpFunction(void_id, spv::FunctionControlMask::MaskNone, m.TypeFunction(void_id))};
     m.AddExecutionMode(main, spv::ExecutionMode::Triangles);
@@ -456,6 +596,12 @@ std::vector<u32> EmitBarycentricGeometryShader(const HwFragmentRuntimeInfo& fs_r
     m.AddLabel(m.OpLabel());
     const Id zero{m.Constant(float_id, 0.0f)};
     const Id one{m.Constant(float_id, 1.0f)};
+    const Id in_float{m.TypePointer(spv::StorageClass::Input, float_id)};
+    std::array<Id, 3> vertex_w{};
+    for (s32 v = 0; v < 3; ++v) {
+        vertex_w[v] =
+            m.OpLoad(float_id, m.OpAccessChain(in_float, gl_in, index(v), index(0), index(3)));
+    }
     for (s32 v = 0; v < 3; ++v) {
         const Id position{m.OpLoad(vec4_id, m.OpAccessChain(in_vec4, gl_in, index(v), index(0)))};
         m.OpStore(m.OpAccessChain(out_vec4, gl_out, index(0)), position);
@@ -470,10 +616,20 @@ std::vector<u32> EmitBarycentricGeometryShader(const HwFragmentRuntimeInfo& fs_r
                           m.OpLoad(vec4_id, m.OpAccessChain(in_vec4, param.in, index(v))));
             }
         }
-        const Id bary{m.ConstantComposite(vec3_id, v == 0 ? one : zero, v == 1 ? one : zero,
-                                          v == 2 ? one : zero)};
-        m.OpStore(bary_smooth, bary);
-        m.OpStore(bary_nopersp, bary);
+        if (position_layout) {
+            m.OpStore(bary_pos, m.ConstantComposite(vec4_id, v == 0 ? one : zero,
+                                                    v == 1 ? one : zero, zero, v == 2 ? one : zero));
+            for (s32 k = 0; k < 3; ++k) {
+                m.OpStore(m.OpAccessChain(out_vec4, bary_matrix, index(k)),
+                          m.OpCompositeConstruct(vec4_id, k == 0 ? one : zero, k == 1 ? one : zero,
+                                                 k == 2 ? one : zero, vertex_w[k]));
+            }
+        } else {
+            const Id bary{m.ConstantComposite(vec3_id, v == 0 ? one : zero, v == 1 ? one : zero,
+                                              v == 2 ? one : zero)};
+            m.OpStore(bary_smooth, bary);
+            m.OpStore(bary_nopersp, bary);
+        }
         m.OpEmitVertex();
     }
     m.OpEndPrimitive();

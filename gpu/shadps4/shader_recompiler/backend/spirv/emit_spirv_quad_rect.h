@@ -10,6 +10,7 @@
 namespace Shader {
 struct HwFragmentRuntimeInfo;
 struct Info;
+struct Profile;
 }
 
 namespace Shader::Backend::SPIRV {
@@ -31,7 +32,18 @@ struct BarycentricGsLayout {
     u32 NoPerspective() const {
         return Smooth() + 1;
     }
+    /// Position layout: the three rows of the inverse clip matrix take the barycentrics' place.
+    u32 Matrix() const {
+        return Smooth();
+    }
 };
+
+/// sotc: Profile::barycentric_gs_passthrough: the vertex shader also writes its clip position
+/// here, and a pixel shader in the position layout solves its barycentrics from it: per primitive
+/// the geometry shader only writes the inverse of the matrix of the three clip positions (x, y, w)
+/// and the vertex values of the per-vertex inputs, so it can pass the vertices on untouched
+/// (VK_NV_geometry_shader_passthrough, much cheaper than copying them on Pascal).
+constexpr u32 BaryPositionLocation = 31;
 
 [[nodiscard]] BarycentricGsLayout MakeBarycentricGsLayout(const HwFragmentRuntimeInfo& fs_runtime,
                                                           const Info& fs_info);
@@ -39,8 +51,21 @@ struct BarycentricGsLayout {
 /// sotc: true when a pixel shader needs that geometry shader (per-vertex inputs or barycentrics).
 [[nodiscard]] bool NeedsBarycentricGs(const HwFragmentRuntimeInfo& fs_runtime, const Info& fs_info);
 
-[[nodiscard]] std::vector<u32> EmitBarycentricGeometryShader(const HwFragmentRuntimeInfo& fs_runtime,
-                                                             const Info& fs_info);
+/// sotc: the pixel shader uses the position layout (its locations leave room for it).
+[[nodiscard]] bool UsesPositionBarycentrics(const Profile& profile,
+                                            const HwFragmentRuntimeInfo& fs_runtime,
+                                            const Info& fs_info);
+
+/// sotc: the vertex shader writes its clip position at BaryPositionLocation (location free).
+[[nodiscard]] bool WritesBaryPosition(const Profile& profile, const Info& vs_info,
+                                      bool clip_distance_emulation);
+
+/// sotc: `passthrough`: a VK_NV_geometry_shader_passthrough shader, allowed when the pixel shader
+/// uses the position layout and the vertex shader feeds the geometry shader directly and writes
+/// its position (WritesBaryPosition).
+[[nodiscard]] std::vector<u32> EmitBarycentricGeometryShader(const Profile& profile,
+                                                             const HwFragmentRuntimeInfo& fs_runtime,
+                                                             const Info& fs_info, bool passthrough);
 
 enum class AuxShaderType : u32 {
     RectListTCS,

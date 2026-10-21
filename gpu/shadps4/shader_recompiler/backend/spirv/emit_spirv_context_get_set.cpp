@@ -82,6 +82,40 @@ Id EmitReadConstBuffer(EmitContext& ctx, u32 handle, Id index) {
     return result;
 }
 
+namespace {
+
+/// sotc: Profile::barycentric_gs_passthrough: the barycentrics at a fragment from its clip position
+/// (`pos`, interpolated as the attribute asks) and the rows of the inverse clip matrix (gsb_bm),
+/// whose w are the vertex w. Screen-space ones are the perspective ones times the vertex w,
+/// normalised.
+Id PositionBarycentrics(EmitContext& ctx, Id pos, bool nopersp) {
+    const Id input_vec4{ctx.TypePointer(spv::StorageClass::Input, ctx.F32[4])};
+    const Id clip{ctx.OpVectorShuffle(ctx.F32[3], pos, pos, 0U, 1U, 3U)};
+    std::array<Id, 3> bary{}, w{};
+    for (u32 k = 0; k < 3; ++k) {
+        const Id row{ctx.OpLoad(ctx.F32[4],
+                                ctx.OpAccessChain(input_vec4, ctx.bary_matrix, ctx.ConstU32(k)))};
+        bary[k] = ctx.OpDot(ctx.F32[1], ctx.OpVectorShuffle(ctx.F32[3], row, row, 0U, 1U, 2U), clip);
+        w[k] = ctx.OpCompositeExtract(ctx.F32[1], row, 3U);
+    }
+    if (nopersp) {
+        for (u32 k = 0; k < 3; ++k) {
+            bary[k] = ctx.OpFMul(ctx.F32[1], bary[k], w[k]);
+        }
+        const Id sum{ctx.OpFAdd(ctx.F32[1], ctx.OpFAdd(ctx.F32[1], bary[0], bary[1]), bary[2])};
+        for (u32 k = 0; k < 3; ++k) {
+            bary[k] = ctx.OpFDiv(ctx.F32[1], bary[k], sum);
+        }
+    }
+    return ctx.OpCompositeConstruct(ctx.F32[3], bary[0], bary[1], bary[2]);
+}
+
+Id PositionBarycentric(EmitContext& ctx, Id pos, bool nopersp, u32 comp) {
+    return ctx.OpCompositeExtract(ctx.F32[1], PositionBarycentrics(ctx, pos, nopersp), comp);
+}
+
+} // Anonymous namespace
+
 Id EmitGetAttribute(EmitContext& ctx, IR::Attribute attr, u32 comp, u32 index) {
     if (IR::IsParam(attr)) {
         const u32 param_index{u32(attr) - u32(IR::Attribute::Param0)};
@@ -130,6 +164,9 @@ Id EmitGetAttribute(EmitContext& ctx, IR::Attribute attr, u32 comp, u32 index) {
         return ctx.OpLoad(ctx.F32[1],
                           ctx.OpAccessChain(ctx.input_f32, ctx.tess_coord, ctx.ConstU32(1U)));
     case IR::Attribute::BaryCoordSmooth:
+        if (ctx.position_bary) {
+            return PositionBarycentric(ctx, ctx.OpLoad(ctx.F32[4], ctx.bary_position), false, comp);
+        }
         if (ctx.profile.supports_amd_shader_explicit_vertex_parameter) {
             return ctx.OpLoad(ctx.F32[1], ctx.OpAccessChain(ctx.input_f32, ctx.bary_coord_smooth,
                                                             ctx.ConstU32(comp)));
@@ -137,6 +174,10 @@ Id EmitGetAttribute(EmitContext& ctx, IR::Attribute attr, u32 comp, u32 index) {
             return ctx.OpCompositeExtract(ctx.F32[1], ctx.OpLoad(ctx.F32[3], ctx.bary_coord), comp);
         }
     case IR::Attribute::BaryCoordSmoothCentroid:
+        if (ctx.position_bary) {
+            return PositionBarycentric(
+                ctx, ctx.OpInterpolateAtCentroid(ctx.F32[4], ctx.bary_position), false, comp);
+        }
         if (ctx.profile.supports_amd_shader_explicit_vertex_parameter) {
             return ctx.OpLoad(ctx.F32[1],
                               ctx.OpAccessChain(ctx.input_f32, ctx.bary_coord_smooth_centroid,
@@ -146,6 +187,13 @@ Id EmitGetAttribute(EmitContext& ctx, IR::Attribute attr, u32 comp, u32 index) {
                 ctx.F32[1], ctx.OpInterpolateAtCentroid(ctx.F32[3], ctx.bary_coord), comp);
         }
     case IR::Attribute::BaryCoordSmoothSample:
+        if (ctx.position_bary) {
+            return PositionBarycentric(
+                ctx,
+                ctx.OpInterpolateAtSample(ctx.F32[4], ctx.bary_position,
+                                          ctx.OpLoad(ctx.U32[1], ctx.sample_index)),
+                false, comp);
+        }
         if (ctx.profile.supports_amd_shader_explicit_vertex_parameter) {
             return ctx.OpLoad(
                 ctx.F32[1],
@@ -158,12 +206,18 @@ Id EmitGetAttribute(EmitContext& ctx, IR::Attribute attr, u32 comp, u32 index) {
                 comp);
         }
     case IR::Attribute::BaryCoordNoPersp:
+    case IR::Attribute::BaryCoordNoPerspSample:
+        // sotc: the sample variant at the pixel centre, as the bary outputs give it.
+        if (ctx.position_bary) {
+            return PositionBarycentric(ctx, ctx.OpLoad(ctx.F32[4], ctx.bary_position), true, comp);
+        }
+        if (attr == IR::Attribute::BaryCoordNoPerspSample) {
+            return ctx.OpLoad(ctx.F32[1], ctx.OpAccessChain(ctx.input_f32,
+                                                            ctx.bary_coord_nopersp_sample,
+                                                            ctx.ConstU32(comp)));
+        }
         return ctx.OpLoad(ctx.F32[1], ctx.OpAccessChain(ctx.input_f32, ctx.bary_coord_nopersp,
                                                         ctx.ConstU32(comp)));
-    case IR::Attribute::BaryCoordNoPerspSample:
-        return ctx.OpLoad(
-            ctx.F32[1],
-            ctx.OpAccessChain(ctx.input_f32, ctx.bary_coord_nopersp_sample, ctx.ConstU32(comp)));
     case IR::Attribute::BaryCoordPullModel: {
         ASSERT_MSG(comp < 3, "Invalid BaryCoordPullModel component {}", comp);
 
@@ -181,8 +235,11 @@ Id EmitGetAttribute(EmitContext& ctx, IR::Attribute attr, u32 comp, u32 index) {
         if (comp == 2) {
             return inv_w;
         }
-        const Id ij =
-            ctx.OpCompositeExtract(ctx.F32[1], ctx.OpLoad(ctx.F32[3], ctx.bary_coord), comp + 1);
+        const Id smooth = ctx.position_bary
+                              ? PositionBarycentrics(
+                                    ctx, ctx.OpLoad(ctx.F32[4], ctx.bary_position), false)
+                              : ctx.OpLoad(ctx.F32[3], ctx.bary_coord);
+        const Id ij = ctx.OpCompositeExtract(ctx.F32[1], smooth, comp + 1);
         return ctx.OpFMul(ctx.F32[1], ij, inv_w);
     }
     default:

@@ -56,6 +56,11 @@ struct Profile {
     /// (EmitBarycentricGeometryShader): per-vertex inputs and barycentrics become plain inputs.
     /// Last, so the profiles stored in older caches still compare equal.
     bool barycentric_via_gs{};
+    /// sotc: with barycentric_via_gs, the pixel shaders solve their barycentrics from the clip
+    /// position (UsesPositionBarycentrics) and the geometry shader passes the vertices on
+    /// (VK_NV_geometry_shader_passthrough). In the padding byte older caches have after the
+    /// previous member: anything but 1 there is off.
+    bool barycentric_gs_passthrough{};
 
     bool operator==(const Profile&) const = default;
 };

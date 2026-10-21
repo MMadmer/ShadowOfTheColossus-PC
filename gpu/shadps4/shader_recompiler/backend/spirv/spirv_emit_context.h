@@ -297,6 +297,13 @@ public:
     Id bary_coord_pull_model{};
     Id bary_coord_nopersp{};
     Id bary_coord_nopersp_sample{};
+    /// sotc: Profile::barycentric_gs_passthrough (UsesPositionBarycentrics): the barycentrics are
+    /// solved from the interpolated clip position and the per-primitive inverse clip matrix.
+    bool position_bary{};
+    Id bary_position{};
+    Id bary_matrix{};
+    /// sotc: the vertex shader's copy of its clip position (WritesBaryPosition).
+    Id output_bary_position{};
 
     struct TextureDefinition {
         const VectorIds* data_types;

@@ -4,6 +4,7 @@
 // that feeds it, without a window or the game. Validate both with spirv-val:
 //   ninja -C out/gpu barycentric-gs-test && out/gpu/barycentric-gs-test.exe out/bary-gs
 //   spirv-val --target-env vulkan1.2 out/bary-gs/fragment.spv && spirv-val --target-env vulkan1.2 out/bary-gs/geometry.spv
+//   (and fragment_pos.spv, geometry_pos.spv, geometry_pt.spv: the passthrough profile)
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -93,7 +94,22 @@ int main(int argc, char** argv) {
     CHECK(Backend::SPIRV::NeedsBarycentricGs(fs, info));
 
     Backend::Bindings bindings{};
+    CHECK(!Backend::SPIRV::UsesPositionBarycentrics(profile, fs, info));
     CHECK(Write(dir / "fragment.spv", Backend::SPIRV::EmitSPIRV(profile, runtime, program, bindings)));
-    CHECK(Write(dir / "geometry.spv", Backend::SPIRV::EmitBarycentricGeometryShader(fs, info)));
+    CHECK(Write(dir / "geometry.spv",
+                Backend::SPIRV::EmitBarycentricGeometryShader(profile, fs, info, false)));
+
+    // Position layout (barycentric_gs_passthrough): the clip position at 31, the inverse clip
+    // matrix where the barycentrics were; a copying and a passthrough geometry shader feed it.
+    profile.barycentric_gs_passthrough = true;
+    CHECK(Backend::SPIRV::UsesPositionBarycentrics(profile, fs, info));
+    CHECK(layout.Matrix() == 7);
+    Backend::Bindings position_bindings{};
+    CHECK(Write(dir / "fragment_pos.spv",
+                Backend::SPIRV::EmitSPIRV(profile, runtime, program, position_bindings)));
+    CHECK(Write(dir / "geometry_pos.spv",
+                Backend::SPIRV::EmitBarycentricGeometryShader(profile, fs, info, false)));
+    CHECK(Write(dir / "geometry_pt.spv",
+                Backend::SPIRV::EmitBarycentricGeometryShader(profile, fs, info, true)));
     return 0;
 }

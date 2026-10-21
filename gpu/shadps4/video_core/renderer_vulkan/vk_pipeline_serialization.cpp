@@ -463,11 +463,14 @@ void PipelineCache::WarmUp() {
     bool compatible = true;
     if (!profile_data.empty()) {
         Shader::Profile cached_profile{};
+        static_assert(sizeof(Shader::Profile) == 64, "the padding byte assumption below");
         if (profile_data.size() == sizeof(Shader::Profile)) {
             // sotc: barycentric_via_gs, the last member, sits where older caches have a padding
             // byte (seen 0xe3, 0x36): anything but 1 there is off, so those caches still match.
             auto& via_gs = profile_data[offsetof(Shader::Profile, barycentric_via_gs)];
             via_gs = via_gs == 1 ? 1 : 0;
+            auto& passthrough = profile_data[offsetof(Shader::Profile, barycentric_gs_passthrough)];
+            passthrough = passthrough == 1 ? 1 : 0;
             std::memcpy(&cached_profile, profile_data.data(), sizeof(cached_profile));
         }
         compatible = profile_data.size() == sizeof(Shader::Profile) && cached_profile == profile;

@@ -365,12 +365,25 @@ void EmitContext::DefineInputs() {
         // auxiliary geometry shader as plain inputs (EmitBarycentricGeometryShader).
         const auto gs_layout = MakeBarycentricGsLayout(runtime_info.hw.fs, info);
         std::array<Id, 2> gs_bary{};
+        const bool position_layout = UsesPositionBarycentrics(profile, runtime_info.hw.fs, info);
         const auto define_bary = [&](bool nopersp) -> Id {
             if (!profile.barycentric_via_gs) {
                 return DefineVariable(F32[3],
                                       nopersp ? spv::BuiltIn::BaryCoordNoPerspKHR
                                               : spv::BuiltIn::BaryCoordKHR,
                                       spv::StorageClass::Input);
+            }
+            // The readers (EmitGetAttribute) solve the barycentrics from these two.
+            if (position_layout) {
+                if (!position_bary) {
+                    position_bary = true;
+                    bary_position = Name(DefineInput(F32[4], BaryPositionLocation), "gsb_pos");
+                    bary_matrix = Name(DefineInput(TypeArray(F32[4], ConstU32(3U)),
+                                                   gs_layout.Matrix()),
+                                       "gsb_bm");
+                    Decorate(bary_matrix, spv::Decoration::Flat);
+                }
+                return bary_position;
             }
             Id& id = gs_bary[nopersp ? 1 : 0];
             if (!ValidId(id)) {
@@ -683,6 +696,11 @@ void EmitContext::DefineOutputs() {
                 output_params[num_attrs] = GetAttributeInfo(
                     AmdGpu::NumberFormat::Float, clip_distances, MaxEmulatedClipDistances, true);
                 Name(clip_distances, fmt::format("cldist_attr{}", 0));
+            }
+            // sotc: written in the epilogue, after the clip space conversions.
+            if (hw_stage == HwStage::Vertex &&
+                WritesBaryPosition(profile, info, needs_clip_distance_emulation)) {
+                output_bary_position = Name(DefineOutput(F32[4], BaryPositionLocation), "gsb_pos");
             }
         }
         break;

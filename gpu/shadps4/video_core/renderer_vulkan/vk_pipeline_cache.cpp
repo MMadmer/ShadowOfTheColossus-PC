@@ -367,8 +367,14 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
                                     instance.IsGeometryStageSupported() &&
                                     instance.GetDriverID() == vk::DriverId::eNvidiaProprietary &&
                                     !env_is("SOTC_BARYCENTRIC_GS", "0");
+    // sotc: SOTC_GS_PASSTHROUGH=0 copies the vertices in the geometry shader instead
+    // (Pascal Shrine: GPU 16.1 -> 13.8 ms with the passthrough one).
+    const bool gs_passthrough = barycentric_via_gs &&
+                                instance.IsGeometryShaderPassthroughSupported() &&
+                                !env_is("SOTC_GS_PASSTHROUGH", "0");
     if (barycentric_via_gs) {
-        LOG_WARNING(Render_Vulkan, "No fragment shader barycentrics: emulated by a geometry shader");
+        LOG_WARNING(Render_Vulkan, "No fragment shader barycentrics: emulated by a geometry shader{}",
+                    gs_passthrough ? " (passthrough)" : "");
     }
     GraphicsPipeline::SerializationSupport::with_gs = barycentric_via_gs;
     profile = Shader::Profile{
@@ -427,6 +433,7 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
         .needs_clip_distance_emulation = instance.GetDriverID() == vk::DriverId::eNvidiaProprietary,
         .supports_shader_stencil_export = instance_.IsShaderStencilExportSupported(),
         .barycentric_via_gs = barycentric_via_gs,
+        .barycentric_gs_passthrough = gs_passthrough,
     };
     // sotc: the cache is read by the Presenter once it can draw (Presenter::Presenter), with
     // the loading screen on meanwhile.
