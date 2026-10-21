@@ -196,12 +196,14 @@ static bool ReplaceChangedPages(Rasterizer& rasterizer, VAddr address, const u8*
     if (parallel) {
         constexpr u64 PagesPerTask = 64;
         changed.assign(pages, 0);
-        BbCopy::ParallelFor((pages + PagesPerTask - 1) / PagesPerTask, [&](std::size_t task) {
+        // The copy threads see their own (empty) thread_local vector: they get this one's data.
+        u8* const flags = changed.data();
+        BbCopy::ParallelFor((pages + PagesPerTask - 1) / PagesPerTask, [&, flags](std::size_t task) {
             const u64 last = std::min<u64>(pages, (task + 1) * PagesPerTask);
             for (u64 page = task * PagesPerTask; page < last; ++page) {
                 const VAddr lo = std::max<VAddr>(address, first_page + page * 4096);
                 const VAddr hi = std::min<VAddr>(first_page + (page + 1) * 4096, end);
-                changed[page] = page_differs(lo, hi);
+                flags[page] = page_differs(lo, hi);
             }
         });
     }
