@@ -337,7 +337,7 @@ private:
     vk::Format hudless_vo_format{};
     u32 hudless_vo_width{}, hudless_vo_height{};
     /// sotc: video out images drawn to (BeginRendering): DLSS SR only for a composite into one.
-    std::array<VAddr, 4> vo_targets{};
+    std::array<VAddr, 8> vo_targets{};
     u32 vo_target_next{};
 };
 

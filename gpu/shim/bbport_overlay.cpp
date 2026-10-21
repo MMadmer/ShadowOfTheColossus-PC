@@ -15,6 +15,7 @@
 #include <regex>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_set>
 
 #include <SDL3/SDL.h>
@@ -125,8 +126,9 @@ bool MenuAllowed() {
 }
 
 // sotc: writes a whole file through a new one that then replaces it: a failed or cut write
-// leaves the old file.
-bool ReplaceFile(const std::filesystem::path& path, const std::string& text) {
+// leaves the old file. While another program holds the file open (the launcher reading it, an
+// antivirus scan) the replacement is refused for a moment: tried again, then written in place.
+bool WriteWholeFile(const std::filesystem::path& path, const std::string& text) {
     std::filesystem::path temp = path;
     temp += ".new";
     std::error_code error;
@@ -139,12 +141,18 @@ bool ReplaceFile(const std::filesystem::path& path, const std::string& text) {
             return false;
         }
     }
-    std::filesystem::rename(temp, path, error);
-    if (error) {
-        std::filesystem::remove(temp, error);
-        return false;
+    for (int attempt = 0; attempt < 5; ++attempt) {
+        std::filesystem::rename(temp, path, error);
+        if (!error) {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
-    return true;
+    std::filesystem::remove(temp, error);
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    out << text;
+    out.close();
+    return !out.fail();
 }
 
 // sotc: BbSettings::Save() writes a whole file, and sotc.ini (BB_CONFIG) also holds the
@@ -189,7 +197,7 @@ void SaveSettings() {
             text += line + '\n';
         }
     }
-    if (!ReplaceFile(path, text)) {
+    if (!WriteWholeFile(path, text)) {
         std::printf("Settings: cannot write %s\n", path.c_str());
     }
 }
@@ -290,7 +298,9 @@ float TargetMs() {
 }
 
 bool OverlayOn() {
-    return BbSettings::Get().show_fps || overlay_on.load(std::memory_order_relaxed);
+    // sotc: SOTC_OVERLAY (the launcher's choice) wins over show_fps=1 in sotc.ini.
+    static const bool chosen = std::getenv("SOTC_OVERLAY") != nullptr;
+    return (!chosen && BbSettings::Get().show_fps) || overlay_on.load(std::memory_order_relaxed);
 }
 
 void RecordFrame(float ms) {
@@ -380,7 +390,7 @@ void SaveLauncherSetting(const char* key, const std::string& json_value) {
     if (!std::regex_search(text, m, LauncherKey(key))) {
         return;
     }
-    ReplaceFile(path, m.prefix().str() + m[1].str() + json_value + m.suffix().str());
+    WriteWholeFile(path, m.prefix().str() + m[1].str() + json_value + m.suffix().str());
 }
 
 // sotc: "Quick settings": the launcher's quick settings that can change while playing.
@@ -1034,10 +1044,6 @@ void Init(const Vulkan::Instance& instance, vk::Format format, u32 image_count) 
     std::scoped_lock lock{imgui_mutex};
     if (initialized) {
         return;
-    }
-    // sotc: SOTC_OVERLAY (the launcher's choice) wins over show_fps=1 in sotc.ini.
-    if (std::getenv("SOTC_OVERLAY")) {
-        BbSettings::Get().show_fps = false;
     }
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();

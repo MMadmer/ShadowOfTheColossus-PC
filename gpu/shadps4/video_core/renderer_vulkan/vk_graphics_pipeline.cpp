@@ -248,8 +248,9 @@ GraphicsPipeline::GraphicsPipeline(
                 return Shader::Backend::SPIRV::WritesBaryPosition(profile, *vs_stage_info,
                                                                   clip_distances);
             };
-            const bool passthrough = !is_rect_list && !is_quad_list && vs_stage_info &&
-                                     writes_position(false) && writes_position(true);
+            const bool passthrough =
+                !is_rect_list && !is_quad_list && vs_stage_info && writes_position(false) &&
+                (!profile.needs_clip_distance_emulation || writes_position(true));
             sdata.gs = Shader::Backend::SPIRV::EmitBarycentricGeometryShader(
                 profile, fs_runtime, *fs_stage_info, passthrough);
         }

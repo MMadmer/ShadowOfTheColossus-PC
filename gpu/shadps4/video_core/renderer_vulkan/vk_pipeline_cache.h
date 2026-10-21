@@ -224,8 +224,6 @@ public:
     static void SaveDriverCacheNow();
 
 private:
-
-private:
     const Instance& instance;
     Scheduler& scheduler;
     AmdGpu::Liverpool* liverpool;

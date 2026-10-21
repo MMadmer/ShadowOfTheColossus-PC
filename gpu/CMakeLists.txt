@@ -21,8 +21,7 @@ endif()
 
 # bbport: link-time optimization (BB_LTO, default on) and profile-guided optimization
 # (BB_PGO: off, generate = instrumented build writing into BB_PGO_DIR, use = build with that
-# profile). Covers bbgpu and the static libraries linked into it. No -march: the same build
-# runs on the Steam Deck.
+# profile). Covers bbgpu and the static libraries linked into it.
 option(BB_LTO "Link-time optimization of bbgpu" ON)
 set(BB_PGO "off" CACHE STRING "Profile-guided optimization: off, generate, use")
 set(BB_PGO_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../pgo" CACHE PATH "Profile directory")

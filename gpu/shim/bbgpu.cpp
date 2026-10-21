@@ -37,8 +37,8 @@
 #include "core/signals.h"
 #include "sdl_window.h"
 #include "video_core/cache_storage.h"
-#include "video_core/renderer_vulkan/vk_pipeline_cache.h"
 #include "video_core/page_manager.h"
+#include "video_core/renderer_vulkan/vk_pipeline_cache.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 
 extern "C" {

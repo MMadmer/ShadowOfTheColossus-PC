@@ -132,7 +132,11 @@ def find_probe():
         for candidate in (PORT / 'bin' / name, PORT / 'out' / name):
             if candidate.is_file():
                 if name == 'bb-probe-compat.exe':
-                    print('CPU without x86-64-v3 (AVX2, BMI2, FMA): starting the x86-64-v2 build')
+                    print('Starting the x86-64-v2 build' + (' (SOTC_PROBE_COMPAT=1)' if forced == '1' else
+                                                            ': CPU without x86-64-v3 (AVX2, BMI2, FMA)'))
+                elif os.name == 'nt' and not v3:
+                    print('bb-probe-compat.exe not found: this CPU lacks x86-64-v3 (AVX2, BMI2, FMA), '
+                          'bb-probe.exe may stop at once (build.sh builds both unless BB_COMPAT=0)')
                 return candidate
     fail(f'{names[-1]} not found: build it with build.sh (MSYS2 CLANG64 on Windows) or use a packaged build.')
 

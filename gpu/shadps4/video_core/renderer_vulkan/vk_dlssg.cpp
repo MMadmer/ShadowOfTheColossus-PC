@@ -1634,11 +1634,13 @@ vk::ImageView UpscaleScene(Scheduler& scheduler, Runtime& runtime,
                 vk::ImageLayout::eTransferDstOptimal, vk::PipelineStageFlagBits2::eAllCommands,
                 vk::AccessFlagBits2::eNone, vk::PipelineStageFlagBits2::eCopy,
                 vk::AccessFlagBits2::eTransferWrite),
-        // The composite of the last frame read it: overwritten as a whole.
+        // The composite of the last frame read it: overwritten as a whole, by DLSS or by the
+        // stretch that stands in for a failed evaluation.
         barrier(sr.out, range(vk::ImageAspectFlagBits::eColor), vk::ImageLayout::eUndefined,
                 vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits2::eFragmentShader,
-                vk::AccessFlagBits2::eShaderRead, vk::PipelineStageFlagBits2::eComputeShader,
-                vk::AccessFlagBits2::eShaderStorageWrite),
+                vk::AccessFlagBits2::eShaderRead,
+                vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eBlit,
+                vk::AccessFlagBits2::eShaderStorageWrite | vk::AccessFlagBits2::eTransferWrite),
     };
     cmdbuf.pipelineBarrier2(vk::DependencyInfo{
         .imageMemoryBarrierCount = static_cast<u32>(before.size()),
@@ -1695,6 +1697,14 @@ vk::ImageView UpscaleScene(Scheduler& scheduler, Runtime& runtime,
             layout(vk::ImageLayout::eShaderReadOnlyOptimal, vk::ImageLayout::eTransferSrcOptimal,
                    vk::PipelineStageFlagBits2::eAllCommands, vk::AccessFlagBits2::eNone,
                    vk::PipelineStageFlagBits2::eBlit, vk::AccessFlagBits2::eTransferRead);
+            // A failed evaluation may have written part of the output already.
+            const vk::MemoryBarrier2 written{
+                .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+                .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+                .dstStageMask = vk::PipelineStageFlagBits2::eBlit,
+                .dstAccessMask = vk::AccessFlagBits2::eTransferWrite};
+            cmd.pipelineBarrier2(
+                vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &written});
             const vk::ImageBlit region{
                 .srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
                 .srcOffsets = std::array{vk::Offset3D{0, 0, 0},
