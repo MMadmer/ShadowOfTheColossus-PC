@@ -37,6 +37,9 @@ LEGACY_CONFIG_DIR = Path(os.environ.get('APPDATA', Path.home())) / 'sotc-launche
 LEGACY_CONFIG_FILE = LEGACY_CONFIG_DIR / 'settings.json'
 CONFIG_DIR = PORT_DIR / 'user'
 CONFIG_FILE = CONFIG_DIR / 'launcher_settings.json'
+# The settings file in use: the port's, or the shared one while the port folder cannot be written
+# (Program Files). The game writes the in-game menu's changes into it.
+settings_in_use = CONFIG_FILE
 GAME_ID, GAME_VERSION = 'CUSA08809', '01.01'
 SYS_MODULES = ('libSceUlt.sprx', 'libSceNgs2.sprx')
 VERSION = '1.0.1'
@@ -560,6 +563,8 @@ def load_settings():
         # First start of this copy: the shared settings of older versions, but its own data
         # folder when the old one is another copy's user folder.
         saved = load_json(LEGACY_CONFIG_FILE, {})
+        global settings_in_use
+        settings_in_use = LEGACY_CONFIG_FILE
         old = Path(str(saved.get('user_dir') or ''))
         if (str(old) not in ('', '.') and old.name.lower() == 'user' and (old.parent / 'SotC.exe').is_file()
                 and old.parent.resolve() != PORT_DIR.resolve()):
@@ -665,6 +670,7 @@ def game_environment(s):
         env['BB_USER_NAME'] = str(s['player_name']).strip()
     if s['show_fps']:
         env['SOTC_FPS'] = '1'
+    env['SOTC_OVERLAY'] = '1' if s['show_fps'] else '0'  # over show_fps in sotc.ini
     if s['readbacks']:
         env['BB_READBACKS'] = s['readbacks']
     cvars = [off for key, _t, off in EFFECTS if not s.get(key, True)]
@@ -685,7 +691,7 @@ def game_environment(s):
     env['SOTC_VRAM_GC_PERCENT'], env['SOTC_ARENA_EVICT_MB'] = VRAM_LIMITS.get(s.get('vram_use'), VRAM_LIMITS['normal'])
     env['SOTC_VOLUME'] = str(s.get('volume') or '100')
     # The in-game menu's quick settings are written back here (bbport_overlay.cpp).
-    env['SOTC_LAUNCHER_SETTINGS'] = str(CONFIG_FILE)
+    env['SOTC_LAUNCHER_SETTINGS'] = str(settings_in_use)
     env['SOTC_SHADOW_REUSE'] = str(s.get('shadow_reuse') or '0')
     env['SOTC_OUTPUT_RES'] = s.get('output_res') or '1920x1080'
     # The PS4 Pro path keeps its 16:9 sizes: a wider screen (21:9, 32:9) wins over it (#142).
@@ -771,6 +777,7 @@ class Launcher:
         self.app = load_settings()
         self.vars = {}
         self.process = self.job = None
+        self.live_at_start = {}  # LIVE_KEYS as the game was started with them
         self.stopping = self.restart = False
         self.output = queue.Queue()
         self.ui_calls = queue.Queue()
@@ -1691,12 +1698,15 @@ class Launcher:
         for key, var in self.vars.items():
             self.app[key] = var.get()
         text = json.dumps(self.app, indent=2, ensure_ascii=False)
+        global settings_in_use
         try:
             CONFIG_DIR.mkdir(parents=True, exist_ok=True)
             CONFIG_FILE.write_text(text, encoding='utf-8')
+            settings_in_use = CONFIG_FILE
         except OSError:  # a read-only port folder (Program Files): the shared settings
             LEGACY_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
             LEGACY_CONFIG_FILE.write_text(text, encoding='utf-8')
+            settings_in_use = LEGACY_CONFIG_FILE
 
     def import_save(self):
         found = shadps4_saves()
@@ -2153,6 +2163,7 @@ class Launcher:
             self.process = None
             return
         self.job = GameJob(self.process)
+        self.live_at_start = {key: self.app.get(key) for key in self.LIVE_KEYS}
         threading.Thread(target=self.read_output, args=(self.process,), daemon=True).start()
         self.play_button.configure(state='disabled')
         self.stop_button.configure(state='normal')
@@ -2193,9 +2204,11 @@ class Launcher:
                  'fx_ssao', 'perf_dma')
 
     def reload_live_settings(self):
-        saved = load_json(CONFIG_FILE, {})
+        saved = load_json(settings_in_use, {})
         for key in self.LIVE_KEYS:
-            if key in saved and key in self.vars and saved[key] != self.vars[key].get():
+            # Only what the game changed: one changed here while it ran stays.
+            if (key in saved and key in self.vars and key in self.live_at_start
+                    and saved[key] != self.live_at_start[key] and saved[key] != self.vars[key].get()):
                 try:
                     self.vars[key].set(saved[key])
                 except Exception:  # noqa: BLE001 - a value the widget does not take

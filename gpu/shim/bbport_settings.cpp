@@ -187,11 +187,14 @@ bool ResolutionNeedsRestart() {
          (v.upscaler == UpscalerTaa) != (v.startup_upscaler == UpscalerTaa));
 }
 
-void Save() {
+void Save(const char* path) {
     const auto& v = Get();
-    FILE* file = std::fopen(Path(), "w");
+    if (!path) {
+        path = Path();
+    }
+    FILE* file = std::fopen(path, "w");
     if (!file) {
-        std::printf("Settings: cannot write %s\n", Path());
+        std::printf("Settings: cannot write %s\n", path);
         return;
     }
     std::fprintf(file,

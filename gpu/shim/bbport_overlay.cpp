@@ -124,15 +124,39 @@ bool MenuAllowed() {
     return true;
 }
 
-// sotc: BbSettings::Save() rewrites the whole file, and sotc.ini (BB_CONFIG) also holds the
+// sotc: writes a whole file through a new one that then replaces it: a failed or cut write
+// leaves the old file.
+bool ReplaceFile(const std::filesystem::path& path, const std::string& text) {
+    std::filesystem::path temp = path;
+    temp += ".new";
+    std::error_code error;
+    {
+        std::ofstream out(temp, std::ios::binary | std::ios::trunc);
+        out << text;
+        out.close();
+        if (out.fail()) {
+            std::filesystem::remove(temp, error);
+            return false;
+        }
+    }
+    std::filesystem::rename(temp, path, error);
+    if (error) {
+        std::filesystem::remove(temp, error);
+        return false;
+    }
+    return true;
+}
+
+// sotc: BbSettings::Save() writes a whole file, and sotc.ini (BB_CONFIG) also holds the
 // launcher's key bindings, the control remaps and sotc.py's settings: the lines it does not
 // write are kept.
 void SaveSettings() {
     const char* env = std::getenv("BB_CONFIG");
     const std::string path = env && env[0] ? env : "bbport.ini";
-    const auto read_lines = [&path] {
+    const std::string fresh = path + ".menu";
+    const auto read_lines = [](const std::string& file) {
         std::vector<std::string> lines;
-        std::ifstream in(path);
+        std::ifstream in(file);
         for (std::string line; std::getline(in, line);) {
             if (!line.empty() && line.back() == '\r') {
                 line.pop_back();
@@ -142,28 +166,31 @@ void SaveSettings() {
         return lines;
     };
     const auto key_of = [](const std::string& line) { return line.substr(0, line.find('=')); };
-    const std::vector<std::string> before = read_lines();
-    BbSettings::Save();
-    const std::vector<std::string> after = read_lines();
-    if (after == before) {
-        return; // not written, or nothing of anyone else's in it
+    BbSettings::Save(fresh.c_str());
+    const std::vector<std::string> own_lines = read_lines(fresh);
+    std::error_code error;
+    std::filesystem::remove(fresh, error);
+    if (own_lines.empty()) {
+        return; // not written
     }
-    std::unordered_set<std::string> written;
-    for (const std::string& line : after) {
+    // Also the other names Load() takes for the settings Save() writes.
+    std::unordered_set<std::string> written{"mouse_enabled", "mouse_sensitivity"};
+    std::string text;
+    for (const std::string& line : own_lines) {
         if (line.find('=') != std::string::npos) {
             written.insert(key_of(line));
         }
+        text += line + '\n';
     }
-    std::string kept;
-    for (const std::string& line : before) {
+    for (const std::string& line : read_lines(path)) {
         const bool own = line.find('=') != std::string::npos ? written.contains(key_of(line))
                                                              : line.starts_with("# bbport settings");
         if (!line.empty() && !own) {
-            kept += line + '\n';
+            text += line + '\n';
         }
     }
-    if (!kept.empty()) {
-        std::ofstream(path, std::ios::app) << kept;
+    if (!ReplaceFile(path, text)) {
+        std::printf("Settings: cannot write %s\n", path.c_str());
     }
 }
 
@@ -353,9 +380,7 @@ void SaveLauncherSetting(const char* key, const std::string& json_value) {
     if (!std::regex_search(text, m, LauncherKey(key))) {
         return;
     }
-    text = m.prefix().str() + m[1].str() + json_value + m.suffix().str();
-    std::ofstream out(path, std::ios::binary | std::ios::trunc);
-    out << text;
+    ReplaceFile(path, m.prefix().str() + m[1].str() + json_value + m.suffix().str());
 }
 
 // sotc: "Quick settings": the launcher's quick settings that can change while playing.
@@ -461,11 +486,11 @@ void DisplaySettings() {
         }
         ImGui::SameLine();
     }
+    // As F10: for this session (the launcher's choice holds at the next start).
     bool perf = OverlayOn();
     if (ImGui::Checkbox(T("Painel de desempenho  [F10]", "Performance overlay  [F10]"), &perf)) {
+        BbSettings::Get().show_fps = false;
         overlay_on.store(perf, std::memory_order_relaxed);
-        // The ini value is the overlay's state at the next start.
-        Store(BbSettings::Get().show_fps, perf, true);
     }
 }
 
@@ -1006,6 +1031,10 @@ void Init(const Vulkan::Instance& instance, vk::Format format, u32 image_count) 
     if (initialized) {
         return;
     }
+    // sotc: SOTC_OVERLAY (the launcher's choice) wins over show_fps=1 in sotc.ini.
+    if (std::getenv("SOTC_OVERLAY")) {
+        BbSettings::Get().show_fps = false;
+    }
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
@@ -1096,6 +1125,11 @@ bool HandleEvent(const SDL_Event& event) {
         return false;
     }
     ImGuiIO& io = ImGui::GetIO();
+    // sotc: F11 (fullscreen, window.cpp) also works while the menu is open.
+    if ((event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_KEY_UP) &&
+        event.key.key == SDLK_F11) {
+        return false;
+    }
     // sotc: F7 caps the game at 30 FPS or uncaps it (sotc_fps_cap.h).
     // The new state is shown at the next frame (Render).
     if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_F7 && !event.key.repeat) {

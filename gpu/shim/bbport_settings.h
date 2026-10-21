@@ -96,8 +96,8 @@ void ConfigureDlssSupport(bool available, const char* problem);
 bool FixedRenderSession();
 int RenderPreset();
 bool ResolutionNeedsRestart();
-/// Writes the file (menu changes).
-void Save();
+/// Writes the file (menu changes); sotc: or the given one.
+void Save(const char* path = nullptr);
 
 /// Render resolution divisor of a preset (1.0 native, 1.5 quality, ...).
 float PresetScale(int preset);

@@ -40,6 +40,7 @@ public:
 private:
     std::atomic<s32> width, height;
     std::atomic<bool> is_open{true};
+    std::atomic<s8> fullscreen_request{-1}; ///< sotc: SetFullscreen's state for PollEvents, -1 none
     std::mutex text_mutex;
     bool text_requested{}, text_active{};
     int text_state{};

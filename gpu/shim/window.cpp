@@ -32,12 +32,9 @@ std::atomic<float> g_mouse_dx{0}, g_mouse_dy{0};
 std::atomic<u32> g_mouse_buttons{0};
 std::atomic<bool> g_mouse_captured{false};
 void* g_behind_hwnd = nullptr; // sotc: SOTC_WINDOW_BEHIND window (Windows)
+// SOTC_MOUSE or mouse= in sotc.ini (BbSettings), switched in the in-game menu.
 bool MouseEnabled() {
-    static const bool enabled = [] {
-        const char* v = std::getenv("SOTC_MOUSE");
-        return !v || v[0] != '0';
-    }();
-    return enabled;
+    return BbSettings::Get().mouse_enabled.load(std::memory_order_relaxed);
 }
 void AddMotion(std::atomic<float>& total, float delta) {
     float old = total.load(std::memory_order_relaxed);
@@ -237,6 +234,9 @@ bool WindowSDL::PollEvents() {
             UpdateTextTitle();
         }
     }
+    if (const s8 fs = fullscreen_request.exchange(-1, std::memory_order_relaxed); fs >= 0) {
+        SDL_SetWindowFullscreen(window, fs != 0);
+    }
     // sotc: while the in-game menu (or the save list, the text box) is open the mouse is free and
     // visible, so the menu can be clicked; it was left in the camera's relative mode, hidden and
     // held at the window centre. Closing the menu captures it again for the camera.
@@ -366,10 +366,11 @@ bool WindowSDL::PollEvents() {
     return is_open;
 }
 
+// sotc: applied by PollEvents. The in-game menu calls this on the present thread holding the
+// overlay lock; Win32 then waits for the window thread, which waits for that lock
+// (UpdateTextInput).
 void WindowSDL::SetFullscreen(bool fs) {
-    if (window) {
-        SDL_SetWindowFullscreen(window, fs);
-    }
+    fullscreen_request.store(fs ? 1 : 0, std::memory_order_relaxed);
 }
 
 bool WindowSDL::IsFullscreen() const {
