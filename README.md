@@ -119,19 +119,22 @@ normalmente, a 30 FPS.
 - **Jogo e saves:** biblioteca de jogos, busca automática no PC, desempacotamento de dumps `.pkg`,
   importação de saves do shadPS4, volume de 100 a 300%.
 - **Imagem e FPS:** FPS 30 / 60 / ilimitado (no jogo, F7 liga e desliga o limite de 30), geração de
-  quadros FSR 3 / DLSS-G (experimental; F8 no jogo), resolução de render 720p a 1080p (automática
+  quadros FSR 3 (qualquer placa) / DLSS-G (RTX 40/50; experimental; F8 no jogo), **NVIDIA DLSS**
+  nas GeForce RTX (Qualidade 720p, Equilibrado 630p, Desempenho 540p, Ultra Desempenho 360p,
+  ampliados para 1080p), resolução de render 720p a 1080p (automática
   em placas fracas), saída 720p a 4K, também 16:10, 21:9 e 32:9 (FSR 1 + RCAS amplia), modo PS4 Pro
   (o jogo oferece Cinematográfico/Desempenho no próprio menu), sombras distantes, uso de memória
   de vídeo, efeitos (vinheta, névoa, SSAO), modo da janela (janela, tela cheia em janela, tela
   cheia exclusiva), ícone da janela do jogo e opções de desempenho.
 - **Controles:** controle (DualShock 4, DualSense, Xbox) automático, com os ícones dos botões do
-  dispositivo em uso (também as teclas e o mouse) e vibração; câmera no mouse;
-  **troca de teclas** clicando na ação e apertando a tecla nova.
+  dispositivo em uso (também as teclas e o mouse) e vibração com intensidade ajustável; câmera no
+  mouse; **troca de teclas e de botões do mouse** clicando na ação e apertando a tecla ou o botão.
 - **Avançado:** idioma do lançador (inglês, espanhol, português, russo, chinês, japonês e coreano;
   troca na hora), procura de atualizações, cvars do motor Bluepoint, diagnóstico, atalho na área
   de trabalho (com o ícone do seu jogo). O registro de cada sessão fica em `user/last_run.log`.
-- **Menu dentro do jogo** (Insert, F1 ou L3+R3): FPS, geração de quadros, texturas em alta
-  qualidade, sombras distantes e volume valem na hora e ficam salvos no lançador.
+- **Menu dentro do jogo** (Insert, F1 ou L3+R3), no idioma do lançador: FPS, geração de quadros,
+  texturas em alta qualidade, sombras distantes e volume valem na hora e ficam salvos no lançador;
+  o DLSS liga e desliga na hora.
 
 ### O que foi feito
 
@@ -238,16 +241,20 @@ The patch modes (60 FPS, 16x filtering) only apply to EU 1.01; other versions ru
 ### Launcher features
 
 Game library and automatic search, `.pkg` unpacking, shadPS4 save import, FPS 30 / 60 / unlimited
-(F7 in game switches the 30 FPS cap), FSR 3 / DLSS-G frame generation (experimental; F8 in game),
-720p–1080p render resolution (automatic on weak cards), 720p–4K output, 16:10, 21:9 and 32:9
+(F7 in game switches the 30 FPS cap), FSR 3 (any card) / DLSS-G (RTX 40/50) frame generation
+(experimental; F8 in game), **NVIDIA DLSS** on GeForce RTX cards (Quality 720p, Balanced 630p,
+Performance 540p, Ultra Performance 360p, upscaled to 1080p), 720p–1080p render resolution
+(automatic on weak cards), 720p–4K output, 16:10, 21:9 and 32:9
 included (FSR 1 + RCAS), PS4 Pro mode, high quality textures, 16x AF, far shadows, video memory
 use, 100–300% volume, window mode (windowed, borderless fullscreen, exclusive fullscreen), the game
 window's icon, controller support (DualShock 4, DualSense, Xbox; the game shows the buttons of the
-device in use, keys and mouse included) with rumble and mouse camera, key remapping, Bluepoint
+device in use, keys and mouse included) with adjustable rumble and mouse camera, key and mouse
+button remapping, Bluepoint
 engine cvars, the launcher in English, Spanish, Portuguese, Russian, Chinese, Japanese and Korean
 (switching at once), update check, desktop shortcut and a session log in `user/last_run.log`.
-The in-game menu (Insert, F1 or L3+R3) changes FPS, frame generation, high quality textures, far
-shadows and volume while playing; they are kept for the next start.
+The in-game menu (Insert, F1 or L3+R3), in the launcher's language, changes FPS, frame generation,
+high quality textures, far shadows and volume while playing (they are kept for the next start), and
+switches DLSS on and off.
 
 In 60 FPS mode the title-screen attract demo averages ~67 FPS on an RTX 2060 SUPER, with
 29–34 FPS in its heaviest section. Vulkan only (no DirectX). AMD and Intel can enable the

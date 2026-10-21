@@ -1,5 +1,91 @@
 # Changelog
 
+## 1.1.0 — não publicada (fork MMadmer)
+Junta ao fork tudo da 0.58 até a 0.60.4 do projeto original e as pull requests abertas dele, com
+correções de issues ainda abertas, NVIDIA DLSS e otimizações. Obrigado a **Lucas-blip-png,
+Oussama268, DUDUYG, jownatan e AjncSystem**, cujos commits entram com a autoria de cada um.
+
+**Projeto original e pull requests**
+- **0.58 a 0.60.4 do AjncSystem/ShadowOfTheColossus-PC** (thread de desenhos, tradução de shaders
+  e pipelines de compute em threads auxiliares, geração de quadros DLSS-G e FSR 3, menu dentro do
+  jogo, texturas na Pascal, memória de vídeo, volume, atualização automática e o resto das notas
+  abaixo), somada ao que é próprio do fork (ícones de botões do dispositivo em uso, NGS2/Audio3d,
+  modos de janela, idiomas do lançador, instalador). O lançador procura atualizações nos releases
+  deste fork.
+- **Shaders após atualizar o driver:** a pré-carga do cache monta as pipelines nas threads
+  auxiliares (PR #215, Oussama268: 107 s → 6,5 s de tela de carregamento numa RTX 3060).
+- **AMD GCN (RX 470–590, Vega):** barreiras de memória compartilhada (PR #205) e a conversão para
+  32 lanes por padrão, que acabou com o branco/verde piscando numa RX 570 (#152, #187, #201;
+  `SOTC_AMD_WAVE32=0` desliga), de Lucas-blip-png.
+- **CPUs de 4 a 8 threads:** a thread de gravação de comandos não fica em espera ativa (PR #198,
+  Lucas-blip-png).
+- **CPUs sem BMI1/LZCNT/MOVBE** (Ivy Bridge e anteriores, #38, #40, #70, #88): as instruções são
+  emuladas em vez de o jogo não abrir (Oussama268, Lucas-blip-png). O `bb-probe.exe` deste fork é
+  compilado para x86-64-v3 (AVX2), que essas CPUs não têm: o pacote leva também o
+  `bb-probe-compat.exe` (x86-64-v2), que o `sotc.py` abre sozinho nelas (`SOTC_PROBE_COMPAT=1`
+  força).
+- Leituras da GPU que caem numa janela já em leitura esperam por ela (PR #69, DUDUYG;
+  `SOTC_RB_JOIN=0` desliga); temporizador de alta resolução no ritmo dos quadros; chave exata no
+  cache de formatos de imagem; cache de shaders próprio sem as ramificações uniformes do wave64
+  (PR #93); `tools/SotC-Shaders.ps1` atualizado (PR #81); mensagem clara para arquivos ainda
+  criptografados (PR #212); lançador que sobrevive a uma saída padrão recusada (PR #207).
+
+**Travamentos (stutter)**
+- **Shaders traduzidos de novo a cada abertura:** os binários de shader eram guardados só pelo
+  hash do programa; os de outra versão do tradutor (uma versão anterior ou um pacote de shaders
+  antigo) ocupavam os nomes e os desta versão nunca eram guardados, sendo traduzidos de novo em
+  pleno jogo a cada sessão. O cache agora leva a versão dos binários e um cache de outra versão é
+  separado uma vez.
+- **Pacote de shaders de outro perfil** era copiado de novo a cada abertura (19 s) e descartado em
+  seguida, junto com o cache montado no jogo; agora é copiado uma vez só.
+- **Cache do driver** (VkPipelineCache) guardado com o cache de shaders: as pipelines que o driver
+  compilou voltam prontas na próxima abertura, mesmo com o cache do driver da NVIDIA cheio.
+
+**NVIDIA DLSS**
+- **DLSS Super Resolution** (placas GeForce RTX): nos modos de resolução de render abaixo de 1080p,
+  a cena do jogo é ampliada pelo DLSS em vez do esticamento bilinear do próprio jogo, com a
+  profundidade, os vetores de movimento e a câmera do jogo; a interface continua desenhada pelo
+  jogo em 1080p. Modos Qualidade (720p), Equilibrado (630p), Desempenho (540p) e Ultra Desempenho
+  (360p) (`SOTC_DLSS`). Pode ser ligado e desligado no menu dentro do jogo. O runtime oficial
+  NVIDIA Streamline 2.14.16 vai no pacote.
+- **Geração de quadros só onde funciona:** DLSS-G aparece para as RTX 40/50; FSR 3 para as demais.
+  Uma DLSS-G salva numa placa sem ela passa a automática (FSR 3).
+
+**Lançador, menu e controles**
+- **Menu dentro do jogo** (Insert / F1 / L3+R3) e textos do port na tela nos 7 idiomas do
+  lançador; chinês, japonês e coreano usam uma fonte do próprio Windows. Saíram as opções que não
+  faziam nada neste port (escolha de upscaler, preset, resolução de saída e nitidez). O DLSS e a
+  tela cheia (F11) mudam na hora; os efeitos do jogo (vinheta, névoa, SSAO, reflexos completos da
+  água) são gravados nas configurações do lançador e valem ao abrir o jogo de novo.
+- **Vibração do controle** de 0 a 100% (#210).
+- **Botões do mouse** também se trocam na tela de teclas: clicar na ação e apertar o botão (#192).
+- **Atualização do jogo** encontrada também em `update` ou `patch` dentro da pasta do jogo ou ao
+  lado dela, quando o `param.sfo` é de uma atualização do jogo (#66).
+
+**Correções**
+- **Memória de vídeo esgotada** (placas de 4–6 GB, #12, #62, #137): a coleta de texturas
+  aprofunda em três níveis (sem travar a thread que segura o cache de texturas) e o pedido é
+  repartido em blocos menores; sem memória nenhuma o trecho fica sem memória até a próxima
+  tentativa, em vez de fechar o jogo.
+- **Jogo fechando ao abrir se o Windows recusar 9152 MB** (#194) e **geração de quadros em PCs com
+  AMD e NVIDIA** (#194), de Lucas-blip-png; **FSR 1 sem sincronia na AMD** (#209).
+- **Cache de shaders com chaves repetidas** fechava o jogo a cada abertura até ser apagado (#88).
+- **Barras da interface cheias ou pretas em 2560x1080** (#202).
+- **Relógio do jogo:** a frequência do TSC é medida com amostras pareadas ao longo de 100 ms
+  (descompasso entre som e imagem nas cenas longas, #91).
+- **Sem som quando o dispositivo de saída ainda não existe ao abrir** (fone Bluetooth, #214): o
+  port tenta de novo a cada segundo.
+- **Salvar no menu dentro do jogo apagava do `sotc.ini`** as teclas, os remapeamentos do controle
+  e os ajustes do `sotc.py`; agora só as linhas do menu são reescritas.
+
+**Desempenho**
+- **GTX 10 (Pascal):** o geometry shader que entrega as barycentrics passa os vértices adiante sem
+  copiá-los (VK_NV_geometry_shader_passthrough), sobre a implementação da PR #169
+  (`SOTC_GS_PASSTHROUGH=0` desliga).
+- As tabelas que o jogo replica a cada quadro são comparadas nas threads de cópia.
+
+O cache de shaders é refeito na primeira abertura.
+
 ## 0.60.4 — 2026-10-20
 - **Blocos ciano nas pedras e flores piscando** (com "Texturas em alta qualidade"): o ajuste da
   0.60.3 que evita a queda trocava o nível de detalhe das texturas a cada um ou dois segundos nas

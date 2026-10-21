@@ -26,11 +26,14 @@ puts `$MSYS2_ROOT` (default `C:/msys64`; some tools default to `/i/msys64`) firs
 ```bash
 bash build.sh                            # CMake+Ninja in out/gpu -> out/bb-probe.exe, bb-gpu-capabilities.exe
                                          # build errors: out/gpu-build.log. ThinLTO by default (BB_LTO=OFF disables);
-                                         # Clang PGO from pgo/bbgpu.profdata when present (BB_PGO=off skips it)
+                                         # Clang PGO from pgo/bbgpu.profdata when present (BB_PGO=off skips it);
+                                         # also out/gpu-compat -> out/bb-probe-compat.exe (x86-64-v2 for CPUs
+                                         # without AVX2, picked by sotc.py; BB_COMPAT=0 skips it)
 bash tools/pgo_train.sh                  # instrumented build + attract/shrine training -> pgo/bbgpu.profdata, rebuild
 ninja -C out/gpu bb-probe && cp out/gpu/bb-probe.exe out/   # incremental rebuild after first build.sh
 python sotc.py                           # prepare image + run game (settings: env or sotc.ini, see sotc.py docstring)
-python launcher/sotc_launcher_win.py     # Tkinter launcher (settings in %APPDATA%/sotc-launcher/settings.json)
+python launcher/sotc_launcher_win.py     # Tkinter launcher (settings in <port>/user/launcher_settings.json;
+                                         # the old %APPDATA%/sotc-launcher/settings.json is read once)
 bash packaging/windows/package_sotc.sh   # dist/SotC-PC.zip; needs WINPYTHON with PyInstaller + Pillow
 ```
 
