@@ -7,6 +7,7 @@
 #include "common/thread.h"
 #include "core/emulator_settings.h"
 #include "core/libraries/kernel/process.h"
+#include "shader_recompiler/ir/passes/ir_passes.h"
 
 #include "video_core/cache_storage.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
@@ -127,11 +128,15 @@ void DataBase::Open() {
         // sotc: shaders compiled with and without direct memory access differ, and the cache keys
         // do not tell them apart: the launcher's DMA switch gets its own cache folder. The same
         // for SOTC_NEO: a cache filled in PS4 Pro mode gave a black picture in the normal mode.
+        // The wave64 uniform branches (SOTC_WAVE64_UNIFORM) change the lowering and the barrier
+        // analysis but not the profile: with them off the shaders go to a cache of their own
+        // (AjncSystem#93), so a test with them off never reuses shaders built with them on.
         cache_path = GetUserPath(PathType::CacheDir) /
                      (std::string{game_info.GameSerial()} +
                       (EmulatorSettings.IsDirectMemoryAccessEnabled() ? "" : "_nodma") +
                       (EmulatorSettings.IsNoInt64() ? "_noi64" : "") +
-                      (Libraries::Kernel::sceKernelIsNeoMode() ? "_neo" : ""));
+                      (Libraries::Kernel::sceKernelIsNeoMode() ? "_neo" : "") +
+                      (Shader::Optimization::Wave64UniformBranchesEnabled() ? "" : "_w64off"));
         if (!std::filesystem::exists(cache_path)) {
             std::filesystem::create_directories(cache_path);
         }
