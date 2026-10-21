@@ -300,8 +300,15 @@ public:
     /// while the recompiler lowered wave64 code for SubgroupSize() lanes anyway. Intel stages are
     /// pinned to that size; SOTC_INTEL_PIN_SUBGROUP=0 turns it off. From AjncSystem#81 (jownatan).
     u32 RequiredSubgroupSize(vk::ShaderStageFlagBits stage) const {
+        // sotc: GCN runs 64 lanes only (minSubgroupSize 64): requiring 32 there is invalid and
+        // the driver ignored it; the 32-lane lowering does the work. RDNA (SOTC_AMD_WAVE32=1)
+        // can be pinned to 32.
         if (IsAmdWave32Forced()) {
-            return stage == vk::ShaderStageFlagBits::eCompute ? 32u : 0u;
+            return stage == vk::ShaderStageFlagBits::eCompute && vk13_features.subgroupSizeControl &&
+                           CanRequireSubgroupSize(stage) && vk13_props.minSubgroupSize <= 32 &&
+                           vk13_props.maxSubgroupSize >= 32
+                       ? 32u
+                       : 0u;
         }
         if (IsSubgroupSize64Supported()) {
             return CanRequireSubgroupSize(stage) ? 64u : 0u;
