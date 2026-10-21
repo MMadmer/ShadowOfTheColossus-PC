@@ -590,6 +590,20 @@ bool EmitCpuEmulationForTest(void* code, Xbyak::CodeGenerator& c) {
 
 static std::once_flag init_flag;
 
+/// sotc: the trampoline generator. A run-time patch lowers its limit to the window it made
+/// writable, so a trampoline cannot run past it.
+struct TrampolineGenerator : Xbyak::CodeGenerator {
+    using Xbyak::CodeGenerator::CodeGenerator;
+
+    size_t Limit() const {
+        return maxSize_;
+    }
+
+    void SetLimit(size_t limit) {
+        maxSize_ = limit;
+    }
+};
+
 struct PatchModule {
     /// Mutex controlling access to module code regions.
     std::mutex mutex{};
@@ -607,7 +621,7 @@ struct PatchModule {
     Xbyak::CodeGenerator patch_gen;
 
     /// Code generator for writing trampoline patches.
-    Xbyak::CodeGenerator trampoline_gen;
+    TrampolineGenerator trampoline_gen;
 
     /// Prevents repeated generation attempts after the fixed trampoline area is exhausted.
     bool trampoline_exhausted{};
@@ -1040,29 +1054,79 @@ static bool TryExecuteIllegalInstruction(void* ctx, void* code_address) {
     UNREACHABLE();
 }
 
+/// sotc: bytes of the trampoline area a run-time patch may write: one page, far more than the
+/// trampoline of one instruction takes.
+constexpr size_t JitTrampolineWindow = 4096;
+
 static bool TryPatchJit(void* code_address) {
     auto* code = static_cast<u8*>(code_address);
-    auto* module = GetModule(code);
-    if (module == nullptr) {
+    // sotc: only addresses inside a module. A fault in host code (the patcher itself, the
+    // runtime) or in the trampoline area is not a guest instruction.
+    auto* module = GetContainingModule(code);
+    if (!module) {
         return false;
     }
 
+    // sotc: a fault raised by the patch itself comes back here on the thread that already holds
+    // the mutex: it fails and is reported like any instruction that cannot be patched, instead
+    // of locking the mutex again. Another thread's patch is waited for.
+    static thread_local bool patching = false;
+    if (patching) {
+        return false;
+    }
     std::unique_lock lock{module->mutex};
 
     // Return early if already patched, in case multiple threads signaled at the same time.
-    if (std::ranges::find(module->patched, code) != module->patched.end()) {
+    if (module->patched.contains(code)) {
         return true;
     }
 
 #if defined(_WIN32)
-    // sotc: the loader made the code read-only after the load-time patches.
-    DWORD old_protect = 0;
-    const bool unprotected = VirtualProtect(code, 16, PAGE_EXECUTE_READWRITE, &old_protect);
-    const bool patched = TryPatch(code, module).first;
-    if (unprotected) {
-        VirtualProtect(code, 16, old_protect, &old_protect);
-        FlushInstructionCache(GetCurrentProcess(), code, 16);
+    ZydisDecodedInstruction instruction;
+    ZydisDecodedOperand operands[ZYDIS_MAX_OPERAND_COUNT];
+    if (!ZYAN_SUCCESS(Common::Decoder::Instance()->decodeInstruction(instruction, operands, code,
+                                                                     module->end - code)) ||
+        !Patches.contains(instruction.mnemonic)) {
+        return false;
     }
+
+    // sotc: the loader made the code and the trampoline area read-execute after the load-time
+    // patches. Writable during this patch only: the instruction, and a window at the end of the
+    // trampolines that bounds what TryPatch may generate. Execute stays on, since other threads
+    // run trampolines in the same pages.
+    auto& trampolines = module->trampoline_gen;
+    const size_t limit = trampolines.Limit();
+    const size_t start = trampolines.getSize();
+    auto* window = const_cast<u8*>(trampolines.getCurr());
+    const size_t window_size = std::min(JitTrampolineWindow, limit - start);
+    DWORD code_protect = 0;
+    DWORD window_protect = 0;
+    if (!VirtualProtect(code, instruction.length, PAGE_EXECUTE_READWRITE, &code_protect)) {
+        return false;
+    }
+    if (window_size &&
+        !VirtualProtect(window, window_size, PAGE_EXECUTE_READWRITE, &window_protect)) {
+        VirtualProtect(code, instruction.length, code_protect, &code_protect);
+        return false;
+    }
+
+    trampolines.SetLimit(start + window_size);
+    patching = true;
+    bool patched = false;
+    try {
+        patched = TryPatch(code, module).first;
+    } catch (const Xbyak::Error&) {
+        // A jump out of reach, for one: left unpatched, the caller reports the instruction.
+    }
+    patching = false;
+    trampolines.SetLimit(limit);
+
+    if (window_size) {
+        VirtualProtect(window, window_size, window_protect, &window_protect);
+        FlushInstructionCache(GetCurrentProcess(), window, trampolines.getSize() - start);
+    }
+    VirtualProtect(code, instruction.length, code_protect, &code_protect);
+    FlushInstructionCache(GetCurrentProcess(), code, instruction.length);
     return patched;
 #else
     return TryPatch(code, module).first;
@@ -1071,8 +1135,8 @@ static bool TryPatchJit(void* code_address) {
 
 static void TryPatchAot(void* code_address, u64 code_size) {
     auto* code = static_cast<u8*>(code_address);
-    auto* module = GetModule(code);
-    if (module == nullptr) {
+    auto* module = GetContainingModule(code); // sotc: bounded lookup
+    if (!module) {
         return;
     }
 
@@ -1651,6 +1715,26 @@ void AnalyzeRedZoneLiveness(DecodedFunction& function) {
     }
 }
 
+/// sotc: a memory operand below rbp (a lea too: the address may be used later).
+bool AddressesBelowFramePointer(const DecodedCodeInstruction& decoded) {
+    return std::ranges::any_of(
+        std::span{decoded.operands}.first(decoded.instruction.operand_count_visible),
+        [](const ZydisDecodedOperand& operand) {
+            return operand.type == ZYDIS_OPERAND_TYPE_MEMORY &&
+                   IsSameRegister(operand.mem.base, ZYDIS_REGISTER_RBP) &&
+                   operand.mem.disp.has_displacement && operand.mem.disp.value < 0;
+        });
+}
+
+/// sotc: a call, or rsp lowered other than by a push: code with one keeps no frame below rsp.
+bool LowersStack(const DecodedCodeInstruction& decoded) {
+    const auto mnemonic = decoded.instruction.mnemonic;
+    const bool push = mnemonic == ZYDIS_MNEMONIC_PUSH || mnemonic == ZYDIS_MNEMONIC_PUSHF ||
+                      mnemonic == ZYDIS_MNEMONIC_PUSHFD || mnemonic == ZYDIS_MNEMONIC_PUSHFQ;
+    return decoded.instruction.meta.category == ZYDIS_CATEGORY_CALL ||
+           (!push && decoded.stack_pointer_delta.value_or(0) < 0);
+}
+
 bool EncodeRelocatedInstruction(const DecodedCodeInstruction& decoded,
                                 Xbyak::CodeGenerator& generator) {
     ZydisEncoderRequest request;
@@ -2058,6 +2142,18 @@ RedZonePatchResult PatchRedZoneMemoryInstructions(u64 segment_addr, u64 segment_
                 return start < patched.second && patched.first < end;
             });
         };
+        // sotc: after a jump written into the nop tail of a patched span, the rest of that tail
+        // is padded again: a cut multi-byte nop would put linear decodes out of step.
+        const auto pad_tail = [&patched_spans, module]() {
+            auto& patch_gen = module->patch_gen;
+            const auto at = reinterpret_cast<uintptr_t>(patch_gen.getCurr());
+            const auto span = std::ranges::find_if(patched_spans, [at](const auto& patched) {
+                return patched.first < at && at <= patched.second;
+            });
+            if (span != patched_spans.end()) {
+                patch_gen.nop(span->second - at);
+            }
+        };
 
         for (const uintptr_t site : unresolved_sites) {
             if (module->patched.contains(reinterpret_cast<u8*>(site))) {
@@ -2100,6 +2196,7 @@ RedZonePatchResult PatchRedZoneMemoryInstructions(u64 segment_addr, u64 segment_
                 patch_gen.reset();
                 patch_gen.setSize(*relay_slot - reinterpret_cast<uintptr_t>(patch_gen.getCode()));
                 patch_gen.jmp(site_trampoline, Xbyak::CodeGenerator::LabelType::T_NEAR);
+                pad_tail();
 
                 patch_gen.reset();
                 patch_gen.setSize(site - reinterpret_cast<uintptr_t>(patch_gen.getCode()));
@@ -2238,6 +2335,7 @@ RedZonePatchResult PatchRedZoneMemoryInstructions(u64 segment_addr, u64 segment_
                 patch_gen.reset();
                 patch_gen.setSize(relay_address - reinterpret_cast<uintptr_t>(patch_gen.getCode()));
                 patch_gen.jmp(site_trampoline, Xbyak::CodeGenerator::LabelType::T_NEAR);
+                pad_tail();
                 std::erase(relay_slots, relay_address);
                 std::erase(short_relay_slots, relay_address);
             } else {
@@ -2261,6 +2359,7 @@ RedZonePatchResult PatchRedZoneMemoryInstructions(u64 segment_addr, u64 segment_
                                   reinterpret_cast<uintptr_t>(patch_gen.getCode()));
                 patch_gen.jmp(reinterpret_cast<void*>(jump_target),
                               Xbyak::CodeGenerator::LabelType::T_SHORT);
+                pad_tail();
                 jump_target = final_short_jump;
                 const auto parent = relay_parent.find(final_short_jump);
                 ASSERT(parent != relay_parent.end());
@@ -2370,8 +2469,40 @@ u64 PatchShortSse4aInstructions(u64 segment_addr, u64 segment_size,
 
     u64 patched_count = 0;
     u64 trap_count = 0;
+    u64 live_trap_count = 0;
+    u64 relay_count = 0;
     u64 gap_count = 0;
     std::unique_lock lock{module->mutex};
+
+    // sotc: a short BMI site that cannot move with its neighbours becomes a UD2 that the illegal
+    // instruction handler runs (EmulateBmiTrapSite): TZCNT/LZCNT would otherwise run as BSF/BSR
+    // without a fault on these CPUs. The handler resumes after the whole instruction, so its other
+    // bytes are dead: int3 there keeps linear decodes of the code in step.
+    const auto trap_site = [&](const DecodedCodeInstruction& decoded, const char* why,
+                               bool red_zone_live) {
+        g_bmi_trap_sites.emplace(decoded.address,
+                                 BmiTrapSite{decoded.instruction, decoded.operands});
+        auto* bytes = reinterpret_cast<u8*>(decoded.address);
+        bytes[0] = 0x0F;
+        bytes[1] = 0x0B;
+        std::memset(bytes + 2, 0xCC, decoded.instruction.length - 2);
+        module->patched.insert(bytes);
+        ++trap_count;
+        const char* mnemonic = ZydisMnemonicGetString(decoded.instruction.mnemonic);
+        if (red_zone_live) {
+            // Last resort, no relay in reach: still better than BSF/BSR results, and a MOVBE left
+            // in place faults into the same handler.
+            ++live_trap_count;
+            LOG_WARNING(Core,
+                        "Short {} at {:#x} runs from the exception although the guest red zone "
+                        "may be live there: {}",
+                        mnemonic, decoded.address, why);
+        } else {
+            LOG_DEBUG(Core, "Short {} at {:#x} runs from the exception: {}", mnemonic,
+                      decoded.address, why);
+        }
+    };
+
     for (size_t index = 0; index < starts.size(); ++index) {
         const uintptr_t function_start = starts[index];
         const uintptr_t function_end = index + 1 < starts.size() ? starts[index + 1] : segment_end;
@@ -2379,8 +2510,183 @@ u64 PatchShortSse4aInstructions(u64 segment_addr, u64 segment_size,
             continue;
         }
 
-        const auto function =
-            DecodeFunction(function_start, function_end, segment_addr, segment_end);
+        auto function = DecodeFunction(function_start, function_end, segment_addr, segment_end);
+        // sotc: Windows builds the exception frame below rsp, so a UD2 trap destroys a live guest
+        // red zone (cpu_patches.h). A short BMI site where it may be live reaches its trampoline
+        // through a relay jump instead. The liveness analysis models rsp-based accesses only: a
+        // leaf that never lowers rsp but addresses memory below rbp keeps that frame in the red
+        // zone too.
+        bool lowers_stack = false;
+        bool frame_in_red_zone = false;
+        if (bmi) {
+            AnalyzeRedZoneLiveness(function);
+            bool below_frame_pointer = false;
+            for (const auto& [_, decoded] : function.instructions) {
+                lowers_stack |= LowersStack(decoded);
+                below_frame_pointer |= AddressesBelowFramePointer(decoded);
+            }
+            frame_in_red_zone = !lowers_stack && below_frame_pointer;
+        }
+        const auto red_zone_may_be_live = [&](const DecodedCodeInstruction& decoded) {
+            return frame_in_red_zone || decoded.red_zone_live.any();
+        };
+
+        // Dead bytes of this function that can hold a near jump: the nop tail after a jump written
+        // over longer code (start -> end of the tail).
+        std::map<uintptr_t, uintptr_t> relay_slots;
+        const auto add_relay_slot = [&relay_slots](uintptr_t at, uintptr_t end) {
+            if (at < end && end - at >= NearJumpSize) {
+                relay_slots.emplace(at, end);
+            }
+        };
+        // A jump at `at`, then nops up to `end`.
+        const auto write_jump = [module](uintptr_t at, const void* target,
+                                         Xbyak::CodeGenerator::LabelType type, uintptr_t end) {
+            auto& patch_gen = module->patch_gen;
+            patch_gen.reset();
+            patch_gen.setSize(at - reinterpret_cast<uintptr_t>(patch_gen.getCode()));
+            patch_gen.jmp(target, type);
+            patch_gen.nop(end - reinterpret_cast<uintptr_t>(patch_gen.getCurr()));
+        };
+        const auto mark_patched = [module](std::span<const DecodedCodeInstruction* const> span) {
+            for (const auto* decoded : span) {
+                module->patched.insert(reinterpret_cast<u8*>(decoded->address));
+            }
+        };
+
+        // Moves `span` to a trampoline that resumes at `continuation`. Null when an instruction
+        // cannot be relocated, or when the area is full (trampoline_exhausted).
+        const auto emit_span = [&](std::span<const DecodedCodeInstruction* const> span,
+                                   uintptr_t continuation) -> const u8* {
+            auto& trampoline_gen = module->trampoline_gen;
+            if (module->trampoline_exhausted) {
+                return nullptr;
+            }
+            const size_t trampoline_offset = trampoline_gen.getSize();
+            const u8* trampoline = trampoline_gen.getCurr();
+            bool valid = true;
+            try {
+                for (const auto* decoded : span) {
+                    const PatchInfo* patch = FindMatchingPatch(*decoded);
+                    if (patch && !patch->trampoline) {
+                        // sotc: an in-place replacement (MOVNTSS/SD) cannot be copied as is.
+                        valid = false;
+                        break;
+                    }
+                    if (patch) {
+                        // CPU patch generators preserve the guest red zone themselves.
+                        patch->generator(reinterpret_cast<void*>(decoded->address),
+                                         decoded->operands.data(), trampoline_gen);
+                    } else if (!EncodeRelocatedInstruction(*decoded, trampoline_gen)) {
+                        valid = false;
+                        break;
+                    }
+                }
+                if (valid) {
+                    trampoline_gen.jmp(reinterpret_cast<void*>(continuation));
+                }
+            } catch (const Xbyak::Error& error) {
+                trampoline_gen.setSize(trampoline_offset);
+                if (HandleTrampolineError(module, error)) {
+                    return nullptr;
+                }
+                throw;
+            }
+            if (!valid) {
+                trampoline_gen.setSize(trampoline_offset);
+                return nullptr;
+            }
+            return trampoline;
+        };
+
+        // sotc: the relay path of the red-zone patcher. A short jump over the site reaches a near
+        // jump to the site's own trampoline, held by a relay slot or by a host span: decoded
+        // instructions nearby, two near jumps long, moved to a trampoline of their own under the
+        // span rules below (not with an unresolved jump table, whose targets are unknown).
+        const auto relay_site = [&](const DecodedCodeInstruction& site) {
+            constexpr s64 ShortJumpMin = std::numeric_limits<s8>::min();
+            constexpr s64 ShortJumpMax = std::numeric_limits<s8>::max();
+            const uintptr_t site_end = site.address + site.instruction.length;
+            const uintptr_t from = site.address + ShortJumpSize;
+            const auto in_reach = [from](uintptr_t target) {
+                const s64 displacement = static_cast<s64>(target) - static_cast<s64>(from);
+                return displacement >= ShortJumpMin && displacement <= ShortJumpMax;
+            };
+            const uintptr_t lowest = static_cast<uintptr_t>(static_cast<s64>(from) + ShortJumpMin);
+
+            const size_t site_offset = module->trampoline_gen.getSize();
+            const DecodedCodeInstruction* const site_span[] = {&site};
+            const u8* site_trampoline = emit_span(site_span, site_end);
+            if (!site_trampoline) {
+                return false;
+            }
+
+            uintptr_t relay = 0;
+            if (const auto slot = relay_slots.lower_bound(lowest);
+                slot != relay_slots.end() && in_reach(slot->first)) {
+                const auto [at, tail_end] = *slot;
+                relay_slots.erase(slot);
+                write_jump(at, site_trampoline, Xbyak::CodeGenerator::LabelType::T_NEAR, tail_end);
+                add_relay_slot(at + NearJumpSize, tail_end);
+                relay = at;
+            } else if (!function.has_indirect_branch) {
+                for (auto host = function.instructions.lower_bound(lowest - NearJumpSize);
+                     host != function.instructions.end() && in_reach(host->first + NearJumpSize);
+                     ++host) {
+                    std::vector<const DecodedCodeInstruction*> span;
+                    uintptr_t continuation = host->first;
+                    bool valid = true;
+                    while (continuation - host->first < NearJumpSize * 2) {
+                        const auto it = function.instructions.find(continuation);
+                        if (it == function.instructions.end() ||
+                            (continuation != host->first &&
+                             function.branch_targets.contains(continuation)) ||
+                            it->second.instruction.meta.category == ZYDIS_CATEGORY_CALL ||
+                            module->patched.contains(reinterpret_cast<u8*>(continuation)) ||
+                            (continuation < site_end &&
+                             continuation + it->second.instruction.length > site.address)) {
+                            valid = false;
+                            break;
+                        }
+                        span.push_back(&it->second);
+                        continuation += it->second.instruction.length;
+                        if (IsControlFlowTerminator(it->second.instruction) ||
+                            it->second.instruction.meta.category == ZYDIS_CATEGORY_COND_BR) {
+                            valid = continuation - host->first >= NearJumpSize * 2;
+                            break;
+                        }
+                    }
+                    if (!valid) {
+                        continue;
+                    }
+                    const u8* host_trampoline = emit_span(span, continuation);
+                    if (!host_trampoline) {
+                        if (module->trampoline_exhausted) {
+                            break;
+                        }
+                        continue;
+                    }
+                    relay = host->first + NearJumpSize;
+                    write_jump(host->first, host_trampoline,
+                               Xbyak::CodeGenerator::LabelType::T_NEAR, relay);
+                    write_jump(relay, site_trampoline, Xbyak::CodeGenerator::LabelType::T_NEAR,
+                               continuation);
+                    mark_patched(span);
+                    add_relay_slot(relay + NearJumpSize, continuation);
+                    break;
+                }
+            }
+            if (!relay) {
+                module->trampoline_gen.setSize(site_offset);
+                return false;
+            }
+            write_jump(site.address, reinterpret_cast<void*>(relay),
+                       Xbyak::CodeGenerator::LabelType::T_SHORT, site_end);
+            module->patched.insert(reinterpret_cast<u8*>(site.address));
+            return true;
+        };
+
+        std::vector<std::pair<const DecodedCodeInstruction*, const char*>> relay_sites;
         uintptr_t covered_until = 0;
         for (const auto& [site, site_decoded] : function.instructions) {
             if (site < covered_until || module->patched.contains(reinterpret_cast<u8*>(site))) {
@@ -2390,6 +2696,7 @@ u64 PatchShortSse4aInstructions(u64 segment_addr, u64 segment_size,
                 // Long enough for the jump: patched in place, at a decoded instruction boundary.
                 if (TryPatch(reinterpret_cast<u8*>(site), module).first) {
                     ++patched_count;
+                    add_relay_slot(site + NearJumpSize, site + site_decoded.instruction.length);
                 }
                 continue;
             }
@@ -2397,36 +2704,17 @@ u64 PatchShortSse4aInstructions(u64 segment_addr, u64 segment_size,
                 continue;
             }
             const bool bmi_site = is_bmi(site_decoded);
-            // sotc: a short BMI site that cannot move with its neighbours becomes a UD2 that the
-            // illegal instruction handler runs (EmulateBmiTrapSite): TZCNT/LZCNT would otherwise
-            // run as BSF/BSR without a fault on these CPUs.
-            const auto trap_site = [&](const char* why) {
-                BmiTrapSite trap{site_decoded.instruction, {}};
-                std::copy_n(site_decoded.operands.begin(), trap.operands.size(),
-                            trap.operands.begin());
-                g_bmi_trap_sites.emplace(site, trap);
-                auto* bytes = reinterpret_cast<u8*>(site);
-                bytes[0] = 0x0F;
-                bytes[1] = 0x0B;
-                module->patched.insert(bytes);
-                ++trap_count;
-                LOG_DEBUG(Core, "Short {} at {:#x} runs from the exception: {}",
-                          ZydisMnemonicGetString(site_decoded.instruction.mnemonic), site, why);
-            };
-            if (bmi_site && function.has_indirect_branch) {
-                // An unresolved jump table may target any instruction after the site.
-                trap_site("unresolved indirect branch in the function");
-                continue;
-            }
 
             // Collect the following instructions until the span can hold a near jump. No
             // instruction after the first may be a branch target, and control flow may only end
-            // the span (sotc: a jcc/jmp/ret may be the last instruction of a BMI span).
+            // the span (sotc: a jcc/jmp/ret may be the last instruction of a BMI span; an
+            // unresolved jump table may target any instruction after a BMI site).
             std::vector<const DecodedCodeInstruction*> span;
             uintptr_t continuation = site;
-            bool valid = true;
-            const char* reason = "";
-            while (continuation - site < NearJumpSize) {
+            const char* reason = bmi_site && function.has_indirect_branch
+                                     ? "unresolved indirect branch in the function"
+                                     : "";
+            while (*reason == '\0' && continuation - site < NearJumpSize) {
                 const auto it = function.instructions.find(continuation);
                 bool ends_span = false;
                 if (it == function.instructions.end()) {
@@ -2447,7 +2735,6 @@ u64 PatchShortSse4aInstructions(u64 segment_addr, u64 segment_size,
                     reason = "already patched";
                 }
                 if (*reason != '\0') {
-                    valid = false;
                     break;
                 }
                 span.push_back(&it->second);
@@ -2455,73 +2742,48 @@ u64 PatchShortSse4aInstructions(u64 segment_addr, u64 segment_size,
                 if (ends_span) {
                     if (continuation - site < NearJumpSize) {
                         reason = "control flow before the span is long enough";
-                        valid = false;
                     }
                     break;
                 }
             }
-            if (!valid) {
-                if (bmi_site) {
-                    trap_site(reason);
+            if (*reason == '\0') {
+                if (const u8* trampoline = emit_span(span, continuation)) {
+                    write_jump(site, trampoline, Xbyak::CodeGenerator::LabelType::T_NEAR,
+                               continuation);
+                    mark_patched(span);
+                    add_relay_slot(site + NearJumpSize, continuation);
+                    covered_until = continuation;
+                    ++patched_count;
                     continue;
                 }
+                if (module->trampoline_exhausted) {
+                    break;
+                }
+                reason = "an instruction of the span cannot be relocated";
+            }
+            if (!bmi_site) {
                 LOG_WARNING(Core, "Short {} at {:#x} left to the trap handler: {}",
                             ZydisMnemonicGetString(site_decoded.instruction.mnemonic), site,
                             reason);
                 continue;
             }
-
-            auto& trampoline_gen = module->trampoline_gen;
-            const size_t trampoline_offset = trampoline_gen.getSize();
-            if (module->trampoline_exhausted) {
-                break;
-            }
-            const auto* trampoline = trampoline_gen.getCurr();
-            try {
-                for (const auto* decoded : span) {
-                    const PatchInfo* patch = FindMatchingPatch(*decoded);
-                    if (patch != nullptr && !patch->trampoline) {
-                        // sotc: an in-place replacement (MOVNTSS/SD) cannot be copied as is.
-                        valid = false;
-                        break;
-                    }
-                    if (patch != nullptr && patch->trampoline) {
-                        // CPU patch generators preserve the guest red zone themselves.
-                        patch->generator(reinterpret_cast<void*>(decoded->address),
-                                         decoded->operands.data(), trampoline_gen);
-                    } else if (!EncodeRelocatedInstruction(*decoded, trampoline_gen)) {
-                        valid = false;
-                        break;
-                    }
-                }
-                if (valid) {
-                    trampoline_gen.jmp(reinterpret_cast<void*>(continuation));
-                }
-            } catch (const Xbyak::Error& error) {
-                trampoline_gen.setSize(trampoline_offset);
-                if (HandleTrampolineError(module, error)) {
-                    break;
-                }
-                throw;
-            }
-            if (!valid) {
-                trampoline_gen.setSize(trampoline_offset);
-                if (bmi_site) {
-                    trap_site("an instruction of the span cannot be relocated");
-                }
+            if (red_zone_may_be_live(site_decoded)) {
+                // Relayed once every span of the function is written: their tails hold slots.
+                relay_sites.emplace_back(&site_decoded, reason);
                 continue;
             }
-
-            auto& patch_gen = module->patch_gen;
-            patch_gen.reset();
-            patch_gen.setSize(site - reinterpret_cast<uintptr_t>(patch_gen.getCode()));
-            patch_gen.jmp(trampoline, Xbyak::CodeGenerator::LabelType::T_NEAR);
-            patch_gen.nop(continuation - site - NearJumpSize);
-            for (const auto* decoded : span) {
-                module->patched.insert(reinterpret_cast<u8*>(decoded->address));
+            trap_site(site_decoded, reason, false);
+        }
+        for (const auto& [decoded, why] : relay_sites) {
+            if (module->patched.contains(reinterpret_cast<u8*>(decoded->address))) {
+                continue; // moved with a host span
             }
-            covered_until = continuation;
-            ++patched_count;
+            if (relay_site(*decoded)) {
+                ++patched_count;
+                ++relay_count;
+            } else {
+                trap_site(*decoded, why, true);
+            }
         }
 
         // sotc: code no decoded path reaches (cases behind a jump table that was not resolved, a
@@ -2530,23 +2792,32 @@ u64 PatchShortSse4aInstructions(u64 segment_addr, u64 segment_size,
         // without BMI1 the trap handler met a BEXTR there (eboot+0x96e1a), and a TZCNT/LZCNT left
         // there runs as BSF/BSR without any fault: the game hung on its first loading screen
         // (issue #88). Long sites are patched in place; short ones become UD2 traps, since a jump
-        // would cover instructions no decoded path vouches for.
+        // over the following instructions would cover code no decoded path vouches for, or relay
+        // jumps where the red zone may be live (liveness is not known there: assumed when the
+        // function or the gap addresses memory below rsp, or below rbp without lowering rsp).
         if (!bmi || module->trampoline_exhausted) {
             continue;
         }
         const auto patch_gap = [&](uintptr_t begin, uintptr_t end) {
             std::vector<DecodedCodeInstruction> sites;
+            bool below_stack_pointer = function.uses_red_zone || frame_in_red_zone;
+            bool below_frame_pointer = false;
+            bool gap_lowers_stack = lowers_stack;
             uintptr_t at = begin;
             while (at < end) {
                 const auto decoded = DecodeCodeInstruction(at, end);
                 if (decoded.instruction.length == 0) {
                     return; // data, or not an instruction boundary
                 }
+                below_stack_pointer |= decoded.has_red_zone_operand;
+                below_frame_pointer |= AddressesBelowFramePointer(decoded);
+                gap_lowers_stack |= LowersStack(decoded);
                 if (is_bmi(decoded)) {
                     sites.push_back(decoded);
                 }
                 at += decoded.instruction.length;
             }
+            const bool red_zone = below_stack_pointer || (below_frame_pointer && !gap_lowers_stack);
             for (const auto& decoded : sites) {
                 auto* bytes = reinterpret_cast<u8*>(decoded.address);
                 if (module->patched.contains(bytes)) {
@@ -2561,17 +2832,18 @@ u64 PatchShortSse4aInstructions(u64 segment_addr, u64 segment_size,
                     if (TryPatch(bytes, module).first) {
                         ++patched_count;
                         ++gap_count;
+                        add_relay_slot(decoded.address + NearJumpSize,
+                                       decoded.address + decoded.instruction.length);
                     }
                     continue;
                 }
-                BmiTrapSite trap{decoded.instruction, {}};
-                std::copy_n(decoded.operands.begin(), trap.operands.size(), trap.operands.begin());
-                g_bmi_trap_sites.emplace(decoded.address, trap);
-                bytes[0] = 0x0F;
-                bytes[1] = 0x0B;
-                module->patched.insert(bytes);
-                ++trap_count;
                 ++gap_count;
+                if (red_zone && relay_site(decoded)) {
+                    ++patched_count;
+                    ++relay_count;
+                    continue;
+                }
+                trap_site(decoded, "code no decoded path reaches", red_zone);
             }
         };
         uintptr_t cursor = function_start;
@@ -2585,9 +2857,17 @@ u64 PatchShortSse4aInstructions(u64 segment_addr, u64 segment_size,
             patch_gap(cursor, function_end);
         }
     }
+    if (relay_count) {
+        LOG_INFO(Core,
+                 "{} short BMI1/LZCNT/MOVBE sites reach their trampoline through a relay jump "
+                 "(guest red zone live)",
+                 relay_count);
+    }
     if (trap_count) {
-        LOG_WARNING(Core, "{} short BMI1/LZCNT/MOVBE sites run from the illegal instruction "
-                    "handler (not relocatable)", trap_count);
+        LOG_WARNING(Core,
+                    "{} short BMI1/LZCNT/MOVBE sites run from the illegal instruction handler "
+                    "(not relocatable), {} of them where the guest red zone may be live",
+                    trap_count, live_trap_count);
     }
     if (gap_count) {
         LOG_WARNING(Core, "{} BMI1/LZCNT/MOVBE sites patched in code no decoded path reaches",

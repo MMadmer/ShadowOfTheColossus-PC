@@ -7,6 +7,7 @@
 //    below rsp).
 //  - rdtsc redirected to a host clock when the cores disagree on the TSC (src/compat_win.c).
 // The first two come from the shadPS4 SotC fork (cpu_patches.cpp, module.cpp).
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
@@ -33,14 +34,22 @@ extern "C" int sotc_patch_eboot(const SotcPatchRequest* request, SotcPatchResult
         const uintptr_t hdr_start = base + offset;
         const uintptr_t hdr_end = hdr_start + size;
         Dwarf::EHHeaderInfo info;
-        return Dwarf::DecodeEHHdr(hdr_start, hdr_end, info) &&
-               Dwarf::DecodeEHHdrTable(info, hdr_end, function_starts);
+        // sotc: DecodeEHHdrTable replaces the vector's contents, so each table is decoded on its
+        // own and appended: decoded straight into function_starts, every module table dropped the
+        // eboot's starts (no short SSE4a, red-zone or eboot BMI patches since 5ded647).
+        std::vector<uintptr_t> starts;
+        if (!Dwarf::DecodeEHHdr(hdr_start, hdr_end, info) ||
+            !Dwarf::DecodeEHHdrTable(info, hdr_end, starts)) {
+            return false;
+        }
+        function_starts.insert(function_starts.end(), starts.begin(), starts.end());
+        return true;
     };
     if (request->eh_frame_hdr_size && !add_table(request->eh_frame_hdr, request->eh_frame_hdr_size)) {
         return -1;
     }
     // sotc: the linked modules' code (libc, Fios2, the user's audio modules) is only patched for
-    // BMI1/LZCNT/MOVBE; a table that does not decode leaves that module to the linear sweep.
+    // BMI1/LZCNT/MOVBE, from these tables; a module without one is reported below.
     for (uint32_t i = 0; i < request->module_table_count; ++i) {
         if (!add_table(request->module_tables[i].offset, request->module_tables[i].size)) {
             LOG_WARNING(Core, "Module function table at {:#x} does not decode",
@@ -60,6 +69,19 @@ extern "C" int sotc_patch_eboot(const SotcPatchRequest* request, SotcPatchResult
         if (request->segments[i].offset >= request->eboot_size && !result->needs_bmi) {
             continue;
         }
+        // sotc: BMI1/LZCNT/MOVBE sites are only patched ahead of time from decoded function
+        // starts. A segment holds read-only data too (.rodata, .eh_frame), so a linear sweep there
+        // would rewrite data that looks like those instructions; such code is left as it is.
+        if (result->needs_bmi &&
+            std::ranges::none_of(function_starts, [address, size](uintptr_t start) {
+                return start >= address && start - address < size;
+            })) {
+            LOG_WARNING(Core,
+                        "Code at image +{:#x} ({:#x} bytes) has no function table: its "
+                        "BMI1/LZCNT/MOVBE instructions are not patched ahead of time (TZCNT/LZCNT "
+                        "give BSF/BSR results, the others are handled when they fault)",
+                        request->segments[i].offset, size);
+        }
         if (result->needs_sse4a || result->needs_bmi) {
             result->short_sse4a += Core::PatchShortSse4aInstructions(address, size, function_starts);
         }
@@ -75,7 +97,7 @@ extern "C" int sotc_patch_eboot(const SotcPatchRequest* request, SotcPatchResult
             result->rdtsc_unpatched += unpatched;
         }
         // Long forms last: the linear sweep sees the jumps written above as plain instructions.
-        // sotc: not over module code (only patched for BMI, at decoded boundaries above).
+        // sotc: not over module code, and BMI sites are left out of it (decoded boundaries only).
         if (request->segments[i].offset < request->eboot_size) {
             Core::PrePatchInstructions(address, size);
         }

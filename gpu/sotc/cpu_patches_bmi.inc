@@ -67,9 +67,10 @@ static bool IsBmiMnemonic(ZydisMnemonic mnemonic) {
     }
 }
 
-/// A short TZCNT/LZCNT/MOVBE that could not be relocated: its first two bytes became UD2 and
-/// the illegal instruction handler runs the original from here (EmulateBmiTrapSite). Filled
-/// while the image is patched, before the game runs; read only afterwards.
+/// A short TZCNT/LZCNT/MOVBE that could not be relocated: its first two bytes became UD2 (the
+/// rest int3) and the illegal instruction handler runs the original from here
+/// (EmulateBmiTrapSite). Filled while the image is patched, before the game runs; read only
+/// afterwards.
 struct BmiTrapSite {
     ZydisDecodedInstruction instruction;
     std::array<ZydisDecodedOperand, ZYDIS_MAX_OPERAND_COUNT> operands;
