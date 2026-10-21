@@ -35,6 +35,9 @@
 
 namespace Vulkan {
 
+// sotc: the pipeline cache in use (PipelineCache::SaveDriverCacheNow).
+static std::atomic<PipelineCache*> current_cache{nullptr};
+
 using Shader::HwStage;
 using Shader::Output;
 using Shader::SwStage;
@@ -447,6 +450,7 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
                vk::to_string(cache_result));
     pipeline_cache = std::move(cache);
     driver_cache_saver = std::jthread([this](std::stop_token token) { DriverCacheSaver(token); });
+    current_cache.store(this, std::memory_order_release);
 
     // sotc: pipeline workers for SOTC_ASYNC_SHADERS (see AsyncPipelineJob).
     if (AsyncShadersEnabled()) {
@@ -464,7 +468,15 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
     }
 }
 
-PipelineCache::~PipelineCache() = default;
+PipelineCache::~PipelineCache() {
+    current_cache.store(nullptr, std::memory_order_release);
+}
+
+void PipelineCache::SaveDriverCacheNow() {
+    if (PipelineCache* cache = current_cache.load(std::memory_order_acquire)) {
+        cache->SaveDriverCache();
+    }
+}
 
 // sotc: a pipeline built on the command processor that took longer than 30 ms is logged with
 // the reason it was not built on a pipeline worker (SOTC_SYNC_PIPELINE_MS changes the limit).
@@ -560,8 +572,8 @@ void PipelineCache::DriverCacheSaver(std::stop_token token) {
         const u32 fresh = new_since_driver_save.exchange(0, std::memory_order_relaxed);
         pending += fresh;
         const auto now = std::chrono::steady_clock::now();
-        if (pending && (!fresh || now - last_save >= 30s || token.stop_requested())) {
-            SaveDriverCache();
+        if (pending && (!fresh || now - last_save >= 30s || token.stop_requested()) &&
+            SaveDriverCache()) {
             pending = 0;
             last_save = now;
         }

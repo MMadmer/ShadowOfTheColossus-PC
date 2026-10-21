@@ -24,6 +24,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstring>
+#include <fstream>
 #include <functional>
 #include <future>
 #include <mutex>
@@ -153,47 +154,73 @@ void DataBase::Open() {
 // pack.id stamp. A cache that was not seeded from this pack is replaced by it once; the warm-up
 // then builds every pipeline at boot (with its progress window). If the pack was made with
 // another shader profile, WarmUp finds the profile mismatch and starts a fresh cache as before.
-void DataBase::SeedFromPack() {
-    namespace fs = std::filesystem;
-    std::error_code ec;
-    fs::path pack_root;
+namespace {
+
+/// sotc: the shader pack's folder for a cache folder (empty with SOTC_SHADER_PACK=0).
+std::filesystem::path PackFolder(const std::filesystem::path& cache_path) {
+    std::filesystem::path pack_root;
     if (const char* v = std::getenv("SOTC_SHADER_PACK")) {
         if (v[0] == '0' && v[1] == '\0') {
-            return;
+            return {};
         }
-        pack_root = fs::path{v};
+        pack_root = std::filesystem::path{v};
     } else {
         wchar_t exe[1024]{};
 #ifdef _WIN32
         GetModuleFileNameW(nullptr, exe, 1024);
-        pack_root = fs::path{exe}.parent_path().parent_path() / "shaderpack";
+        pack_root = std::filesystem::path{exe}.parent_path().parent_path() / "shaderpack";
 #endif
     }
-    const fs::path pack = pack_root / cache_path.filename();
+    return pack_root.empty() ? pack_root : pack_root / cache_path.filename();
+}
+
+std::string ReadText(const std::filesystem::path& path) {
+    using namespace Common::FS;
+    const IOFile file{path, FileAccessMode::Read};
+    if (!file.IsOpen()) {
+        return {};
+    }
+    std::string text(file.GetSize(), '\0');
+    file.ReadSpan(std::span<char>{text});
+    return text;
+}
+
+/// sotc: pack.id of a cache made after the pack was rejected (another profile): not seeded
+/// again, and not taken for a cache seeded from the pack.
+constexpr char kRejected[] = "rejected ";
+
+/// sotc: the cache in cache_path was copied from the shader pack it has now.
+bool SeededFromPack(const std::filesystem::path& cache_path) {
+    const auto pack = PackFolder(cache_path);
+    if (pack.empty()) {
+        return false;
+    }
+    const std::string pack_id = ReadText(pack / "pack.id");
+    return !pack_id.empty() && ReadText(cache_path / "pack.id") == pack_id;
+}
+
+} // namespace
+
+void DataBase::SeedFromPack() {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    const fs::path pack = PackFolder(cache_path);
     const fs::path pack_id_file = pack / "pack.id";
-    if (!fs::is_regular_file(pack_id_file, ec)) {
-        return;
-    }
-    const auto read_text = [](const fs::path& path) {
-        using namespace Common::FS;
-        const IOFile file{path, FileAccessMode::Read};
-        if (!file.IsOpen()) {
-            return std::string{};
-        }
-        std::string text(file.GetSize(), '\0');
-        file.ReadSpan(std::span<char>{text});
-        return text;
-    };
-    const std::string pack_id = read_text(pack_id_file);
     const fs::path seeded_file = cache_path / "pack.id";
-    if (!pack_id.empty() && read_text(seeded_file) == pack_id) {
+    if (pack.empty() || !fs::is_regular_file(pack_id_file, ec)) {
         return;
     }
-    // sotc: WarmUp set this cache aside as made for another profile: a pack of another profile
-    // was seeded again at the next start and set aside again (19 s of copying and an empty cache
-    // at every start). The fresh cache is stamped with the pack instead, so it is not seeded.
+    const std::string pack_id = ReadText(pack_id_file);
+    const std::string stamp = ReadText(seeded_file);
+    if (!pack_id.empty() && (stamp == pack_id || stamp == kRejected + pack_id)) {
+        return;
+    }
+    // sotc: WarmUp set aside the cache seeded from this pack as made for another profile (or
+    // shader binary version): seeded again at every start and set aside again, that was 19 s of
+    // copying and an empty cache each time. The fresh cache is stamped with the pack instead, so
+    // it is not seeded.
     if (pack_rejected) {
-        fs::copy_file(pack_id_file, seeded_file, fs::copy_options::overwrite_existing, ec);
+        std::ofstream{seeded_file, std::ios::binary | std::ios::trunc} << kRejected << pack_id;
         return;
     }
     const auto start = std::chrono::steady_clock::now();
@@ -537,6 +564,13 @@ size_t DataBase::CountBlobs(BlobType type) {
 
 void DataBase::Reset() {
     Close();
+    // sotc: only a cache that came from the shader pack rejects the pack; a cache of the
+    // player's own (another profile, an older port) gives way to it.
+    pack_rejected = !cache_path.empty() && SeededFromPack(cache_path);
+    {
+        std::scoped_lock lock{index_mutex};
+        on_disk.clear(); // Prefetch indexes the new folder
+    }
     // Open() sets cache_path: a cache that was never opened has nothing to set aside.
     if (!cache_path.empty()) {
         auto old_path = cache_path;
@@ -549,7 +583,6 @@ void DataBase::Reset() {
             std::filesystem::remove_all(cache_path, error);
         }
     }
-    pack_rejected = true;
     Open();
 }
 

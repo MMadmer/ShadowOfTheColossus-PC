@@ -214,8 +214,16 @@ private:
 
     /// sotc: the driver's pipeline cache, kept with the shader cache (see LoadDriverCache).
     void LoadDriverCache();
-    void SaveDriverCache();
+    /// False when the data could not be read (the next call tries again).
+    bool SaveDriverCache();
     void DriverCacheSaver(std::stop_token token);
+
+public:
+    /// sotc: saves the driver cache of the pipeline cache in use now (the window is closing:
+    /// the saver thread does not get to its last save).
+    static void SaveDriverCacheNow();
+
+private:
 
 private:
     const Instance& instance;
@@ -267,6 +275,7 @@ private:
     std::vector<std::unique_ptr<AsyncPipelineJob>> async_done;
     std::atomic<u32> async_done_count{0};
     std::vector<std::jthread> async_workers;
+    std::mutex driver_cache_mutex;
     size_t driver_cache_saved_size{};
     std::atomic<u32> new_since_driver_save{0}; ///< pipelines built since the last save
     std::jthread driver_cache_saver;

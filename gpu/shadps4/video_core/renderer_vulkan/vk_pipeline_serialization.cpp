@@ -638,25 +638,37 @@ void PipelineCache::LoadDriverCache() {
     LOG_INFO(Render_Vulkan, "sotc: driver pipeline cache {} MB", data.size() >> 20);
 }
 
-void PipelineCache::SaveDriverCache() {
+bool PipelineCache::SaveDriverCache() {
     if (!pipeline_cache || !Storage::DataBase::Instance().IsOpened()) {
-        return;
+        return true;
     }
-    // The size first: nothing is copied while the driver added nothing.
+    std::scoped_lock lock{driver_cache_mutex};
     const auto device = instance.GetDevice();
-    size_t size{};
-    if (device.getPipelineCacheData(*pipeline_cache, &size, nullptr) != vk::Result::eSuccess ||
-        size <= driver_cache_saved_size) {
-        return;
+    // The size first: nothing is copied while the driver added nothing. Pipeline workers may
+    // add to the cache between the two calls (eIncomplete): asked again.
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        size_t size{};
+        if (device.getPipelineCacheData(*pipeline_cache, &size, nullptr) != vk::Result::eSuccess) {
+            return false;
+        }
+        if (size <= driver_cache_saved_size) {
+            return true;
+        }
+        std::vector<u8> bytes(size);
+        const vk::Result result = device.getPipelineCacheData(*pipeline_cache, &size, bytes.data());
+        if (result == vk::Result::eIncomplete) {
+            continue;
+        }
+        if (result != vk::Result::eSuccess) {
+            return false;
+        }
+        bytes.resize(size);
+        driver_cache_saved_size = size;
+        Storage::DataBase::Instance().Save(Storage::BlobType::DriverCache, "driver",
+                                           std::move(bytes));
+        return true;
     }
-    std::vector<u8> bytes(size);
-    if (device.getPipelineCacheData(*pipeline_cache, &size, bytes.data()) !=
-        vk::Result::eSuccess) {
-        return;
-    }
-    bytes.resize(size);
-    driver_cache_saved_size = size;
-    Storage::DataBase::Instance().Save(Storage::BlobType::DriverCache, "driver", std::move(bytes));
+    return false;
 }
 
 void PipelineCache::Sync() {

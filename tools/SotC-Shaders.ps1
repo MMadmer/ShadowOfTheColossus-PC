@@ -45,6 +45,7 @@ $Log = Join-Path $UserDir 'last_run.log'
 # recently written CUSA08809* folder is the one in use.
 function CacheDir {
     $dir = Get-ChildItem (Join-Path $UserDir 'cache') -Directory -Filter 'CUSA08809*' -ErrorAction SilentlyContinue |
+        Where-Object { $_.Extension -ne '.incompatible' } |
         Sort-Object LastWriteTime -Descending | Select-Object -First 1
     if ($dir) { return $dir.FullName }
     $name = if ($settings.perf_dma -eq $false) { 'CUSA08809_nodma' } else { 'CUSA08809' }
