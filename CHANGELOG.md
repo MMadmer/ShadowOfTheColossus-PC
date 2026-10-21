@@ -16,6 +16,9 @@
   `BB_DMEM_COMMIT_MB=<MiB>` simula um limite menor para testes.
 - Uma textura tirada da memória de vídeo cheia só grava de volta na memória do jogo os bytes que o
   jogo não mudou desde o pedido.
+- **Progresso da extração dos pacotes (.pkg)** no lançador: saltava para 100% no primeiro segundo e
+  parava ali até o fim (o PkgTool cria cada arquivo já com o tamanho final). Agora segue os bytes
+  que o PkgTool realmente gravou.
 - **Travamentos:** quando nenhum quadro do jogo chega por 60 s, o registro (`user/last_run.log`)
   recebe as pilhas de todas as threads, para encontrar a causa.
 

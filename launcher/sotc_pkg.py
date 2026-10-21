@@ -11,6 +11,7 @@ The package entries the port reads (param.sfo, playgo-chunk, icons, ...) are wri
 module; the file system image (PFS) is extracted by PkgTool (LibOrbisPkg, LGPL-3.0, shipped in
 tools/PkgTool), which handles fake packages (dumps) only. Nothing is downloaded or decrypted with
 console keys."""
+import ctypes
 import os
 from pathlib import Path
 import shutil
@@ -157,6 +158,22 @@ def _tree_bytes(path):
     return total
 
 
+def _written_bytes(process):
+    """Bytes the process wrote so far (Windows I/O counters), or None elsewhere.
+    PkgTool gives every file its full size before filling it, so the size of the extracted tree
+    read 100% within the first second."""
+    class IoCounters(ctypes.Structure):
+        _fields_ = [(name, ctypes.c_ulonglong) for name in
+                    ('reads', 'writes', 'others', 'read_bytes', 'write_bytes', 'other_bytes')]
+    try:
+        counters = IoCounters()
+        if ctypes.windll.kernel32.GetProcessIoCounters(ctypes.c_void_p(int(process._handle)), ctypes.byref(counters)):
+            return counters.write_bytes
+    except (AttributeError, OSError):
+        pass
+    return None
+
+
 def _extract_pfs(info, dest, pkgtool, progress, done_before, total):
     """PkgTool's extraction of the package's file system into dest (merged with what is there)."""
     dest = Path(dest)
@@ -177,7 +194,8 @@ def _extract_pfs(info, dest, pkgtool, progress, done_before, total):
         reader.start()
         while process.poll() is None:
             if progress:
-                progress(done_before + min(_tree_bytes(work), info['pfs_size']), total)
+                written = _written_bytes(process)
+                progress(done_before + min(_tree_bytes(work) if written is None else written, info['pfs_size']), total)
             time.sleep(1.0)
         reader.join(5)
         root = work / 'uroot'
