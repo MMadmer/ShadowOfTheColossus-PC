@@ -240,14 +240,16 @@ GraphicsPipeline::GraphicsPipeline(
         !infos[u32(Shader::SwStage::TessellationEval)]) {
         const auto& fs_runtime = runtime_infos[u32(Shader::SwStage::Fragment)].hw.fs;
         if (Shader::Backend::SPIRV::NeedsBarycentricGs(fs_runtime, *fs_stage_info)) {
-            // sotc: passthrough when the vertex shader feeds it directly with its position.
+            // sotc: passthrough when the vertex shader feeds it directly with its position. infos
+            // has the first permutation's Info: the params are the same in all, the clip distances
+            // (the location offset) follow each one's runtime info, so it must be there with both.
             const Shader::Info* vs_stage_info = infos[u32(Shader::SwStage::Vertex)];
-            const bool passthrough =
-                !is_rect_list && !is_quad_list && vs_stage_info &&
-                Shader::Backend::SPIRV::WritesBaryPosition(
-                    profile, *vs_stage_info,
-                    profile.needs_clip_distance_emulation &&
-                        vs_stage_info->stores.GetAny(Shader::IR::Attribute::ClipDistance));
+            const auto writes_position = [&](bool clip_distances) {
+                return Shader::Backend::SPIRV::WritesBaryPosition(profile, *vs_stage_info,
+                                                                  clip_distances);
+            };
+            const bool passthrough = !is_rect_list && !is_quad_list && vs_stage_info &&
+                                     writes_position(false) && writes_position(true);
             sdata.gs = Shader::Backend::SPIRV::EmitBarycentricGeometryShader(
                 profile, fs_runtime, *fs_stage_info, passthrough);
         }

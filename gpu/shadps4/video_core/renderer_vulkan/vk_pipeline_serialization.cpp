@@ -19,8 +19,9 @@
 namespace Serialization {
 /* You should increment versions below once corresponding serialization scheme is changed. */
 // Above both lines before the upstream merge: generation changed, so old caches are dropped.
-static constexpr u32 ShaderBinaryVersion = 34u;
-// sotc: 33 = the draw thread merge (SRT walker faults read zero instead of patching).
+static constexpr u32 ShaderBinaryVersion = 35u;
+// sotc: 33 = the draw thread merge (SRT walker faults read zero instead of patching); 35 = the
+// shader info keeps the fragment inputs, interpolation and vertex outputs (barycentric GS).
 static constexpr u32 ShaderMetaVersion = 21u;
 static constexpr u32 PipelineKeyVersion = 3u;
 } // namespace Serialization
@@ -685,6 +686,14 @@ void Info::Serialize(Serialization::Archive& ar) const {
     info.Write(this, sizeof(InfoPersistent));
     info.Write(FlatBuf());
     srt_info.Serialize(ar);
+    // sotc: what pipelines made later from a cached program read: the fragment inputs and their
+    // interpolation and the vertex outputs (the barycentric geometry shader of GTX 10 cards,
+    // which a cached pixel shader otherwise got none of), and the storage images (the memory
+    // write check of the draw thread).
+    info.Write(loads.flags.data(), sizeof(loads.flags));
+    info.Write(stores.flags.data(), sizeof(stores.flags));
+    info.Write(fs_interpolation.data(), sizeof(fs_interpolation));
+    info.Write(has_storage_images);
 }
 
 bool Info::Deserialize(Serialization::Archive& ar) {
@@ -693,7 +702,14 @@ bool Info::Deserialize(Serialization::Archive& ar) {
     info.Read(this, sizeof(Shader::InfoPersistent));
     info.Read(FlatBuf());
 
-    return srt_info.Deserialize(ar);
+    if (!srt_info.Deserialize(ar)) {
+        return false;
+    }
+    info.Read(loads.flags.data(), sizeof(loads.flags));
+    info.Read(stores.flags.data(), sizeof(stores.flags));
+    info.Read(fs_interpolation.data(), sizeof(fs_interpolation));
+    info.Read(has_storage_images);
+    return true;
 }
 
 void Gcn::FetchShaderData::Serialize(Serialization::Archive& ar) const {

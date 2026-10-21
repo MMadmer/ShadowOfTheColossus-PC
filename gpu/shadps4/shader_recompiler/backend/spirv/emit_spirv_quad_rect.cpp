@@ -427,9 +427,21 @@ std::vector<u32> EmitPassthroughBarycentricGs(const HwFragmentRuntimeInfo& fs_ru
         interfaces.push_back(id);
         return id;
     };
-    const auto passed = [&](u32 location) {
-        m.Decorate(variable(spv::StorageClass::Input, vec4_arr3, location),
-                   spv::Decoration::PassthroughNV);
+    // Inputs as the vertex shader writes them (vec4s: Info::AttributeFlags::NumComponents), one
+    // per location: fragment inputs can share a param (SPI_PS_INPUT_CNTL offset), and a location
+    // read per vertex and interpolated is both copied and passed on.
+    std::array<Id, BaryPositionLocation + 2> inputs{};
+    u64 passed_mask{};
+    const auto input = [&](u32 location, bool passed) {
+        Id& id = inputs[location];
+        if (!Sirit::ValidId(id)) {
+            id = variable(spv::StorageClass::Input, vec4_arr3, location);
+        }
+        if (passed && !(passed_mask & (1ull << location))) {
+            passed_mask |= 1ull << location;
+            m.Decorate(id, spv::Decoration::PassthroughNV);
+        }
+        return id;
     };
     const Id per_vertex{m.TypeStruct(vec4_id)};
     m.Decorate(per_vertex, spv::Decoration::Block);
@@ -441,7 +453,7 @@ std::vector<u32> EmitPassthroughBarycentricGs(const HwFragmentRuntimeInfo& fs_ru
     interfaces.push_back(gl_in);
 
     if (fs_runtime.clip_distance_emulation) {
-        passed(0U);
+        input(0U, true);
     }
     struct PerVertex {
         Id in, out;
@@ -451,15 +463,14 @@ std::vector<u32> EmitPassthroughBarycentricGs(const HwFragmentRuntimeInfo& fs_ru
         if (fs_runtime.inputs[i].IsDefault()) {
             continue;
         }
-        if (layout.per_vertex_mask & (1u << i)) {
+        const bool copied = layout.per_vertex_mask & (1u << i);
+        const Id in{input(BindLocation(fs_runtime, i), !copied)};
+        if (copied) {
             per_vertex_params.push_back(
-                {variable(spv::StorageClass::Input, vec4_arr3, BindLocation(fs_runtime, i)),
-                 variable(spv::StorageClass::Output, vec4_arr3, layout.Location(i))});
-        } else {
-            passed(BindLocation(fs_runtime, i));
+                {in, variable(spv::StorageClass::Output, vec4_arr3, layout.Location(i))});
         }
     }
-    passed(BaryPositionLocation);
+    input(BaryPositionLocation, true);
     const Id matrix{variable(spv::StorageClass::Output, vec4_arr3, layout.Matrix())};
 
     const Id main{m.OpFunction(void_id, spv::FunctionControlMask::MaskNone, m.TypeFunction(void_id))};
@@ -550,15 +561,27 @@ std::vector<u32> EmitBarycentricGeometryShader(const Profile& profile,
         bool per_vertex;
     };
     std::vector<Param> params;
+    // sotc: fragment inputs can share a param (SPI_PS_INPUT_CNTL offset): one input, and one
+    // interpolated output, per location.
+    std::array<Id, BaryPositionLocation + 2> inputs{};
+    u64 copied_mask{};
+    const auto input = [&](u32 location) {
+        Id& id = inputs[location];
+        if (!Sirit::ValidId(id)) {
+            id = variable(spv::StorageClass::Input, vec4_arr3, location);
+        }
+        return id;
+    };
     if (fs_runtime.clip_distance_emulation) {
-        params.push_back({variable(spv::StorageClass::Input, vec4_arr3, 0U),
-                          variable(spv::StorageClass::Output, vec4_id, 0U), false});
+        params.push_back({input(0U), variable(spv::StorageClass::Output, vec4_id, 0U), false});
+        copied_mask |= 1;
     }
     for (u32 i = 0; i < NumParams(fs_runtime); ++i) {
         if (fs_runtime.inputs[i].IsDefault()) {
             continue;
         }
-        const Id in{variable(spv::StorageClass::Input, vec4_arr3, BindLocation(fs_runtime, i))};
+        const u32 location = BindLocation(fs_runtime, i);
+        const Id in{input(location)};
         const auto primary = fs_info.fs_interpolation[i].primary;
         if (layout.per_vertex_mask & (1u << i)) {
             const Id out{variable(spv::StorageClass::Output, vec4_arr3, layout.Location(i))};
@@ -566,7 +589,11 @@ std::vector<u32> EmitBarycentricGeometryShader(const Profile& profile,
             params.push_back({in, out, true});
             continue;
         }
-        const Id out{variable(spv::StorageClass::Output, vec4_id, BindLocation(fs_runtime, i))};
+        if (copied_mask & (1ull << location)) {
+            continue;
+        }
+        copied_mask |= 1ull << location;
+        const Id out{variable(spv::StorageClass::Output, vec4_id, location)};
         if (primary != Qualifier::Smooth) { // as the pixel shader decorates it
             m.Decorate(out, primary == Qualifier::Flat ? spv::Decoration::Flat
                                                        : spv::Decoration::NoPerspective);
