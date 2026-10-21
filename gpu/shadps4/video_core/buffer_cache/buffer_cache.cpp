@@ -1478,6 +1478,9 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
     size_t placement_index = 0;
     for (const auto& range : bind_ranges) {
         const auto [device_memory, memory_block] = placements[placement_index++];
+        if (!device_memory) {
+            continue; // out of memory: not resident, asked again by the next bind
+        }
         Backing backing;
         backing.start = range.start;
         backing.end = range.end;
@@ -1504,7 +1507,9 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
     }
 
     staging.Flush();
-    runtime.CopyBuffer(staging.buffer, bda_pagetable_buffer.get(), copies);
+    if (!copies.empty()) {
+        runtime.CopyBuffer(staging.buffer, bda_pagetable_buffer.get(), copies);
+    }
 }
 
 bool BufferCache::SynchronizeMemory(const Buffer* arena, VAddr device_addr, u32 size,
@@ -1656,10 +1661,9 @@ std::pair<vk::DeviceMemory, u64> BufferCache::AllocateArenaBlocks(u64 blocks) {
         }
         return std::nullopt;
     };
-    const auto grow = [&](u32 memory_type, bool exact = false)
+    const u64 full_chunk = std::max<u64>(ARENA_CHUNK_SIZE >> block_shift, blocks);
+    const auto grow = [&](u32 memory_type, u64 chunk_blocks)
         -> std::optional<std::pair<vk::DeviceMemory, u64>> {
-        // exact: only the asked size, for a nearly full card that has no 64 MiB left (#137).
-        const u64 chunk_blocks = exact ? blocks : std::max<u64>(ARENA_CHUNK_SIZE >> block_shift, blocks);
         const vk::MemoryAllocateInfo alloc_info = {
             .allocationSize = chunk_blocks << block_shift,
             .memoryTypeIndex = memory_type,
@@ -1680,7 +1684,7 @@ std::pair<vk::DeviceMemory, u64> BufferCache::AllocateArenaBlocks(u64 blocks) {
     if (auto placed = take(arena_memory_type_index)) {
         return *placed;
     }
-    if (auto placed = grow(arena_memory_type_index)) {
+    if (auto placed = grow(arena_memory_type_index, full_chunk)) {
         return *placed;
     }
     if (arena_fallback_memory_type_index) {
@@ -1692,7 +1696,7 @@ std::pair<vk::DeviceMemory, u64> BufferCache::AllocateArenaBlocks(u64 blocks) {
         if (auto placed = take(*arena_fallback_memory_type_index)) {
             return *placed;
         }
-        if (auto placed = grow(*arena_fallback_memory_type_index)) {
+        if (auto placed = grow(*arena_fallback_memory_type_index, full_chunk)) {
             return *placed;
         }
     }
@@ -1703,25 +1707,45 @@ std::pair<vk::DeviceMemory, u64> BufferCache::AllocateArenaBlocks(u64 blocks) {
                 (blocks << block_shift) >> 10, instance.GetDeviceMemoryUsage() >> 20,
                 SotcStats::vram_budget.load() >> 20, SotcStats::arena_allocs.load(),
                 SotcStats::arena_bytes.load() >> 20);
-    texture_cache.EmergencyCollect();
-    scheduler.Finish();
-    scheduler.PopPendingOperations();
-    if (auto placed = grow(arena_memory_type_index)) {
-        return *placed;
-    }
-    // sotc: still no room for a whole chunk (#137: 6 GB cards): the asked size alone, then
-    // system memory, before giving up.
-    if (auto placed = grow(arena_memory_type_index, true)) {
-        return *placed;
-    }
-    if (arena_fallback_memory_type_index) {
-        if (auto placed = grow(*arena_fallback_memory_type_index, true)) {
+    // sotc: each round collects deeper (512 images, 4096, all the old ones) and then tries smaller
+    // chunks down to the asked size (a nearly full or fragmented card refuses 64 MiB but takes
+    // less, #137) before system memory. Under the texture cache lock (RefreshImage) the
+    // collection cannot run here (it would lock it again): it is deferred to the next submit.
+    const auto grow_smaller = [&]() -> std::optional<std::pair<vk::DeviceMemory, u64>> {
+        for (u64 chunk = full_chunk;; chunk = std::max(chunk / 2, blocks)) {
+            if (auto placed = grow(arena_memory_type_index, chunk)) {
+                return placed;
+            }
+            if (chunk == blocks) {
+                break;
+            }
+        }
+        if (arena_fallback_memory_type_index) {
+            return grow(*arena_fallback_memory_type_index, blocks);
+        }
+        return std::nullopt;
+    };
+    for (u32 level = 0; level < 3; ++level) {
+        const bool collected = texture_cache.TryEmergencyCollect(level);
+        if (collected) {
+            scheduler.Finish();
+            scheduler.PopPendingOperations();
+        }
+        if (auto placed = grow_smaller()) {
             return *placed;
         }
+        if (!collected) {
+            break;
+        }
     }
-    LOG_CRITICAL(Render, "Out of video and system memory for buffers; lower the video memory use "
-                         "setting in the launcher (Economy)");
-    ASSERT_MSG(false, "Failed to allocate buffer arena memory");
+    // sotc: the range stays unbound (shaders read zeros there) and the next bind asks again,
+    // instead of closing the game.
+    static u32 reported = 0;
+    if (reported++ < 8) {
+        LOG_CRITICAL(Render, "Out of video and system memory for buffers ({} KB left unbound); "
+                             "lower the video memory use setting in the launcher (Economy)",
+                     (blocks << block_shift) >> 10);
+    }
     return {};
 }
 
