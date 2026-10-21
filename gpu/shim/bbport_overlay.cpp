@@ -407,7 +407,7 @@ void QuickSettings() {
 
     using Vulkan::FrameGen::Mode;
     const Mode fg = Vulkan::FrameGen::Current();
-    const char* fg_names[] = {T("Desligada", "Off"), "NVIDIA DLSS-G", "AMD FSR 3"};
+    const char* fg_names[] = {T("Desligada", "Off"), "NVIDIA DLSS-G", "AMD FSR 3.1"};
     const char* fg_keys[] = {"\"off\"", "\"dlss\"", "\"fsr\""};
     if (ImGui::BeginCombo(T("Geração de quadros  [F8]", "Frame generation  [F8]"),
                           fg_names[static_cast<int>(fg)])) {
@@ -544,16 +544,19 @@ void Upscaling() {
                          std::memory_order_relaxed);
     }
     ImGui::EndDisabled();
-    Hint(T("Liga e desliga na hora. Funciona com o ajuste Upscaling (DLSS) do lançador, que "
-           "renderiza abaixo de 1080p como os modos de resolução de render; com o render completo "
-           "em 1080p não há o que ampliar.",
-           "Switches at once. Works with the launcher's Upscaling (DLSS) setting, which renders "
-           "below 1080p as the render resolution modes do; with the full 1080p render there is "
-           "nothing to upscale."));
-    if (!supported) {
+    Hint(T("Liga e desliga na hora.", "Switches at once."));
+    // sotc: on a GeForce RTX DLSS is only off for this session: the render size of a DLSS mode
+    // is set at start, in the launcher.
+    const char* problem = s.dlss_problem.load(std::memory_order_relaxed);
+    const bool rtx = s_instance &&
+                     std::string_view{s_instance->GetModelName()}.find("RTX") != std::string_view::npos;
+    if (!supported && !problem && rtx) {
+        ImGui::TextDisabled("%s", T("Escolha um modo DLSS no lançador.",
+                                    "Choose a DLSS mode in the launcher."));
+    } else if (!supported) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.5f, 0.3f, 1.0f));
         ImGui::TextWrapped(T("Indisponível: %s", "Unavailable: %s"),
-                           DlssProblem(s.dlss_problem.load(std::memory_order_relaxed)));
+                           DlssProblem(problem));
         ImGui::PopStyleColor();
     } else if (on) {
         ImGui::TextDisabled(T("Render %d x %d → saída", "Render %d x %d → output"),
@@ -963,7 +966,7 @@ void FpsCounter() {
                                SotcStats::ov_worst_cause_ms.load());
         }
     }
-    // Frame generation (vk_framegen.h): DLSS-G (vk_dlssg.cpp) or FSR 3 (vk_fsrfg.cpp).
+    // Frame generation (vk_framegen.h): DLSS-G (vk_dlssg.cpp) or FSR 3.1 (vk_fsrfg.cpp).
     switch (Vulkan::FrameGen::Current()) {
     case Vulkan::FrameGen::Mode::Off:
         ImGui::TextColored(grey, "%s", T("Geração de quadros: desligada", "Frame generation: off"));
@@ -984,13 +987,13 @@ void FpsCounter() {
         break;
     case Vulkan::FrameGen::Mode::Fsr:
         if (const int fg = SotcStats::ov_fsr_state.load(std::memory_order_relaxed); fg == 1) {
-            ImGui::TextColored(green, T("FSR 3 x2: ~%.0f FPS na tela", "FSR 3 x2: ~%.0f FPS shown"),
+            ImGui::TextColored(green, T("FSR 3.1 x2: ~%.0f FPS na tela", "FSR 3.1 x2: ~%.0f FPS shown"),
                                avg_fps * 2);
         } else if (fg == 2) {
-            ImGui::TextColored(red, "%s", T("FSR 3: erro (veja o registro)", "FSR 3: error (see the log)"));
+            ImGui::TextColored(red, "%s", T("FSR 3.1: erro (veja o registro)", "FSR 3.1: error (see the log)"));
         } else {
             ImGui::TextColored(grey, "%s",
-                               T("FSR 3: aguardando (sem cena 3D)", "FSR 3: waiting (no 3D scene)"));
+                               T("FSR 3.1: aguardando (sem cena 3D)", "FSR 3.1: waiting (no 3D scene)"));
         }
         break;
     }
@@ -1178,7 +1181,7 @@ bool HandleEvent(const SDL_Event& event) {
         SotcFpsCap::Toggle();
         return true;
     }
-    // sotc: F8 switches the frame generation mode (off, DLSS-G, FSR 3; vk_framegen.h).
+    // sotc: F8 switches the frame generation mode (off, DLSS-G, FSR 3.1; vk_framegen.h).
     // The new mode is shown at the next frame (Render).
     if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_F8 && !event.key.repeat) {
         const Vulkan::FrameGen::Mode mode = Vulkan::FrameGen::Cycle();
@@ -1478,7 +1481,7 @@ void SetTextEntry(bool active, const std::string& prompt, const std::string& tex
 void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent,
             bool game_frame) {
     // Present interval for the FPS readout (measured also while nothing is drawn), game frames
-    // only: a generated frame (FSR 3) is drawn half a frame later.
+    // only: a generated frame (FSR 3.1) is drawn half a frame later.
     const auto now = std::chrono::steady_clock::now();
     static auto last_draw = now;
     const float draw_ms = std::chrono::duration<float, std::milli>(now - last_draw).count();
