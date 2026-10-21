@@ -203,9 +203,19 @@ struct FormatQuery {
 static FormatQuery QueryImageFormat(const Vulkan::Instance& instance,
                                     const vk::PhysicalDeviceImageFormatInfo2& format_info) {
     static std::mutex mutex;
-    static std::unordered_map<u64, FormatQuery> answers;
-    const u64 key = (u64(format_info.format) << 40) ^ (u64(format_info.type) << 36) ^
-                    (u64(u32(format_info.flags)) << 20) ^ u64(u32(format_info.usage));
+    // sotc: exact key (the tiling is always optimal here): format and type in one word, flags and
+    // usage in the other. The XOR of shifted fields mixed flags into the type bits (a 3D image
+    // with e2DViewCompatibleEXT read the answer of a 1D one) and cut extension formats.
+    // From AjncSystem#69 (DUDUYG).
+    struct KeyHash {
+        size_t operator()(const std::pair<u64, u64>& k) const noexcept {
+            return std::hash<u64>{}(k.first * 0x9E3779B97F4A7C15ULL ^ k.second);
+        }
+    };
+    static std::unordered_map<std::pair<u64, u64>, FormatQuery, KeyHash> answers;
+    const std::pair<u64, u64> key{
+        (u64(format_info.format) << 32) | u64(format_info.type),
+        (u64(u32(format_info.flags)) << 32) | u64(u32(format_info.usage))};
     std::scoped_lock lock{mutex};
     if (const auto it = answers.find(key); it != answers.end()) {
         return it->second;
