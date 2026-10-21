@@ -2189,7 +2189,8 @@ class Launcher:
         self.output.put((code,))
 
     # Quick settings the in-game menu may have changed (it writes them to the settings file).
-    LIVE_KEYS = ('fps_mode', 'framegen', 'hq_textures', 'shadow_reuse', 'volume')
+    LIVE_KEYS = ('fps_mode', 'framegen', 'hq_textures', 'shadow_reuse', 'volume', 'fx_vignette', 'fx_fog',
+                 'fx_ssao', 'perf_dma')
 
     def reload_live_settings(self):
         saved = load_json(CONFIG_FILE, {})

@@ -8,11 +8,14 @@
 #include <cstdio>
 #include <cstdlib>
 #include <algorithm>
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
 #include <regex>
 #include <string>
+#include <string_view>
+#include <unordered_set>
 
 #include <SDL3/SDL.h>
 #include "bbport_settings.h"
@@ -114,12 +117,54 @@ float base_scale = 1.0f;
 std::chrono::steady_clock::time_point last_present{};
 float frame_ms_avg = 0.0f;
 
-// sotc: the settings menu is Bloodborne's; the SotC port shows only the game's dialogs
-// (BB_OVERLAY_MENU=1 opens the menu anyway).
+// The settings menu (Insert / F1 / L3+R3); BB_OVERLAY_MENU=0 turns it off.
 bool MenuAllowed() {
     const char* v = std::getenv("BB_OVERLAY_MENU");
     if (v && v[0] == '0') return false;
     return true;
+}
+
+// sotc: BbSettings::Save() rewrites the whole file, and sotc.ini (BB_CONFIG) also holds the
+// launcher's key bindings, the control remaps and sotc.py's settings: the lines it does not
+// write are kept.
+void SaveSettings() {
+    const char* env = std::getenv("BB_CONFIG");
+    const std::string path = env && env[0] ? env : "bbport.ini";
+    const auto read_lines = [&path] {
+        std::vector<std::string> lines;
+        std::ifstream in(path);
+        for (std::string line; std::getline(in, line);) {
+            if (!line.empty() && line.back() == '\r') {
+                line.pop_back();
+            }
+            lines.push_back(std::move(line));
+        }
+        return lines;
+    };
+    const auto key_of = [](const std::string& line) { return line.substr(0, line.find('=')); };
+    const std::vector<std::string> before = read_lines();
+    BbSettings::Save();
+    const std::vector<std::string> after = read_lines();
+    if (after == before) {
+        return; // not written, or nothing of anyone else's in it
+    }
+    std::unordered_set<std::string> written;
+    for (const std::string& line : after) {
+        if (line.find('=') != std::string::npos) {
+            written.insert(key_of(line));
+        }
+    }
+    std::string kept;
+    for (const std::string& line : before) {
+        const bool own = line.find('=') != std::string::npos ? written.contains(key_of(line))
+                                                             : line.starts_with("# bbport settings");
+        if (!line.empty() && !own) {
+            kept += line + '\n';
+        }
+    }
+    if (!kept.empty()) {
+        std::ofstream(path, std::ios::app) << kept;
+    }
 }
 
 void SetOpen(bool value) {
@@ -129,7 +174,7 @@ void SetOpen(bool value) {
     ImGui::GetIO().MouseDrawCursor = value;
     if (!value && dirty) {
         dirty = false;
-        BbSettings::Save();
+        SaveSettings();
     }
 }
 
@@ -271,34 +316,41 @@ void Hint(const char* text) {
 }
 
 // sotc: the launcher's settings file (SOTC_LAUNCHER_SETTINGS, user/launcher_settings.json), so a
-// quick setting changed in the menu is also the launcher's choice next time. Only keys already in
-// the file are replaced.
-void SaveLauncherSetting(const char* key, const std::string& json_value) {
+// setting changed in the menu is also the launcher's choice next time. Only keys already in the
+// file are replaced. Empty: the game was not started by the launcher.
+std::filesystem::path LauncherSettingsPath() {
 #ifdef _WIN32
-    const wchar_t* wpath = _wgetenv(L"SOTC_LAUNCHER_SETTINGS");
-    if (!wpath || !wpath[0]) {
-        return;
-    }
-    const std::filesystem::path path{wpath};
+    const wchar_t* path = _wgetenv(L"SOTC_LAUNCHER_SETTINGS");
 #else
-    const char* cpath = std::getenv("SOTC_LAUNCHER_SETTINGS");
-    if (!cpath || !cpath[0]) {
+    const char* path = std::getenv("SOTC_LAUNCHER_SETTINGS");
+#endif
+    return path && path[0] ? std::filesystem::path{path} : std::filesystem::path{};
+}
+
+std::string ReadText(const std::filesystem::path& path) {
+    std::ifstream in(path, std::ios::binary);
+    return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+}
+
+std::regex LauncherKey(const char* key) {
+    return std::regex("(\"" + std::string(key) + "\"\\s*:\\s*)(\"[^\"]*\"|true|false|-?[0-9.]+)");
+}
+
+/// A key's JSON value in the launcher's settings file (true, "30", ...), or empty.
+std::string LauncherSetting(const char* key) {
+    const std::string text = ReadText(LauncherSettingsPath());
+    std::smatch m;
+    return std::regex_search(text, m, LauncherKey(key)) ? m[2].str() : std::string{};
+}
+
+void SaveLauncherSetting(const char* key, const std::string& json_value) {
+    const std::filesystem::path path = LauncherSettingsPath();
+    if (path.empty()) {
         return;
     }
-    const std::filesystem::path path{cpath};
-#endif
-    std::string text;
-    {
-        std::ifstream in(path, std::ios::binary);
-        if (!in) {
-            return;
-        }
-        text.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
-    }
-    const std::regex re("(\"" + std::string(key) +
-                        "\"\\s*:\\s*)(\"[^\"]*\"|true|false|-?[0-9.]+)");
+    std::string text = ReadText(path);
     std::smatch m;
-    if (!std::regex_search(text, m, re)) {
+    if (!std::regex_search(text, m, LauncherKey(key))) {
         return;
     }
     text = m.prefix().str() + m[1].str() + json_value + m.suffix().str();
@@ -398,7 +450,121 @@ void QuickSettings() {
     ImGui::PopStyleColor();
 }
 
+// Window and performance overlay, both switched at once.
+void DisplaySettings() {
+    using SotcUi::T;
+    ImGui::SeparatorText(T("Tela", "Display"));
+    if (g_window) {
+        bool fs = g_window->IsFullscreen();
+        if (ImGui::Checkbox(T("Tela cheia  [F11]", "Fullscreen  [F11]"), &fs)) {
+            g_window->SetFullscreen(fs);
+        }
+        ImGui::SameLine();
+    }
+    bool perf = OverlayOn();
+    if (ImGui::Checkbox(T("Painel de desempenho  [F10]", "Performance overlay  [F10]"), &perf)) {
+        overlay_on.store(perf, std::memory_order_relaxed);
+        // The ini value is the overlay's state at the next start.
+        Store(BbSettings::Get().show_fps, perf, true);
+    }
+}
+
+// sotc: why DLSS is not available, in the UI language: the renderer's reasons
+// (vk_dlssg.cpp OnDeviceCreated); others as they are.
+const char* DlssProblem(const char* problem) {
+    using SotcUi::T;
+    if (!problem) {
+        return T("requer uma placa NVIDIA RTX e o DLSS ligado no lançador",
+                 "it needs an NVIDIA RTX graphics card and DLSS turned on in the launcher");
+    }
+    const std::string_view reason{problem};
+    if (reason == "NVIDIA Streamline not loaded") {
+        return T("o NVIDIA Streamline não foi carregado", "NVIDIA Streamline not loaded");
+    }
+    if (reason == "not an NVIDIA RTX graphics card") {
+        return T("a placa de vídeo não é uma NVIDIA RTX", "not an NVIDIA RTX graphics card");
+    }
+    if (reason == "not supported by this graphics card or driver") {
+        return T("sem suporte nesta placa de vídeo ou neste driver",
+                 "not supported by this graphics card or driver");
+    }
+    return problem;
+}
+
+// sotc: DLSS Super Resolution (vk_dlssg.cpp): the renderer reads the choice every frame and
+// stores the scene size it upscales from.
+void Upscaling() {
+    using SotcUi::T;
+    auto& s = BbSettings::Get();
+    ImGui::SeparatorText(T("Upscaling (DLSS)", "Upscaling (DLSS)"));
+    const bool supported = s.dlss_supported.load(std::memory_order_relaxed);
+    bool on = supported && s.upscaler.load(std::memory_order_relaxed) == BbSettings::UpscalerDlss;
+    ImGui::BeginDisabled(!supported);
+    if (ImGui::Checkbox(T("NVIDIA DLSS Super Resolution", "NVIDIA DLSS Super Resolution"), &on)) {
+        s.upscaler.store(on ? BbSettings::UpscalerDlss : BbSettings::UpscalerOff,
+                         std::memory_order_relaxed);
+    }
+    ImGui::EndDisabled();
+    Hint(T("Liga e desliga na hora. Funciona com o ajuste Upscaling (DLSS) do lançador, que "
+           "renderiza abaixo de 1080p como os modos de resolução de render; com o render completo "
+           "em 1080p não há o que ampliar.",
+           "Switches at once. Works with the launcher's Upscaling (DLSS) setting, which renders "
+           "below 1080p as the render resolution modes do; with the full 1080p render there is "
+           "nothing to upscale."));
+    if (!supported) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.5f, 0.3f, 1.0f));
+        ImGui::TextWrapped(T("Indisponível: %s", "Unavailable: %s"),
+                           DlssProblem(s.dlss_problem.load(std::memory_order_relaxed)));
+        ImGui::PopStyleColor();
+    } else if (on) {
+        ImGui::TextDisabled(T("Render %d x %d → saída", "Render %d x %d → output"),
+                            s.active_render_width.load(std::memory_order_relaxed),
+                            s.active_render_height.load(std::memory_order_relaxed));
+    }
+}
+
+// sotc: the launcher's engine effects (EFFECTS and perf_dma in sotc_launcher_win.py), which it
+// passes to the game at start (SOTC_CVARS, BB_DIRECT_MEMORY_ACCESS): a change goes to its
+// settings file and applies when the game starts again.
+void EngineEffects() {
+    using SotcUi::T;
+    static constexpr const char* keys[] = {"fx_vignette", "fx_fog", "fx_ssao", "perf_dma"};
+    const char* const labels[std::size(keys)] = {
+        T("Vinheta (cantos escurecidos)", "Vignette (darkened corners)"),
+        T("Névoa atmosférica", "Atmospheric fog"),
+        T("Oclusão ambiente (SSAO)", "Ambient occlusion (SSAO)"),
+        T("Reflexos completos da água (acesso direto à memória)",
+          "Full water reflections (direct memory access)"),
+    };
+    static const bool launcher = !LauncherSettingsPath().empty();
+    // The launcher's choices, read once: on unless its file says false.
+    static std::array<bool, std::size(keys)> values = [] {
+        std::array<bool, std::size(keys)> on{};
+        for (size_t i = 0; i < on.size(); ++i) {
+            on[i] = LauncherSetting(keys[i]) != "false";
+        }
+        return on;
+    }();
+    ImGui::SeparatorText(T("Efeitos do jogo", "Engine effects"));
+    ImGui::BeginDisabled(!launcher);
+    for (size_t i = 0; i < values.size(); ++i) {
+        if (ImGui::Checkbox(labels[i], &values[i])) {
+            SaveLauncherSetting(keys[i], values[i] ? "true" : "false");
+        }
+    }
+    ImGui::EndDisabled();
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    ImGui::TextWrapped("%s", launcher ? T("Gravados no lançador; valem ao abrir o jogo de novo.",
+                                          "Saved in the launcher; they apply when the game starts "
+                                          "again.")
+                                      : T("Só pelo lançador (o jogo foi aberto sem ele).",
+                                          "Only through the launcher (the game was started "
+                                          "without it)."));
+    ImGui::PopStyleColor();
+}
+
 void Menu() {
+    using SotcUi::T;
     auto& s = BbSettings::Get();
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + 40.0f * base_scale,
@@ -407,7 +573,7 @@ void Menu() {
     ImGui::SetNextWindowSize(ImVec2(660.0f * base_scale, 0.0f), ImGuiCond_Appearing);
     bool keep_open = true;
     const std::string title = std::string("Shadow of the Colossus — ") +
-                              SotcUi::T("Configurações", "Settings") + "  (Insert / F1 / L3+R3)###menu";
+                              T("Configurações", "Settings") + "  (Insert / F1 / L3+R3)###menu";
     if (!ImGui::Begin(title.c_str(), &keep_open,
                       ImGuiWindowFlags_NoCollapse)) {
         ImGui::End();
@@ -415,155 +581,48 @@ void Menu() {
     }
 
     // --- Header: FPS, GPU & VRAM info ---
-    ImGui::Text("%.0f FPS  (%.1f ms)", frame_ms_avg > 0.0f ? 1000.0f / frame_ms_avg : 0.0f,
-                frame_ms_avg);
+    ImGui::Text(T("%.0f FPS  (%.1f ms)", "%.0f FPS  (%.1f ms)"),
+                frame_ms_avg > 0.0f ? 1000.0f / frame_ms_avg : 0.0f, frame_ms_avg);
     if (s_instance) {
         const u64 budget_mb = s_instance->GetTotalMemoryBudget() / (1024 * 1024);
         const u64 used_mb = s_instance->GetDeviceMemoryUsage() / (1024 * 1024);
         ImGui::SameLine();
-        ImGui::TextDisabled(" |  %s (%lu / %lu MB VRAM)",
+        ImGui::TextDisabled(T(" |  %s (%lu / %lu MB de VRAM)", " |  %s (%lu / %lu MB VRAM)"),
                             std::string(s_instance->GetModelName()).c_str(),
                             static_cast<unsigned long>(used_mb),
                             static_cast<unsigned long>(budget_mb));
     }
 
     QuickSettings();
+    DisplaySettings();
+    Upscaling();
 
-    // --- 1. Display & Window ---
-    ImGui::SeparatorText("Display & Window");
-    bool fs = s.fullscreen.load();
-    if (ImGui::Checkbox("Fullscreen mode", &fs)) {
-        Store(s.fullscreen, fs, true);
-        if (g_window) {
-            g_window->SetFullscreen(fs);
-        }
-    }
-    ImGui::SameLine();
-    Checkbox("Show FPS on screen", s.show_fps);
-
-    static const char* outputs[] = {"1280 x 720 (720p)", "1920 x 1080 (1080p)", "2560 x 1440 (1440p)", "3840 x 2160 (4K)"};
-    int output = s.output_res;
-    if (ImGui::BeginCombo("Output Resolution", outputs[output])) {
-        for (int i = 0; i < BbSettings::OutputCount; ++i) {
-            if (ImGui::Selectable(outputs[i], i == output)) {
-                Store(s.output_res, i, true);
-            }
-        }
-        ImGui::EndCombo();
-    }
-
-    // --- 2. Temporal Upscaler & Anti-Aliasing ---
-    ImGui::SeparatorText("Temporal Upscaler & Anti-Aliasing");
-    static const char* upscalers[] = {"Off", "FSR 3.1", "FSR 4 (INT8)", "FSR 4.1.1 (INT8)",
-                                     "TAA (Native AA)", "DLSS (NVIDIA RTX)"};
-    static const char* later[] = {"XeSS"};
-    int upscaler = s.upscaler;
-    if (ImGui::BeginCombo("Upscaler", upscalers[upscaler])) {
-        for (int i = 0; i < BbSettings::UpscalerCount; ++i) {
-            const bool supported = i == BbSettings::UpscalerFsr4 ? s.fsr4_supported.load()
-                : i == BbSettings::UpscalerFsr411 ? s.fsr411_supported.load()
-                : i == BbSettings::UpscalerDlss   ? s.dlss_supported.load() : true;
-            ImGui::BeginDisabled(!supported);
-            if (ImGui::Selectable(upscalers[i], i == upscaler)) {
-                Store(s.upscaler, i, true);
-            }
-            ImGui::EndDisabled();
-            if (!supported) {
-                ImGui::SameLine();
-                ImGui::TextDisabled("— not supported by GPU");
-            }
-        }
-        for (const char* name : later) {
-            ImGui::BeginDisabled();
-            ImGui::Selectable(name, false);
-            ImGui::EndDisabled();
-            ImGui::SameLine();
-            ImGui::TextDisabled("— in development");
-        }
-        ImGui::EndCombo();
-    }
-    if (const char* problem = s.dlss_problem.load(); problem && upscaler == BbSettings::UpscalerDlss) {
-        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.3f, 1.0f), "DLSS: %s", problem);
-    }
-    if (const char* problem = s.fsr4_problem.load()) {
-        ImGui::PushTextWrapPos();
-        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.3f, 1.0f), "FSR 4 unavailable: %s", problem);
-        if (!BbSettings::IsFsr4(s.upscaler))
-            ImGui::TextUnformatted("Active mode chosen above. FSR 4 can be selected again.");
-        ImGui::PopTextWrapPos();
-    }
-    if (BbSettings::IsFsr4(s.upscaler)) {
-        if (s.upscaler == BbSettings::UpscalerFsr411) {
-            Hint("FSR 4.1.1 in INT8 mode: AMD 4.1.1 model running in Vulkan.");
-        } else {
-            Hint("FSR 4 in INT8 mode (v07 model from AMD FidelityFX SDK).");
-        }
-        Checkbox("FSR 4: auto exposure", s.fsr4_auto_exposure);
-        Checkbox("FSR 4: invert jitter", s.fsr4_invert_jitter);
-    }
-    const bool upscaler_on = s.upscaler != BbSettings::UpscalerOff;
-    const bool taa = s.upscaler == BbSettings::UpscalerTaa;
-    ImGui::BeginDisabled(!upscaler_on);
-    ImGui::BeginDisabled(taa);
-    int preset = taa ? BbSettings::NativeAA : s.preset.load();
-    char preset_label[64];
-    std::snprintf(preset_label, sizeof(preset_label), "%s (x%.1f)", BbSettings::PresetName(preset),
-                  BbSettings::PresetScale(preset));
-    if (ImGui::BeginCombo("Render Preset", preset_label)) {
-        for (int i = 0; i < BbSettings::PresetCount; ++i) {
-            char label[64];
-            const float scale = BbSettings::PresetScale(i);
-            const int out_idx = s.output_res;
-            std::snprintf(label, sizeof(label), "%s (x%.1f, render %dx%d)",
-                          BbSettings::PresetName(i), scale,
-                          int(std::lround(BbSettings::OutputWidths[out_idx] / scale / 2) * 2),
-                          int(std::lround(BbSettings::OutputHeights[out_idx] / scale / 2) * 2));
-            if (ImGui::Selectable(label, i == preset)) {
-                Store(s.preset, i, true);
-            }
-        }
-        ImGui::EndCombo();
-    }
-    ImGui::EndDisabled();
-    if (taa) {
-        ImGui::TextWrapped("TAA antialiases the scene at output resolution without FSR upscaling.");
-    }
-    ImGui::Text("Active scene render: %d x %d", s.active_render_width.load(),
-                s.active_render_height.load());
-    Checkbox("Sharpening (RCAS)", s.sharpen);
-    ImGui::BeginDisabled(!s.sharpen);
-    Slider("Sharpening strength", s.sharpness, 0.0f, 2.0f);
-    ImGui::EndDisabled();
-    ImGui::EndDisabled();
-
-    // --- 3. Camera & Mouse Control ---
-    ImGui::SeparatorText("Camera & Mouse Control");
-    Checkbox("Enable mouse camera control", s.mouse_enabled);
+    // --- Camera & Mouse Control (live: window.cpp bbgpu_mouse_take) ---
+    ImGui::SeparatorText(T("Câmera e mouse", "Camera & mouse"));
+    Checkbox(T("Câmera no mouse", "Mouse camera"), s.mouse_enabled);
+    Hint(T("Vale na hora. Ao abrir o jogo pelo lançador, valem os ajustes de mouse dele.",
+           "Applies at once. When the game starts from the launcher, its mouse settings are "
+           "used."));
     ImGui::BeginDisabled(!s.mouse_enabled);
-    Slider("Mouse sensitivity", s.mouse_sens, 0.1f, 3.0f);
-    Checkbox("Invert vertical axis (Y)", s.mouse_invert);
+    Slider(T("Sensibilidade do mouse", "Mouse sensitivity"), s.mouse_sens, 0.1f, 3.0f);
+    Checkbox(T("Inverter o eixo vertical", "Invert the vertical axis"), s.mouse_invert);
     ImGui::EndDisabled();
 
-    // --- 4. Engine Visuals & Features ---
-    ImGui::SeparatorText("Engine Visuals & Features");
-    for (int e = 0; e < BbSettings::EffectCount; ++e) {
-        Checkbox(BbSettings::Effects[e].label, s.effects[e]);
-    }
-    ImGui::TextDisabled("Note: Visual effects and DMA reflect in sotc.ini and apply on restart.");
+    EngineEffects();
 
     // --- Footer ---
     ImGui::Spacing();
     ImGui::Separator();
-    if (ImGui::Button("Save to sotc.ini")) {
-        BbSettings::Save();
+    if (ImGui::Button(T("Salvar no sotc.ini", "Save to sotc.ini"))) {
+        SaveSettings();
         dirty = false;
     }
     ImGui::SameLine();
-    if (ImGui::Button("Close")) {
+    if (ImGui::Button(T("Fechar", "Close"))) {
         keep_open = false;
     }
     ImGui::SameLine();
-    ImGui::TextDisabled("Settings auto-save on close");
+    ImGui::TextDisabled("%s", T("As configurações são salvas ao fechar", "Settings are saved on close"));
 
     ImGui::End();
     if (!keep_open) {
@@ -590,8 +649,10 @@ void TextEntryBox() {
     ImGui::Text("%s_", text_entry_text.c_str());
     ImGui::SetWindowFontScale(1.0f);
     ImGui::Separator();
-    ImGui::TextDisabled("Keyboard: type, Backspace to erase, Enter = OK, Esc = cancel");
-    ImGui::TextDisabled("Controller: Cross (A) = OK, Circle (B) = cancel");
+    ImGui::TextDisabled("%s", SotcUi::T("Teclado: digite, Backspace apaga, Enter = OK, Esc = cancelar",
+                                        "Keyboard: type, Backspace to erase, Enter = OK, Esc = cancel"));
+    ImGui::TextDisabled("%s", SotcUi::T("Controle: ✕ (A) = OK, ○ (B) = cancelar",
+                                        "Controller: ✕ (A) = OK, ○ (B) = cancel"));
     ImGui::End();
 }
 
@@ -664,15 +725,21 @@ void SaveListBox() {
     list_scroll = false;
     ImGui::EndChild();
     ImGui::Separator();
+    using SotcUi::T;
     if (list_confirm >= 0) {
-        ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f),
-                           "Apagar este save?   Enter / X (A): sim    Esc / O (B): nao");
+        ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f), "%s",
+                           T("Apagar este save?   Enter / ✕ (A): sim    Esc / ○ (B): não",
+                             "Delete this save?   Enter / ✕ (A): yes    Esc / ○ (B): no"));
     } else if (list_first_deletable >= static_cast<int>(list_items.size())) { // sotc: YES/NO
-        ImGui::TextDisabled("Setas / direcional: escolher    Enter / X (A): confirmar    "
-                            "Esc / O (B): nao");
+        ImGui::TextDisabled("%s", T("Setas / direcional: escolher    Enter / ✕ (A): confirmar    "
+                                    "Esc / ○ (B): não",
+                                    "Arrows / D-pad: select    Enter / ✕ (A): confirm    "
+                                    "Esc / ○ (B): no"));
     } else {
-        ImGui::TextDisabled("Arrows / D-pad: Select    Enter / Cross (A): Confirm    "
-                            "Esc / Circle (B): Back    Del / Triangle (Y): Delete");
+        ImGui::TextDisabled("%s", T("Setas / direcional: escolher    Enter / ✕ (A): confirmar    "
+                                    "Esc / ○ (B): voltar    Del / △ (Y): apagar",
+                                    "Arrows / D-pad: select    Enter / ✕ (A): confirm    "
+                                    "Esc / ○ (B): back    Del / △ (Y): delete"));
     }
     ImGui::End();
 }
@@ -711,12 +778,13 @@ void LoadingScreen() {
     draw->PathArcTo(centre, radius, t * 5.0f, t * 5.0f + 1.6f, 32);
     draw->PathStroke(IM_COL32(214, 184, 120, 255), 0, 3.5f * unit);
     // "Loading" with moving dots.
-    char text[64];
+    const char* loading = SotcUi::T("Carregando", "Loading");
+    char text[96];
     const int dots = int(t * 2.5f) % 4;
-    std::snprintf(text, sizeof(text), "%s%.*s", SotcUi::T("Carregando", "Loading"), dots, "...");
+    std::snprintf(text, sizeof(text), "%s%.*s", loading, dots, "...");
     const float text_px = 24.0f * unit;
-    const ImVec2 full = ImGui::GetFont()->CalcTextSizeA(
-        text_px, FLT_MAX, 0.0f, SotcUi::T("Carregando...", "Loading..."));
+    const ImVec2 full = ImGui::GetFont()->CalcTextSizeA(text_px, FLT_MAX, 0.0f,
+                                                        (std::string(loading) + "...").c_str());
     draw->AddText(ImGui::GetFont(), text_px,
                   ImVec2(centre.x - full.x * 0.5f, centre.y + radius + 22.0f * unit), dim, text);
     // While the shader cache is read at boot: a bar with the percentage.
@@ -728,7 +796,7 @@ void LoadingScreen() {
         const ImVec2 bar0(origin.x + (size.x - bar_w) * 0.5f, centre.y + radius + 70.0f * unit);
         draw->AddRectFilled(bar0, ImVec2(bar0.x + bar_w, bar0.y + bar_h), IM_COL32(60, 60, 64, 255), bar_h * 0.5f);
         draw->AddRectFilled(bar0, ImVec2(bar0.x + bar_w * frac, bar0.y + bar_h), gold, bar_h * 0.5f);
-        char line[128];
+        char line[192];
         std::snprintf(line, sizeof(line), "%s %d%%  (%u / %u)", SotcUi::T("Carregando shaders…", "Loading shaders…"),
                       int(frac * 100.0f + 0.5f), done, total);
         const float line_px = 22.0f * unit;
@@ -775,10 +843,12 @@ void FpsCounter() {
     const auto rate_color = [&](float ms) {
         return ms <= target * 1.1f ? green : ms <= target * 1.6f ? yellow : red;
     };
+    using SotcUi::T;
     const float now_ms = frame_ms_avg;
     ImGui::TextColored(rate_color(now_ms), "%.0f FPS", now_ms > 0.0f ? 1000.0f / now_ms : 0.0f);
     ImGui::SameLine();
-    ImGui::TextColored(grey, SotcUi::T("%.1f ms   alvo %.0f FPS", "%.1f ms   target %.0f FPS"), now_ms, 1000.0f / target);
+    ImGui::TextColored(grey, T("%.1f ms   alvo %.0f FPS", "%.1f ms   target %.0f FPS"), now_ms,
+                       1000.0f / target);
 
     // Frame time graph, 0 to 2.2x the target, with the target line.
     const float graph_max = target * 2.2f;
@@ -791,25 +861,33 @@ void FpsCounter() {
     ImGui::GetWindowDrawList()->AddLine(ImVec2(lo.x, y), ImVec2(hi.x, y),
                                         IM_COL32(120, 200, 255, 160), 1.0f);
 
-    ImGui::Text(SotcUi::T("%.0f s: média %.1f | 1%% low %.1f | pior %.0f ms", "%.0f s: avg %.1f | 1%% low %.1f | worst %.0f ms"), seconds, avg_fps,
-                p99 > 0.0f ? 1000.0f / p99 : 0.0f, worst);
-    ImGui::TextColored(late ? (late > 3 ? red : yellow) : green, SotcUi::T("Atrasados: %d", "Late: %d"), late);
+    ImGui::Text(T("%.0f s: média %.1f | 1%% low %.1f | pior %.0f ms",
+                  "%.0f s: avg %.1f | 1%% low %.1f | worst %.0f ms"),
+                seconds, avg_fps, p99 > 0.0f ? 1000.0f / p99 : 0.0f, worst);
+    ImGui::TextColored(late ? (late > 3 ? red : yellow) : green, T("Atrasados: %d", "Late: %d"),
+                       late);
     ImGui::SameLine();
-    ImGui::TextColored(grey, SotcUi::T("| sessão %llu (%.1f%%), travadas >50 ms %llu", "| session %llu (%.1f%%), stutters >50 ms %llu"),
+    ImGui::TextColored(grey,
+                       T("| sessão %llu (%.1f%%), travadas >50 ms %llu",
+                         "| session %llu (%.1f%%), stutters >50 ms %llu"),
                        static_cast<unsigned long long>(session_late),
                        session_frames ? 100.0 * session_late / session_frames : 0.0,
                        static_cast<unsigned long long>(session_stutters));
     if (SotcStats::kFpsLog) {
-        ImGui::TextColored(grey, "CPU %.0f cmds/image | relectures GPU %.0f/s (%.0f ms/s)",
+        ImGui::TextColored(grey,
+                           T("CPU %.0f comandos/quadro | leituras da GPU %.0f/s (%.0f ms/s)",
+                             "CPU %.0f commands/frame | GPU readbacks %.0f/s (%.0f ms/s)"),
                            SotcStats::ov_cmds_per_frame.load(), SotcStats::ov_readbacks_per_s.load(),
                            SotcStats::ov_readback_ms_per_s.load());
         const int cause = SotcStats::ov_worst_cause.load();
-        ImGui::TextColored(grey, "Shaders compiles %u (5 s), %llu session",
+        ImGui::TextColored(grey,
+                           T("Shaders compilados: %u (5 s), %llu na sessão",
+                             "Shaders compiled: %u (5 s), %llu this session"),
                            SotcStats::ov_compiles_window.load(),
                            static_cast<unsigned long long>(SotcStats::ov_compiles_total.load()));
         if (cause >= 0) {
             ImGui::SameLine();
-            ImGui::TextColored(grey, SotcUi::T("| pior quadro: %s %.0f ms", "| worst frame: %s %.0f ms"),
+            ImGui::TextColored(grey, T("| pior quadro: %s %.0f ms", "| worst frame: %s %.0f ms"),
                                SotcStats::kFrameCauseNames[cause],
                                SotcStats::ov_worst_cause_ms.load());
         }
@@ -817,37 +895,44 @@ void FpsCounter() {
     // Frame generation (vk_framegen.h): DLSS-G (vk_dlssg.cpp) or FSR 3 (vk_fsrfg.cpp).
     switch (Vulkan::FrameGen::Current()) {
     case Vulkan::FrameGen::Mode::Off:
-        ImGui::TextColored(grey, SotcUi::T("Geração de quadros: desligada", "Frame generation: off"));
+        ImGui::TextColored(grey, "%s", T("Geração de quadros: desligada", "Frame generation: off"));
         break;
     case Vulkan::FrameGen::Mode::Dlss:
         if (const int fg = SotcStats::ov_fg_state.load(std::memory_order_relaxed); fg == 1) {
             const uint32_t shown = SotcStats::ov_fg_frames.load(std::memory_order_relaxed);
             const uint32_t n = shown ? shown : 2;
-            ImGui::TextColored(green, SotcUi::T("DLSS-G x%u: ~%.0f FPS na tela", "DLSS-G x%u: ~%.0f FPS shown"), n, avg_fps * n);
+            ImGui::TextColored(green, T("DLSS-G x%u: ~%.0f FPS na tela", "DLSS-G x%u: ~%.0f FPS shown"),
+                               n, avg_fps * n);
         } else if (fg == 2) {
-            ImGui::TextColored(red, "DLSS-G : erreur (statut %#x)",
+            ImGui::TextColored(red, T("DLSS-G: erro (status %#x)", "DLSS-G: error (status %#x)"),
                                SotcStats::ov_fg_status.load(std::memory_order_relaxed));
         } else {
-            ImGui::TextColored(grey, SotcUi::T("DLSS-G: aguardando (sem cena 3D)", "DLSS-G: waiting (no 3D scene)"));
+            ImGui::TextColored(grey, "%s",
+                               T("DLSS-G: aguardando (sem cena 3D)", "DLSS-G: waiting (no 3D scene)"));
         }
         break;
     case Vulkan::FrameGen::Mode::Fsr:
         if (const int fg = SotcStats::ov_fsr_state.load(std::memory_order_relaxed); fg == 1) {
-            ImGui::TextColored(green, SotcUi::T("FSR 3 x2: ~%.0f FPS na tela", "FSR 3 x2: ~%.0f FPS shown"), avg_fps * 2);
+            ImGui::TextColored(green, T("FSR 3 x2: ~%.0f FPS na tela", "FSR 3 x2: ~%.0f FPS shown"),
+                               avg_fps * 2);
         } else if (fg == 2) {
-            ImGui::TextColored(red, "FSR 3 : erreur (voir le journal)");
+            ImGui::TextColored(red, "%s", T("FSR 3: erro (veja o registro)", "FSR 3: error (see the log)"));
         } else {
-            ImGui::TextColored(grey, SotcUi::T("FSR 3: aguardando (sem cena 3D)", "FSR 3: waiting (no 3D scene)"));
+            ImGui::TextColored(grey, "%s",
+                               T("FSR 3: aguardando (sem cena 3D)", "FSR 3: waiting (no 3D scene)"));
         }
         break;
     }
     if (const uint64_t vram = SotcStats::vram_used.load(std::memory_order_relaxed)) {
-        ImGui::TextColored(grey, "VRAM %.1f / %.1f Go", vram / 1073741824.0,
+        ImGui::TextColored(grey, T("VRAM %.1f / %.1f GB", "VRAM %.1f / %.1f GB"),
+                           vram / 1073741824.0,
                            SotcStats::vram_budget.load(std::memory_order_relaxed) / 1073741824.0);
         ImGui::SameLine();
     }
-    ImGui::TextDisabled(SotcUi::T("F7: %s   F8: geração de quadros   F10: esconder", "F7: %s   F8: frame generation   F10: hide"),
-                        SotcFpsCap::uncapped ? SotcUi::T("FPS livres", "FPS uncapped") : SotcUi::T("travado em 30", "capped at 30"));
+    ImGui::TextDisabled(T("F7: %s   F8: geração de quadros   F10: esconder",
+                          "F7: %s   F8: frame generation   F10: hide"),
+                        SotcFpsCap::uncapped ? T("FPS livres", "FPS uncapped")
+                                             : T("travado em 30", "capped at 30"));
     ImGui::End();
 }
 
@@ -865,6 +950,52 @@ void Toast() {
     ImGui::TextUnformatted(toast_text.c_str());
     ImGui::SetWindowFontScale(1.0f);
     ImGui::End();
+}
+
+// sotc: Chinese, Japanese and Korean texts: a system font of the UI language (%WINDIR%\Fonts),
+// merged into the embedded one for the glyphs it lacks. Only the glyphs drawn take atlas space.
+void AddLanguageFont(ImFontAtlas& atlas, float size) {
+    using SotcUi::Lang;
+    struct LanguageFont {
+        Lang lang;
+        const char* name;
+        std::array<const char*, 3> files; // in order of preference
+        const ImWchar* (ImFontAtlas::*ranges)();
+    };
+    static constexpr LanguageFont fonts[] = {
+        {Lang::Zh, "zh", {"msyh.ttc", "msyh.ttf"}, &ImFontAtlas::GetGlyphRangesChineseSimplifiedCommon},
+        {Lang::Ja, "ja", {"YuGothM.ttc", "meiryo.ttc", "msgothic.ttc"}, &ImFontAtlas::GetGlyphRangesJapanese},
+        {Lang::Ko, "ko", {"malgun.ttf"}, &ImFontAtlas::GetGlyphRangesKorean},
+    };
+    const auto font = std::ranges::find(fonts, SotcUi::Current(), &LanguageFont::lang);
+    if (font == std::end(fonts)) {
+        return;
+    }
+#ifdef _WIN32
+    const wchar_t* windir = _wgetenv(L"WINDIR");
+#else
+    const char* windir = std::getenv("WINDIR");
+#endif
+    if (windir && windir[0]) {
+        const std::filesystem::path dir = std::filesystem::path{windir} / "Fonts";
+        ImFontConfig config;
+        config.MergeMode = true;
+        config.Flags |= ImFontFlags_NoLoadError;
+        for (const char* file : font->files) {
+            std::error_code error;
+            if (!file || !std::filesystem::is_regular_file(dir / file, error)) {
+                continue;
+            }
+            const std::u8string path = (dir / file).u8string();
+            if (atlas.AddFontFromFileTTF(reinterpret_cast<const char*>(path.c_str()), size, &config,
+                                         (atlas.*(font->ranges))())) {
+                std::printf("Overlay: %s texts with %s\n", font->name, file);
+                return;
+            }
+        }
+    }
+    std::printf("Overlay: no %s font (%s) in %%WINDIR%%\\Fonts: its characters show as '?'\n",
+                font->name, font->files[0]);
 }
 
 } // namespace
@@ -890,10 +1021,24 @@ void Init(const Vulkan::Instance& instance, vk::Format format, u32 image_count) 
     style.GrabRounding = 4.0f;
     style.Colors[ImGuiCol_WindowBg].w = 0.92f;
 
+    // sotc: the embedded font has Latin, Cyrillic and the symbols of the texts. ImGui 1.92 with
+    // this backend rasterizes glyphs on demand; the ranges only matter where they are preloaded.
+    static constexpr ImWchar kTextRanges[] = {
+        0x0020, 0x00FF, // Basic Latin, Latin-1
+        0x0400, 0x052F, // Cyrillic and its supplement
+        0x2000, 0x206F, // punctuation (dashes, ellipsis)
+        0x2190, 0x21FF, // arrows
+        0x25A0, 0x25FF, // geometric shapes (○ △)
+        0x2715, 0x2715, // ✕
+        0,
+    };
+    constexpr float kFontSize = 18.0f;
     ImFontConfig font_config;
     font_config.FontDataOwnedByAtlas = false;
     io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(bb_font_ttf),
-                                   int(bb_font_ttf_end - bb_font_ttf), 18.0f, &font_config);
+                                   int(bb_font_ttf_end - bb_font_ttf), kFontSize, &font_config,
+                                   kTextRanges);
+    AddLanguageFont(*io.Fonts, kFontSize);
 
     const vk::Instance vk_instance = instance.GetInstance();
     ImGui_ImplVulkan_LoadFunctions(
@@ -1277,8 +1422,11 @@ void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent,
     static Vulkan::FrameGen::Mode shown_mode = Vulkan::FrameGen::Current();
     if (const Vulkan::FrameGen::Mode mode = Vulkan::FrameGen::Current(); mode != shown_mode) {
         shown_mode = mode;
+        char text[128];
+        std::snprintf(text, sizeof(text), SotcUi::T("Geração de quadros: %s", "Frame generation: %s"),
+                      Vulkan::FrameGen::Name(mode));
         std::scoped_lock lock{imgui_mutex};
-        toast_text = std::string(SotcUi::T("Geração de quadros: ", "Frame generation: ")) + Vulkan::FrameGen::Name(mode);
+        toast_text = text;
         toast_until_ms.store(NowMs() + 2500, std::memory_order_relaxed);
     }
     // The 30 FPS cap was switched (F7).
@@ -1286,7 +1434,8 @@ void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent,
     if (const bool uncapped = SotcFpsCap::uncapped; uncapped != shown_uncapped) {
         shown_uncapped = uncapped;
         std::scoped_lock lock{imgui_mutex};
-        toast_text = uncapped ? SotcUi::T("FPS livres", "FPS uncapped") : SotcUi::T("FPS travados em 30", "FPS capped at 30");
+        toast_text = uncapped ? SotcUi::T("FPS livres", "FPS uncapped")
+                              : SotcUi::T("FPS travados em 30", "FPS capped at 30");
         toast_until_ms.store(NowMs() + 2500, std::memory_order_relaxed);
     }
     if (!Visible()) {

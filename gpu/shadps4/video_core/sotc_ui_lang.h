@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // sotc: language of the port's own on-screen texts (overlay, F7/F8 messages): the launcher's,
-// passed as SOTC_UI_LANG (pt or en; anything else is English).
+// passed as SOTC_UI_LANG (pt, en, es, ru, zh, ja, ko; anything else is English). Texts are
+// written as T(portuguese, english); the other languages are looked up by the Portuguese text in
+// sotc_ui_lang.cpp (as launcher/sotc_i18n.py), and a text missing there shows in English.
 #pragma once
 
 #include <cstdlib>
@@ -8,16 +10,13 @@
 
 namespace SotcUi {
 
-inline bool Pt() {
-    static const bool pt = [] {
-        const char* v = std::getenv("SOTC_UI_LANG");
-        return v && std::strncmp(v, "pt", 2) == 0;
-    }();
-    return pt;
-}
+enum class Lang { Pt, En, Es, Ru, Zh, Ja, Ko };
 
-inline const char* T(const char* pt, const char* en) {
-    return Pt() ? pt : en;
-}
+/// SOTC_UI_LANG, read once.
+Lang Current();
+
+/// The text in the current language. Format strings have the same printf specifiers, in the
+/// same order, in every language.
+const char* T(const char* pt, const char* en);
 
 } // namespace SotcUi
