@@ -2631,13 +2631,14 @@ void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
     ProbeSceneLayout(stage);
 
     // sotc: TakeHudless: the final composite samples the UI layer (an sRGB render target) and the
-    // fp16 scene, nothing else. Off unless SOTC_FG_HUDLESS=1: with FSR 3 the generated frames of
-    // the title screen (faded logo) and of loading screens (the scene left behind the opaque UI
-    // layer shows through) came out wrong, the real frame's UI not put back over them.
-    static const bool hudless_on = [] {
+    // fp16 scene, nothing else. With frame generation the composite is drawn again without the
+    // UI layer: FSR 3.1 interpolates that and vk_fsrfg.cpp puts the real frame's UI back; DLSS-G
+    // gets it as its HUD-less input. SOTC_FG_HUDLESS=0 turns it off.
+    static const bool hudless_allowed = [] {
         const char* v = std::getenv("SOTC_FG_HUDLESS");
-        return v && v[0] == '1';
+        return !v || v[0] != '0';
     }();
+    const bool hudless_on = hudless_allowed && FrameGen::Current() != FrameGen::Mode::Off;
     // sotc: in gameplay the composite binds the scene first and the UI layer second
     // (SOTC_DLSS_PROBE, res810), so either order is taken. DLSS SR (Dlssg::UpscaleScene) upscales
     // the scene there when it is smaller than the UI layer (a render resolution mode).
@@ -2650,7 +2651,7 @@ void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
                 scene.info.pixel_format != vk::Format::eR16G16B16A16Sfloat) {
                 continue;
             }
-            if (hudless_on && FrameGen::Current() != FrameGen::Mode::Off) {
+            if (hudless_on) {
                 hudless_ui_info = static_cast<s32>(first_image_idx + ui_index);
             }
             if (Dlssg::SrActive() && scene.info.size.width <= ui.info.size.width &&

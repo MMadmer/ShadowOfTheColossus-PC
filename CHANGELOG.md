@@ -48,6 +48,11 @@ Oussama268, DUDUYG, jownatan e AjncSystem**, cujos commits entram com a autoria 
   jogo em 1080p. Modos Qualidade (720p), Equilibrado (630p), Desempenho (540p) e Ultra Desempenho
   (360p) (`SOTC_DLSS`). Pode ser ligado e desligado no menu dentro do jogo. O runtime oficial
   NVIDIA Streamline 2.14.16 vai no pacote.
+- **Interface nítida com geração de quadros:** os quadros gerados recebem a cena sem a interface
+  e a interface do quadro real por cima (FSR 3.1); textos e barras não se arrastam mais com o
+  movimento, e telas de carregamento e o logotipo do título saem limpos. O DLSS-G recebe a imagem
+  sem interface (`SOTC_FG_HUDLESS=0` desliga). Multiplicador de quadros x3 e x4 do DLSS-G nas
+  GeForce RTX 50.
 - **Geração de quadros só onde funciona:** DLSS-G aparece para as RTX 40/50; FSR 3 para as demais.
   Uma DLSS-G salva numa placa sem ela passa a automática (FSR 3).
 

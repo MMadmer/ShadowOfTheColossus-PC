@@ -23,6 +23,7 @@
 #include "video_core/sotc_stats.h"
 
 #include "video_core/host_shaders/fg_depth_comp.h"
+#include "video_core/host_shaders/fg_hud_comp.h"
 
 // sotc: the HUD-less input of the next RecordPrepare/RecordDispatch (gpu/CMakeLists.txt adds it to
 // the module's frame generation source; a null image: none).
@@ -62,6 +63,11 @@ vk::UniqueDescriptorSetLayout depth_set_layout;
 vk::UniquePipelineLayout depth_layout;
 vk::UniquePipeline depth_pipeline;
 std::array<DepthSlot, kMaxFrames> depth_slots;
+// sotc: the real frame's HUD over the generated frame (fg_hud.comp), present thread.
+vk::ShaderModule hud_shader;
+vk::UniqueDescriptorSetLayout hud_set_layout;
+vk::UniquePipelineLayout hud_layout;
+vk::UniquePipeline hud_pipeline;
 
 // Present thread.
 FfxVkFsr3_3_1_6FrameGenerationContext* context{};
@@ -352,7 +358,82 @@ void Init(const Instance& instance) {
         return;
     }
     depth_pipeline = std::move(pipeline);
+
+    // The HUD pass: frame, HUD-less frame, generated frame (storage images).
+    hud_shader = CompileSPV(FG_HUD_COMP, device);
+    std::array<vk::DescriptorSetLayoutBinding, 3> hud_bindings{};
+    for (u32 i = 0; i < hud_bindings.size(); ++i) {
+        hud_bindings[i] = {.binding = i,
+                           .descriptorType = vk::DescriptorType::eStorageImage,
+                           .descriptorCount = 1,
+                           .stageFlags = vk::ShaderStageFlagBits::eCompute};
+    }
+    auto [hud_set_result, hud_set] = device.createDescriptorSetLayoutUnique({
+        .flags = vk::DescriptorSetLayoutCreateFlagBits::ePushDescriptorKHR,
+        .bindingCount = static_cast<u32>(hud_bindings.size()),
+        .pBindings = hud_bindings.data(),
+    });
+    const vk::PushConstantRange hud_push = {
+        .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = 2 * sizeof(u32)};
+    if (hud_set_result == vk::Result::eSuccess) {
+        hud_set_layout = std::move(hud_set);
+        const vk::DescriptorSetLayout hud_layouts[] = {*hud_set_layout};
+        auto [hud_layout_result, hud_pipeline_layout] = device.createPipelineLayoutUnique({
+            .setLayoutCount = 1,
+            .pSetLayouts = hud_layouts,
+            .pushConstantRangeCount = 1,
+            .pPushConstantRanges = &hud_push,
+        });
+        if (hud_layout_result == vk::Result::eSuccess) {
+            hud_layout = std::move(hud_pipeline_layout);
+            auto [hud_pipeline_result, pipeline_hud] = device.createComputePipelineUnique(
+                {}, vk::ComputePipelineCreateInfo{
+                        .stage{.stage = vk::ShaderStageFlagBits::eCompute,
+                               .module = hud_shader,
+                               .pName = "main"},
+                        .layout = *hud_layout,
+                    });
+            if (hud_pipeline_result == vk::Result::eSuccess) {
+                hud_pipeline = std::move(pipeline_hud);
+            }
+        }
+    }
+    if (!hud_pipeline) {
+        std::fprintf(stderr, "SOTC FSR3 FG: HUD pass unavailable, the SDK composes the HUD\n");
+    }
     supported = true;
+}
+
+/// sotc: where the real frame differs from the HUD-less one, its pixel replaces the generated
+/// one (fg_hud.comp). Recorded after the FSR 3.1 dispatch wrote `output`.
+void PutHudBack(vk::CommandBuffer cmdbuf, u32 width, u32 height) {
+    const auto written = Barrier(output.image, vk::PipelineStageFlagBits2::eComputeShader,
+                                 vk::AccessFlagBits2::eShaderWrite, vk::ImageLayout::eGeneral,
+                                 vk::PipelineStageFlagBits2::eComputeShader,
+                                 vk::AccessFlagBits2::eShaderWrite, vk::ImageLayout::eGeneral);
+    cmdbuf.pipelineBarrier2(vk::DependencyInfo{
+        .imageMemoryBarrierCount = 1,
+        .pImageMemoryBarriers = &written,
+    });
+    cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, *hud_pipeline);
+    const std::array infos{
+        vk::DescriptorImageInfo{.imageView = color.view, .imageLayout = vk::ImageLayout::eGeneral},
+        vk::DescriptorImageInfo{.imageView = hudless_color.view,
+                                .imageLayout = vk::ImageLayout::eGeneral},
+        vk::DescriptorImageInfo{.imageView = output.view, .imageLayout = vk::ImageLayout::eGeneral},
+    };
+    std::array<vk::WriteDescriptorSet, 3> writes{};
+    for (u32 i = 0; i < writes.size(); ++i) {
+        writes[i] = {.dstBinding = i,
+                     .descriptorCount = 1,
+                     .descriptorType = vk::DescriptorType::eStorageImage,
+                     .pImageInfo = &infos[i]};
+    }
+    cmdbuf.pushDescriptorSetKHR(vk::PipelineBindPoint::eCompute, *hud_layout, 0, writes);
+    const u32 params[2] = {width, height};
+    cmdbuf.pushConstants(*hud_layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(params),
+                         params);
+    cmdbuf.dispatch((width + 7) / 8, (height + 7) / 8, 1);
 }
 
 bool Supported() {
@@ -609,6 +690,9 @@ vk::Image Generate(vk::CommandBuffer cmdbuf, u32 frame_id, vk::Image frame_image
         dispatch.frameId = fsr_frame;
         dispatch.reset = prepare.reset;
         r = ffxVkFsr3_3_1_6FrameGenerationContextRecordDispatch(context, &dispatch);
+        if (r == FFX_VK_FSR3_3_1_6_FRAMEGEN_OK && hudless_image && hud_pipeline) {
+            PutHudBack(cmdbuf, width, height);
+        }
     }
     if (r != FFX_VK_FSR3_3_1_6_FRAMEGEN_OK) {
         static u32 errors = 0;
