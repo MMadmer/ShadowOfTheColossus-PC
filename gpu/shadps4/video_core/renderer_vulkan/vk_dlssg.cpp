@@ -753,6 +753,7 @@ struct SrState {
     sl::Constants constants{};
     bool constants_ok{};
     bool reported{};
+    u32 last_index{}; ///< frame index of the last evaluation
 } sr_state;
 
 void DestroySrImages() {
@@ -1545,6 +1546,12 @@ vk::ImageView UpscaleScene(Scheduler& scheduler, Runtime& runtime,
     if (!token) {
         return {};
     }
+    // Frames without an evaluation since the last one (switched off, loading screens): its
+    // history is stale.
+    if (sr_state.last_index + 1 != index) {
+        constants.reset = sl::Boolean::eTrue;
+    }
+    sr_state.last_index = index;
 
     // Inputs: the scene sampled where it is, copies of the depth and motion vectors (the game
     // reuses its G-buffer images), the output written as storage.
