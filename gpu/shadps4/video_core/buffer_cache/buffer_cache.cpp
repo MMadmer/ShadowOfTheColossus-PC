@@ -287,6 +287,23 @@ void BufferCache::MarkWrittenByGuest(VAddr addr, u64 size) {
 void BufferCache::BeginAsyncReadback(AsyncReadback& readback) {
     SotcStats::readbacks.fetch_add(1, std::memory_order_relaxed);
     NoteHotRead(readback.device_addr, readback.size);
+    // sotc: the job threads fault on the same windows at once (the culling bitsets). The ranges
+    // of a readback in flight stay GPU-modified until it is applied, so each of them recorded a
+    // copy of its own: twice the copies, submits and GPU syncs. A window in flight holds every
+    // GPU-modified byte it had when copied, and a GPU write recorded since makes it dirty (read
+    // back again when finished): waiting for it gives these bytes too. From AjncSystem#69 (DUDUYG).
+    // SOTC_RB_JOIN=0 records a copy of its own as before.
+    static const bool join = [] {
+        const char* v = std::getenv("SOTC_RB_JOIN");
+        return !v || v[0] != '0';
+    }();
+    if (const AsyncReadback* other =
+            join ? FindInflightWindow(readback.device_addr, readback.size) : nullptr) {
+        readback.tick = other->tick;
+        readback.waiting = true;
+        readback.dependent = true;
+        return;
+    }
     const u32 first_block = readback.device_addr >> block_shift;
     const u32 last_block = (readback.device_addr + readback.size - 1) >> block_shift;
     const auto* arena = GetArena(first_block, last_block);
@@ -356,9 +373,24 @@ BufferCache::AsyncReadback* BufferCache::FindInflightReadback(VAddr addr, u64 si
     return nullptr;
 }
 
+BufferCache::AsyncReadback* BufferCache::FindInflightWindow(VAddr addr, u64 size) {
+    for (AsyncReadback* readback : inflight_readbacks) {
+        for (const auto& item : readback->pending) {
+            if (item.addr <= addr && addr + size <= item.addr + item.size) {
+                return readback;
+            }
+        }
+    }
+    return nullptr;
+}
+
 void BufferCache::FinishAsyncReadback(AsyncReadback& readback) {
     if (readback.dependent) {
-        // Finish the readbacks this one waited for (owners still blocked keep them alive).
+        // Finish the readbacks this one waited for (owners still blocked keep them alive): the
+        // ones whose window holds its bytes, and the ones copying any of them.
+        while (AsyncReadback* other = FindInflightWindow(readback.device_addr, readback.size)) {
+            FinishAsyncReadback(*other);
+        }
         while (AsyncReadback* other = FindInflightReadback(readback.device_addr, readback.size)) {
             FinishAsyncReadback(*other);
         }

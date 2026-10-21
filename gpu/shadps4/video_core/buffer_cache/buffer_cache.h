@@ -241,6 +241,8 @@ private:
     void MarkWrittenByGuest(VAddr addr, u64 size);
     void FinishAsyncReadback(AsyncReadback& readback);
     AsyncReadback* FindInflightReadback(VAddr addr, u64 size);
+    /// sotc: an asynchronous readback in flight one of whose windows holds [addr, addr + size).
+    AsyncReadback* FindInflightWindow(VAddr addr, u64 size);
     void MarkInflightReadbacksDirty(VAddr addr, u64 size);
     std::vector<AsyncReadback*> inflight_readbacks;
 
