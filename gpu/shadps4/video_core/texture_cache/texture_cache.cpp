@@ -55,6 +55,49 @@ static void WriteBackSkippingStacks(VAddr guest_address, const u8* data, u64 siz
     });
 }
 
+/// sotc: a write-back after the image was freed (an eviction under memory pressure): by the time
+/// the GPU is done, the game may have given that memory to something else, and stale image bytes
+/// over its heap's free lists crashed the game (GTX 1050, reading a -1 pointer in the heap code).
+/// Only the 64-byte blocks still holding what the guest had when the download was asked
+/// (`before`) are written; the ones the CPU wrote since keep the CPU's data.
+static void WriteBackUnchanged(VAddr guest_address, const u8* data, const std::vector<u8>& before,
+                               u64 size) {
+    constexpr u64 Block = 64;
+    constexpr u64 Chunk = 64_KB;
+    auto* memory = Core::Memory::Instance();
+    std::vector<u8> now(Chunk);
+    ForEachNonStackRange(guest_address, size, [&](VAddr addr, u64 part) {
+        for (u64 at = 0; at < part; at += Chunk) {
+            const u64 length = std::min(Chunk, part - at);
+            const u64 base = addr - guest_address + at;
+            if (!memory->TryReadBacking(addr + at, now.data(), length)) {
+                continue;
+            }
+            // Runs of unchanged blocks are written in one call.
+            u64 run = 0, run_size = 0;
+            const auto flush = [&] {
+                if (run_size) {
+                    memory->TryWriteBacking(std::bit_cast<u8*>(addr + at + run), data + base + run,
+                                            run_size, 3);
+                }
+                run_size = 0;
+            };
+            for (u64 block = 0; block < length; block += Block) {
+                const u64 n = std::min(Block, length - block);
+                if (std::memcmp(now.data() + block, before.data() + base + block, n) != 0) {
+                    flush();
+                    continue;
+                }
+                if (!run_size) {
+                    run = block;
+                }
+                run_size += n;
+            }
+            flush();
+        }
+    });
+}
+
 TextureCache::TextureCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& scheduler_,
                            Vulkan::Runtime& runtime_, AmdGpu::Liverpool* liverpool_,
                            BufferCache& buffer_cache_, PageManager& tracker_)
@@ -158,10 +201,16 @@ void TextureCache::DownloadImageMemory(ImageId image_id, bool sync) {
         download.Invalidate();
         WriteBackSkippingStacks(image.info.guest_address, download.mapped, download_size);
     } else {
+        // The guest bytes now, for WriteBackUnchanged.
+        auto before = std::make_shared<std::vector<u8>>(download_size);
+        ForEachNonStackRange(image.info.guest_address, download_size, [&](VAddr addr, u64 part) {
+            Core::Memory::Instance()->TryReadBacking(
+                addr, before->data() + (addr - image.info.guest_address), part);
+        });
         scheduler.DeferPriorityOperation(
-            [this, device_addr = image.info.guest_address, download, download_size] {
+            [this, device_addr = image.info.guest_address, download, download_size, before] {
                 download.Invalidate();
-                WriteBackSkippingStacks(device_addr, download.mapped, download_size);
+                WriteBackUnchanged(device_addr, download.mapped, *before, download_size);
                 runtime.GetStagingPool().FreeDeferred(download);
             });
     }
