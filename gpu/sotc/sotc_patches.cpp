@@ -82,8 +82,11 @@ extern "C" int sotc_patch_eboot(const SotcPatchRequest* request, SotcPatchResult
                         "give BSF/BSR results, the others are handled when they fault)",
                         request->segments[i].offset, size);
         }
+        // sotc: the BMI sites of the red-zone functions are left to the red-zone pass, and the
+        // rdtsc pass decodes through what this one rewrites (rewritten_instructions).
         if (result->needs_sse4a || result->needs_bmi) {
-            result->short_sse4a += Core::PatchShortSse4aInstructions(address, size, function_starts);
+            result->short_sse4a +=
+                Core::PatchShortSse4aInstructions(address, size, function_starts, selected);
         }
         if (!selected.empty()) {
             const auto red = Core::PatchRedZoneMemoryInstructions(address, size, function_starts, selected);

@@ -80,9 +80,12 @@ bool NeedsBmiEmulation();
 /// functions that keep temporaries there. Returns the number of instructions patched.
 /// sotc: with BMI emulation the BMI1/LZCNT/MOVBE sites too. A short one that cannot move with the
 /// instructions after it reaches its trampoline through a relay jump where the red zone may be
-/// live, and otherwise becomes a UD2 trap run by the illegal-instruction handler.
+/// live, and otherwise becomes a UD2 trap run by the illegal-instruction handler. The decoded
+/// code of the functions holding one of `red_zone_functions` keeps its BMI sites for
+/// PatchRedZoneMemoryInstructions; BMI spans take no rdtsc (PatchRdtscInstructions runs later).
 u64 PatchShortSse4aInstructions(u64 segment_addr, u64 segment_size,
-                                std::span<const uintptr_t> function_starts);
+                                std::span<const uintptr_t> function_starts,
+                                std::span<const uintptr_t> red_zone_functions = {});
 
 /// sotc: points every rdtsc at `clock` (a host function returning the TSC replacement), for
 /// systems whose cores disagree on the TSC. Returns the number of sites patched; `unpatched`

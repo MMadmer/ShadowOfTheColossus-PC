@@ -217,6 +217,112 @@ int TestPatchPasses() {
     RemoveVectoredExceptionHandler(handler);
     return failures;
 }
+
+constexpr u64 TestClockValue = 0x0123456789ABCDEF;
+u64 TestClock() {
+    return TestClockValue;
+}
+
+u64 TrailingZeros32(u64 x) {
+    return static_cast<u32>(x) ? __builtin_ctz(static_cast<u32>(x)) : 32;
+}
+
+/// The three passes in sotc_patch_eboot's order (BMI, red zone, rdtsc), where they meet:
+///  - an rdtsc after a TZCNT patched in place: the rdtsc pass still decodes past the jump;
+///  - an rdtsc right after a short TZCNT: kept out of the BMI span (a UD2 trap here) and
+///    redirected by the rdtsc pass;
+///  - a short TZCNT in a red-zone function: left to the red-zone pass, which moves it.
+int TestPassOrder() {
+    constexpr size_t CodeSize = 0x10000;
+    constexpr size_t TrampolineSize = 0x10000;
+    auto* base = static_cast<u8*>(VirtualAlloc(nullptr, CodeSize + TrampolineSize,
+                                               MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE));
+    if (!base) {
+        std::printf("pass order: no memory\n");
+        return 1;
+    }
+    Xbyak::CodeGenerator c(CodeSize, base);
+    const u8* after_long = c.getCurr();
+    c.tzcnt(r8d, ecx); // 5 bytes
+    const u8* after_long_rdtsc = c.getCurr();
+    c.rdtsc();
+    c.shl(rdx, 32);
+    c.or_(rax, rdx);
+    c.add(rax, r8);
+    c.ret();
+    c.align(16);
+    const u8* after_short = c.getCurr();
+    c.tzcnt(ecx, ecx); // 4 bytes
+    const u8* after_short_rdtsc = c.getCurr();
+    c.rdtsc();
+    c.shl(rdx, 32);
+    c.or_(rax, rdx);
+    c.add(rax, rcx);
+    c.ret();
+    c.align(16);
+    const u8* red_zone_function = c.getCurr();
+    c.mov(ptr[rsp - 8], rcx);
+    const u8* red_zone_xor = c.getCurr();
+    c.xor_(r8d, r8d);
+    const u8* red_zone_site = c.getCurr();
+    c.tzcnt(eax, ecx);
+    Xbyak::Label loop;
+    c.L(loop);
+    c.add(rax, ptr[rsp - 8]);
+    c.inc(r8d);
+    c.cmp(r8d, 2);
+    c.jb(loop);
+    c.ret();
+    c.align(16);
+
+    const auto red_zone = reinterpret_cast<Function1>(const_cast<u8*>(red_zone_function));
+    std::mt19937_64 random(98765);
+    std::vector<std::array<u64, 2>> expected; // x, red_zone(x)
+    for (int i = 0; i < 4096; ++i) {
+        const u64 x = i == 0 ? 0 : Value(random);
+        expected.push_back({x, red_zone(x)});
+    }
+
+    int failures = 0;
+    const auto check = [&failures](bool ok, const char* what) {
+        std::printf("pass order: %-60s %s\n", what, ok ? "ok" : "FAIL");
+        failures += !ok;
+    };
+    Core::RegisterPatchModule(base, CodeSize, base + CodeSize, TrampolineSize);
+    const auto segment = reinterpret_cast<u64>(base);
+    const auto segment_size = static_cast<u64>(c.getSize());
+    const uintptr_t starts[] = {reinterpret_cast<uintptr_t>(after_long),
+                                reinterpret_cast<uintptr_t>(after_short),
+                                reinterpret_cast<uintptr_t>(red_zone_function)};
+    const uintptr_t selected[] = {reinterpret_cast<uintptr_t>(red_zone_function)};
+    u64 unpatched = 0;
+    Core::PatchShortSse4aInstructions(segment, segment_size, starts, selected);
+    Core::PatchRedZoneMemoryInstructions(segment, segment_size, starts, selected);
+    const u64 rdtsc = Core::PatchRdtscInstructions(segment, segment_size, starts,
+                                                   reinterpret_cast<void*>(&TestClock), &unpatched);
+    check(after_long[0] == 0xE9 && after_long_rdtsc[0] == 0xE9,
+          "rdtsc after an in-place BMI patch still redirected");
+    check(after_short[0] == 0x0F && after_short[1] == 0x0B && after_short_rdtsc[0] == 0xE9,
+          "rdtsc kept out of the BMI span (trap) and redirected");
+    check(rdtsc == 2 && unpatched == 0, "both rdtsc found by the rdtsc pass");
+    check(red_zone_site[0] != 0xEB && red_zone_xor[0] == 0xE9,
+          "red-zone function: BMI site moved by the red-zone pass");
+
+    DWORD old_protect = 0;
+    VirtualProtect(base, CodeSize + TrampolineSize, PAGE_EXECUTE_READ, &old_protect);
+    void* handler = AddVectoredExceptionHandler(1, IllegalInstruction);
+    const auto long_function = reinterpret_cast<Function1>(const_cast<u8*>(after_long));
+    const auto short_function = reinterpret_cast<Function1>(const_cast<u8*>(after_short));
+    bool same = true;
+    for (const auto& [x, red_zone_value] : expected) {
+        same &= long_function(x) == TestClockValue + TrailingZeros32(x) &&
+                short_function(x) == TestClockValue + TrailingZeros32(x) &&
+                red_zone(x) == red_zone_value;
+    }
+    check(same, "patched code gives the expected results");
+    RemoveVectoredExceptionHandler(handler);
+    return failures;
+}
 #endif
 
 } // namespace
@@ -323,6 +429,7 @@ int main() {
     }
 #ifdef _WIN32
     failures += TestPatchPasses();
+    failures += TestPassOrder();
 #endif
     std::printf(failures ? "%d FAILED\n" : "all passed\n", failures);
     return failures ? 1 : 0;

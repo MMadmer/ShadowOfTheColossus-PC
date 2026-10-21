@@ -1240,11 +1240,31 @@ uintptr_t GetRelativeTarget(const DecodedCodeInstruction& decoded) {
     return 0;
 }
 
+/// sotc: the original bytes of instructions the BMI pass rewrote (jumps, relays, UD2 traps), by
+/// address. The passes after it decode them as they were: DecodeFunction would otherwise stop at
+/// the jump or UD2 and miss the code after it (an rdtsc, for one). Those addresses are in
+/// PatchModule::patched, so no later pass moves or patches them again.
+struct RewrittenInstruction {
+    std::array<u8, ZYDIS_MAX_INSTRUCTION_LENGTH> bytes{};
+    u8 length{};
+};
+std::unordered_map<uintptr_t, RewrittenInstruction> rewritten_instructions;
+
+void RememberOriginal(const DecodedCodeInstruction& decoded) {
+    RewrittenInstruction original{.length = decoded.instruction.length};
+    std::memcpy(original.bytes.data(), reinterpret_cast<const void*>(decoded.address),
+                original.length);
+    rewritten_instructions.emplace(decoded.address, original);
+}
+
 DecodedCodeInstruction DecodeCodeInstruction(uintptr_t address, uintptr_t end) {
     DecodedCodeInstruction decoded{.address = address};
+    const auto original = rewritten_instructions.find(address);
+    const bool rewritten = original != rewritten_instructions.end();
     const auto status = Common::Decoder::Instance()->decodeInstruction(
-        decoded.instruction, decoded.operands.data(), reinterpret_cast<void*>(address),
-        end - address);
+        decoded.instruction, decoded.operands.data(),
+        rewritten ? original->second.bytes.data() : reinterpret_cast<void*>(address),
+        rewritten ? std::min<u64>(original->second.length, end - address) : end - address);
     if (!ZYAN_SUCCESS(status)) {
         decoded.instruction.length = 0;
         return decoded;
@@ -1845,6 +1865,28 @@ const PatchInfo* FindMatchingPatch(const DecodedCodeInstruction& decoded) {
     return patch != patches->second.end() ? &*patch : nullptr;
 }
 
+/// sotc: a short TZCNT/LZCNT/MOVBE that cannot be relocated becomes a UD2 that the illegal
+/// instruction handler runs (EmulateBmiTrapSite): TZCNT/LZCNT would otherwise run as BSF/BSR
+/// without a fault on these CPUs. The handler resumes after the whole instruction, so its other
+/// bytes are dead: int3 there keeps linear decodes of the code in step.
+void WriteBmiTrap(PatchModule* module, const DecodedCodeInstruction& decoded, bool remember) {
+    if (remember) {
+        RememberOriginal(decoded);
+    }
+    g_bmi_trap_sites.emplace(decoded.address, BmiTrapSite{decoded.instruction, decoded.operands});
+    auto* bytes = reinterpret_cast<u8*>(decoded.address);
+    bytes[0] = 0x0F;
+    bytes[1] = 0x0B;
+    std::memset(bytes + 2, 0xCC, decoded.instruction.length - 2);
+    module->patched.insert(bytes);
+}
+
+/// sotc: the function [start, end) holds one of `addresses`.
+bool ContainsAny(std::span<const uintptr_t> addresses, uintptr_t start, uintptr_t end) {
+    return std::ranges::any_of(addresses,
+                               [=](uintptr_t address) { return address >= start && address < end; });
+}
+
 } // namespace
 
 RedZonePatchResult PatchRedZoneMemoryInstructions(u64 segment_addr, u64 segment_size,
@@ -2128,10 +2170,14 @@ RedZonePatchResult PatchRedZoneMemoryInstructions(u64 segment_addr, u64 segment_
             covered_until = span.continuation;
         }
 
+        std::vector<uintptr_t> unsupported_bmi_sites;
         const auto record_unsupported = [&](uintptr_t site) {
             const auto& rewrite = rewrite_sites.at(site);
             if (rewrite.cpu_patch != nullptr) {
                 ++result.unsupported_cpu_patch_instruction_count;
+                if (IsBmiMnemonic(function.instructions.at(site).instruction.mnemonic)) {
+                    unsupported_bmi_sites.push_back(site);
+                }
             }
             if (rewrite.protect_red_zone) {
                 ++result.unrelocatable_memory_instruction_count;
@@ -2387,6 +2433,22 @@ RedZonePatchResult PatchRedZoneMemoryInstructions(u64 segment_addr, u64 segment_
             record_rewrites(site_span);
             patched_spans.emplace_back(site_span.patch_start, site_span.continuation);
         }
+
+        // sotc: PatchShortSse4aInstructions leaves the BMI1/LZCNT/MOVBE sites of these functions
+        // to this pass. A short one none of the above could move still becomes a UD2 trap: the
+        // red zone may be live there, but TZCNT/LZCNT would otherwise give BSF/BSR results.
+        for (const uintptr_t site : unsupported_bmi_sites) {
+            const auto& decoded = function.instructions.at(site);
+            if (module->patched.contains(reinterpret_cast<u8*>(site)) ||
+                decoded.instruction.length >= NearJumpSize) {
+                continue;
+            }
+            WriteBmiTrap(module, decoded, true);
+            LOG_WARNING(Core,
+                        "Short {} at {:#x} runs from the exception although the guest red zone "
+                        "may be live there: red-zone function, not relocatable",
+                        ZydisMnemonicGetString(decoded.instruction.mnemonic), site);
+        }
     }
     return result;
 }
@@ -2402,7 +2464,8 @@ bool NeedsBmiEmulation() {
 }
 
 u64 PatchShortSse4aInstructions(u64 segment_addr, u64 segment_size,
-                                std::span<const uintptr_t> function_starts) {
+                                std::span<const uintptr_t> function_starts,
+                                std::span<const uintptr_t> red_zone_functions) {
     auto* module = GetContainingModule(reinterpret_cast<void*>(segment_addr));
     const bool sse4a = NeedsSse4aEmulation();
     const bool bmi = NeedsBmiEmulation();
@@ -2474,35 +2537,6 @@ u64 PatchShortSse4aInstructions(u64 segment_addr, u64 segment_size,
     u64 gap_count = 0;
     std::unique_lock lock{module->mutex};
 
-    // sotc: a short BMI site that cannot move with its neighbours becomes a UD2 that the illegal
-    // instruction handler runs (EmulateBmiTrapSite): TZCNT/LZCNT would otherwise run as BSF/BSR
-    // without a fault on these CPUs. The handler resumes after the whole instruction, so its other
-    // bytes are dead: int3 there keeps linear decodes of the code in step.
-    const auto trap_site = [&](const DecodedCodeInstruction& decoded, const char* why,
-                               bool red_zone_live) {
-        g_bmi_trap_sites.emplace(decoded.address,
-                                 BmiTrapSite{decoded.instruction, decoded.operands});
-        auto* bytes = reinterpret_cast<u8*>(decoded.address);
-        bytes[0] = 0x0F;
-        bytes[1] = 0x0B;
-        std::memset(bytes + 2, 0xCC, decoded.instruction.length - 2);
-        module->patched.insert(bytes);
-        ++trap_count;
-        const char* mnemonic = ZydisMnemonicGetString(decoded.instruction.mnemonic);
-        if (red_zone_live) {
-            // Last resort, no relay in reach: still better than BSF/BSR results, and a MOVBE left
-            // in place faults into the same handler.
-            ++live_trap_count;
-            LOG_WARNING(Core,
-                        "Short {} at {:#x} runs from the exception although the guest red zone "
-                        "may be live there: {}",
-                        mnemonic, decoded.address, why);
-        } else {
-            LOG_DEBUG(Core, "Short {} at {:#x} runs from the exception: {}", mnemonic,
-                      decoded.address, why);
-        }
-    };
-
     for (size_t index = 0; index < starts.size(); ++index) {
         const uintptr_t function_start = starts[index];
         const uintptr_t function_end = index + 1 < starts.size() ? starts[index + 1] : segment_end;
@@ -2511,6 +2545,32 @@ u64 PatchShortSse4aInstructions(u64 segment_addr, u64 segment_size,
         }
 
         auto function = DecodeFunction(function_start, function_end, segment_addr, segment_end);
+        // sotc: the red-zone pass rewrites its functions after this one, from their decoded code:
+        // their BMI1/LZCNT/MOVBE sites are left to it (PatchRedZoneMemoryInstructions), and nothing
+        // here is recorded for it to see through. Elsewhere, with BMI emulation, every instruction
+        // rewritten here keeps its original bytes for the passes after (rewritten_instructions).
+        const bool red_zone_function =
+            ContainsAny(red_zone_functions, function_start, function_end);
+        const bool remember = bmi && !red_zone_function;
+
+        const auto trap_site = [&](const DecodedCodeInstruction& decoded, const char* why,
+                                   bool red_zone_live) {
+            WriteBmiTrap(module, decoded, remember);
+            ++trap_count;
+            const char* mnemonic = ZydisMnemonicGetString(decoded.instruction.mnemonic);
+            if (red_zone_live) {
+                // Last resort, no relay in reach: still better than BSF/BSR results, and a MOVBE
+                // left in place faults into the same handler.
+                ++live_trap_count;
+                LOG_WARNING(Core,
+                            "Short {} at {:#x} runs from the exception although the guest red "
+                            "zone may be live there: {}",
+                            mnemonic, decoded.address, why);
+            } else {
+                LOG_DEBUG(Core, "Short {} at {:#x} runs from the exception: {}", mnemonic,
+                          decoded.address, why);
+            }
+        };
         // sotc: Windows builds the exception frame below rsp, so a UD2 trap destroys a live guest
         // red zone (cpu_patches.h). A short BMI site where it may be live reaches its trampoline
         // through a relay jump instead. The liveness analysis models rsp-based accesses only: a
@@ -2548,8 +2608,13 @@ u64 PatchShortSse4aInstructions(u64 segment_addr, u64 segment_size,
             patch_gen.jmp(target, type);
             patch_gen.nop(end - reinterpret_cast<uintptr_t>(patch_gen.getCurr()));
         };
-        const auto mark_patched = [module](std::span<const DecodedCodeInstruction* const> span) {
+        // Before the instructions of `span` are overwritten.
+        const auto mark_patched = [module, remember](
+                                      std::span<const DecodedCodeInstruction* const> span) {
             for (const auto* decoded : span) {
+                if (remember) {
+                    RememberOriginal(*decoded);
+                }
                 module->patched.insert(reinterpret_cast<u8*>(decoded->address));
             }
         };
@@ -2642,6 +2707,7 @@ u64 PatchShortSse4aInstructions(u64 segment_addr, u64 segment_size,
                             (continuation != host->first &&
                              function.branch_targets.contains(continuation)) ||
                             it->second.instruction.meta.category == ZYDIS_CATEGORY_CALL ||
+                            it->second.instruction.mnemonic == ZYDIS_MNEMONIC_RDTSC ||
                             module->patched.contains(reinterpret_cast<u8*>(continuation)) ||
                             (continuation < site_end &&
                              continuation + it->second.instruction.length > site.address)) {
@@ -2667,11 +2733,11 @@ u64 PatchShortSse4aInstructions(u64 segment_addr, u64 segment_size,
                         continue;
                     }
                     relay = host->first + NearJumpSize;
+                    mark_patched(span);
                     write_jump(host->first, host_trampoline,
                                Xbyak::CodeGenerator::LabelType::T_NEAR, relay);
                     write_jump(relay, site_trampoline, Xbyak::CodeGenerator::LabelType::T_NEAR,
                                continuation);
-                    mark_patched(span);
                     add_relay_slot(relay + NearJumpSize, continuation);
                     break;
                 }
@@ -2680,20 +2746,24 @@ u64 PatchShortSse4aInstructions(u64 segment_addr, u64 segment_size,
                 module->trampoline_gen.setSize(site_offset);
                 return false;
             }
+            mark_patched(site_span);
             write_jump(site.address, reinterpret_cast<void*>(relay),
                        Xbyak::CodeGenerator::LabelType::T_SHORT, site_end);
-            module->patched.insert(reinterpret_cast<u8*>(site.address));
             return true;
         };
 
         std::vector<std::pair<const DecodedCodeInstruction*, const char*>> relay_sites;
         uintptr_t covered_until = 0;
         for (const auto& [site, site_decoded] : function.instructions) {
-            if (site < covered_until || module->patched.contains(reinterpret_cast<u8*>(site))) {
+            if (site < covered_until || module->patched.contains(reinterpret_cast<u8*>(site)) ||
+                (red_zone_function && is_bmi(site_decoded))) {
                 continue;
             }
             if (site_decoded.instruction.length >= NearJumpSize && is_bmi(site_decoded)) {
                 // Long enough for the jump: patched in place, at a decoded instruction boundary.
+                if (remember) {
+                    RememberOriginal(site_decoded);
+                }
                 if (TryPatch(reinterpret_cast<u8*>(site), module).first) {
                     ++patched_count;
                     add_relay_slot(site + NearJumpSize, site + site_decoded.instruction.length);
@@ -2724,6 +2794,8 @@ u64 PatchShortSse4aInstructions(u64 segment_addr, u64 segment_size,
                     reason = "branch target inside span";
                 } else if (it->second.instruction.meta.category == ZYDIS_CATEGORY_CALL) {
                     reason = "call inside span";
+                } else if (bmi_site && it->second.instruction.mnemonic == ZYDIS_MNEMONIC_RDTSC) {
+                    reason = "rdtsc inside span"; // sotc: left in place for the rdtsc pass
                 } else if (IsControlFlowTerminator(it->second.instruction) ||
                            it->second.instruction.meta.category == ZYDIS_CATEGORY_COND_BR) {
                     if (bmi_site) {
@@ -2748,9 +2820,9 @@ u64 PatchShortSse4aInstructions(u64 segment_addr, u64 segment_size,
             }
             if (*reason == '\0') {
                 if (const u8* trampoline = emit_span(span, continuation)) {
+                    mark_patched(span);
                     write_jump(site, trampoline, Xbyak::CodeGenerator::LabelType::T_NEAR,
                                continuation);
-                    mark_patched(span);
                     add_relay_slot(site + NearJumpSize, continuation);
                     covered_until = continuation;
                     ++patched_count;
@@ -2829,6 +2901,9 @@ u64 PatchShortSse4aInstructions(u64 segment_addr, u64 segment_size,
                                 decoded.address, decoded.address - segment_addr);
                 }
                 if (decoded.instruction.length >= NearJumpSize) {
+                    if (remember) {
+                        RememberOriginal(decoded);
+                    }
                     if (TryPatch(bytes, module).first) {
                         ++patched_count;
                         ++gap_count;
@@ -2838,7 +2913,8 @@ u64 PatchShortSse4aInstructions(u64 segment_addr, u64 segment_size,
                     continue;
                 }
                 ++gap_count;
-                if (red_zone && relay_site(decoded)) {
+                // No relay in a red-zone function: its decoded code is the red-zone pass's.
+                if (red_zone && !red_zone_function && relay_site(decoded)) {
                     ++patched_count;
                     ++relay_count;
                     continue;
@@ -3061,7 +3137,8 @@ bool NeedsBmiEmulation() {
     return false;
 }
 
-u64 PatchShortSse4aInstructions(u64, u64, std::span<const uintptr_t>) {
+u64 PatchShortSse4aInstructions(u64, u64, std::span<const uintptr_t>,
+                                std::span<const uintptr_t>) {
     return 0;
 }
 
