@@ -1912,17 +1912,15 @@ bool BufferCache::MaybeEvictCold(std::chrono::steady_clock::time_point now) {
     // for 8 s, 128 MiB per check; the texture cache plans for the rest.
     const u64 budget = instance.GetTotalMemoryBudget();
     const bool small_card = budget != 0 && budget < (3ull << 30);
-    // sotc: the launcher always passes its video memory setting (1536 by default, 0 for Maximum),
-    // which kept the small-card limit from ever applying: the arena grew to 1.2 GB on a GTX 1050
-    // and buffers then found neither video nor system memory (GPU stall, 2026-10-21). On a small
-    // card the setting can only lower the limit.
+    // sotc: the launcher always passes its setting (1536 by default), so the small-card limit
+    // only applies without it (bench). Applying it under the launcher too (1.1.1 test build)
+    // evicted blocks shaders read through pointers: their frame of zeros made shadows flicker on
+    // a GTX 1050, and the card still ran out of memory at colossus 2.
     static const u64 limit = [&] {
-        const u64 small_limit = std::max<u64>(budget * 45 / 100, 512ull << 20);
         if (const char* v = std::getenv("SOTC_ARENA_EVICT_MB")) {
-            const u64 asked = std::strtoull(v, nullptr, 10) << 20;
-            return small_card && (asked == 0 || asked > small_limit) ? small_limit : asked;
+            return std::strtoull(v, nullptr, 10) << 20;
         }
-        return small_card ? small_limit : 1536ull << 20;
+        return small_card ? std::max<u64>(budget * 45 / 100, 512ull << 20) : 1536ull << 20;
     }();
     static const u64 step = [&] {
         const char* v = std::getenv("SOTC_ARENA_EVICT_STEP_MB");
@@ -2148,8 +2146,35 @@ void BufferCache::SubmitPendingArenaBinds(Vulkan::SubmitInfo& info) {
     // Queue access is serialized by submit_mutex, which the scheduler no longer holds here.
     std::scoped_lock lk{Vulkan::Scheduler::submit_mutex};
     const auto bind_start = std::chrono::steady_clock::now();
-    auto submit_result = instance.GetGraphicsQueue().bindSparse(sparse_info);
+    // sotc: SOTC_TEST_BIND_REFUSE=<n> (test knob): every n-th batch is refused twice, as a full card.
+    static const u64 refuse_every = [] {
+        const char* v = std::getenv("SOTC_TEST_BIND_REFUSE");
+        return v ? std::strtoull(v, nullptr, 10) : 0ull;
+    }();
+    static u64 batches = 0;
+    const bool refuse = refuse_every && ++batches % refuse_every == 0;
+    auto submit_result = refuse ? vk::Result::eErrorOutOfDeviceMemory
+                                : instance.GetGraphicsQueue().bindSparse(sparse_info);
     ASSERT_MSG(submit_result != vk::Result::eErrorDeviceLost, "Device lost during submit");
+    // sotc: out of video and system memory (GTX 1050 at colossus 2) the driver refused the bind;
+    // the semaphore the next submit waits for was then never signalled and the game froze for
+    // good. Once more after the earlier binds are done, else the semaphore is signalled from the
+    // host (the ranges stay unbound: shaders read zeros there).
+    if (submit_result != vk::Result::eSuccess) {
+        memory_semaphore.Wait(signal_tick - 1);
+        submit_result = refuse ? vk::Result::eErrorOutOfDeviceMemory
+                               : instance.GetGraphicsQueue().bindSparse(sparse_info);
+        ASSERT_MSG(submit_result != vk::Result::eErrorDeviceLost, "Device lost during submit");
+    }
+    if (submit_result != vk::Result::eSuccess) {
+        const vk::SemaphoreSignalInfo signal_info = {.semaphore = signal_sema, .value = signal_tick};
+        const auto signal_result = instance.GetDevice().signalSemaphore(signal_info);
+        static u32 reported = 0;
+        if (reported++ < 8) {
+            LOG_CRITICAL(Render, "Sparse bind refused ({}), {} arenas left unbound; signal {}",
+                         vk::to_string(submit_result), pending_binds.size(), vk::to_string(signal_result));
+        }
+    }
     // sotc: a bind of many ranges (an arena migration rebinds all of them) can take long.
     if (const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                             std::chrono::steady_clock::now() - bind_start)
