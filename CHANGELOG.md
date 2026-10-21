@@ -14,6 +14,11 @@
   memória que o Windows ainda concede, deixando 2,5 GB para o resto do processo. O lançador avisa
   quando a memória virtual livre não basta (recomendado: arquivo de paginação de 16 GB).
   `BB_DMEM_COMMIT_MB=<MiB>` simula um limite menor para testes.
+- **Jogo parando em placas de 2 GB** ("Out of video and system memory for buffers"): o lançador
+  sempre passava o seu ajuste de memória de vídeo (1536 MB para os buffers no padrão), que anulava o
+  limite próprio das placas pequenas (45% do orçamento, ~740 MB na GTX 1050). Os buffers chegavam a
+  1,2 GB e depois não achavam mais memória de vídeo nem do sistema. Em placas pequenas o ajuste agora
+  só pode baixar esse limite.
 - Uma textura tirada da memória de vídeo cheia só grava de volta na memória do jogo os bytes que o
   jogo não mudou desde o pedido.
 - **Progresso da extração dos pacotes (.pkg)** no lançador: saltava para 100% no primeiro segundo e

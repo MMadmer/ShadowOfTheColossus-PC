@@ -1912,11 +1912,17 @@ bool BufferCache::MaybeEvictCold(std::chrono::steady_clock::time_point now) {
     // for 8 s, 128 MiB per check; the texture cache plans for the rest.
     const u64 budget = instance.GetTotalMemoryBudget();
     const bool small_card = budget != 0 && budget < (3ull << 30);
+    // sotc: the launcher always passes its video memory setting (1536 by default, 0 for Maximum),
+    // which kept the small-card limit from ever applying: the arena grew to 1.2 GB on a GTX 1050
+    // and buffers then found neither video nor system memory (GPU stall, 2026-10-21). On a small
+    // card the setting can only lower the limit.
     static const u64 limit = [&] {
+        const u64 small_limit = std::max<u64>(budget * 45 / 100, 512ull << 20);
         if (const char* v = std::getenv("SOTC_ARENA_EVICT_MB")) {
-            return std::strtoull(v, nullptr, 10) << 20;
+            const u64 asked = std::strtoull(v, nullptr, 10) << 20;
+            return small_card && (asked == 0 || asked > small_limit) ? small_limit : asked;
         }
-        return small_card ? std::max<u64>(budget * 45 / 100, 512ull << 20) : 1536ull << 20;
+        return small_card ? small_limit : 1536ull << 20;
     }();
     static const u64 step = [&] {
         const char* v = std::getenv("SOTC_ARENA_EVICT_STEP_MB");
