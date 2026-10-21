@@ -340,7 +340,7 @@ def weak_gpu_render_res(gpu_line):
 # mode, as RENDER_RES) and DLSS rebuilds the 1080p display image; the game checks the support again
 # at start (Streamline) and shows the plain image without it.
 DLSS_MODES = [('off', ('Desligado', 'Off')),
-              ('quality', ('DLSS Qualidade (1280 × 720)', 'DLSS Quality (1280 × 720)')),
+              ('quality', ('DLSS Qualidade (1296 × 729)', 'DLSS Quality (1296 × 729)')),
               ('balanced', ('DLSS Equilibrado (1120 × 630)', 'DLSS Balanced (1120 × 630)')),
               ('performance', ('DLSS Desempenho (960 × 540)', 'DLSS Performance (960 × 540)')),
               ('ultra', ('DLSS Ultra Desempenho (640 × 360)', 'DLSS Ultra Performance (640 × 360)'))]

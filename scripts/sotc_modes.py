@@ -59,8 +59,18 @@ RENDER_HEIGHT = (0x00495d7c, bytes.fromhex('b938040000'))
 RENDER_HEIGHTS = {360: 640, 540: 960, 630: 1120, 720: 1280, 810: 1440, 900: 1600, 960: 1704, 1080: 1920}
 
 
+def safe_render_width(width, height):
+    """Render widths of 1153 to 1280 come out as garbage over the whole scene (1200x675, 1264x712,
+    1280x704 and 1280x720 tested; 1120x630 and 1296 to 1440 wide clean): the render targets' row
+    pitch, in 128-pixel tiles, is 1280 there, and some surface of the game at that pitch is not
+    emulated right (cause not found). Such a size is widened to 1296 with the same aspect."""
+    if 1152 < width <= 1280:
+        return 1296, round(height * 1296 / width)
+    return width, height
+
+
 def render_resolution_patch(height):
-    width = RENDER_HEIGHTS[height]
+    width, height = safe_render_width(RENDER_HEIGHTS[height], height)
     return [(RENDER_WIDTH[0], RENDER_WIDTH[1], bytes([0xb8]) + struct.pack('<I', width)),
             (RENDER_HEIGHT[0], RENDER_HEIGHT[1], bytes([0xb9]) + struct.pack('<I', height))]
 
@@ -145,6 +155,9 @@ def render_patches(elf, ph, size):
     w, h = int(match[1]), int(match[2])
     if not (640 <= w <= 7680 and 360 <= h <= 4320) or w % 8 or h % 8:
         raise SystemExit(f'render size {size}: 640x360 to 7680x4320, multiples of 8')
+    if (wide := safe_render_width(w, h)) != (w, h):
+        w, h = wide[0], wide[1] // 8 * 8
+        print(f'Render size {size}: {w}x{h} (row pitch 1280 avoided)')
     values = {'W': struct.pack('<I', w), 'H': struct.pack('<I', h), 'w': struct.pack('<f', w),
               'h': struct.pack('<f', h), 'w2': struct.pack('<f', w / 2), 'h2': struct.pack('<f', h / 2),
               'a': struct.pack('<f', w / h), 'P': struct.pack('<I', render_pool(w, h))}

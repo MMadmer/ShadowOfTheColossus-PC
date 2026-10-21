@@ -2115,6 +2115,29 @@ bool Rasterizer::IsComputeImageCopy(const Pipeline* pipeline) {
     // Perform image copy
     VideoCore::Image& src_image = desc0.is_written ? image1 : image0;
     VideoCore::Image& dst_image = desc0.is_written ? image0 : image1;
+    // sotc: SOTC_IMAGE_COPY_HLE=0 runs the copy shader; SOTC_IMAGE_COPY_LOG=1 lists the copies.
+    static const bool hle = [] {
+        const char* v = std::getenv("SOTC_IMAGE_COPY_HLE");
+        return !v || v[0] != '0';
+    }();
+    if (static const bool log = std::getenv("SOTC_IMAGE_COPY_LOG") != nullptr; log) {
+        static int shown = 0;
+        if (shown++ < 40) {
+            std::fprintf(stderr,
+                         "SOTC IMAGE COPY %ux%u %s tile %u pitch %u -> %ux%u %s tile %u pitch %u, "
+                         "%#llx bytes\n",
+                         src_image.info.size.width, src_image.info.size.height,
+                         vk::to_string(src_image.info.pixel_format).c_str(),
+                         static_cast<u32>(src_image.info.tile_mode), src_image.info.pitch,
+                         dst_image.info.size.width, dst_image.info.size.height,
+                         vk::to_string(dst_image.info.pixel_format).c_str(),
+                         static_cast<u32>(dst_image.info.tile_mode), dst_image.info.pitch,
+                         static_cast<unsigned long long>(buf0.GetSize()));
+        }
+    }
+    if (!hle) {
+        return false;
+    }
     // sotc: the destination was found by address, not by a writer lookup: its first GPU write
     // moves the mip-tail epoch (CopyColorAndDepth only passes the flag on).
     VideoCore::MarkGpuModified(dst_image);

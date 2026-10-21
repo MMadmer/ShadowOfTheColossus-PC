@@ -799,6 +799,25 @@ ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_fmt) {
                 view_slice = overlap_view_slice;
             }
         }
+        // sotc: SOTC_OVERLAP_LOG=1: requests served by another image (first 80 kinds).
+        static const bool overlap_log = std::getenv("SOTC_OVERLAP_LOG") != nullptr;
+        if (overlap_log && image_id) {
+            const auto& got = slot_images[image_id].info;
+            static std::set<std::string> seen;
+            const std::string line = fmt::format(
+                "want {}x{} {} tile {} pitch {} size {:#x} binding {} @{:#x} -> got {}x{} {} tile {} pitch {} "
+                "size {:#x} @{:#x} mip {} slice {}",
+                info.size.width, info.size.height, vk::to_string(info.pixel_format),
+                static_cast<u32>(info.tile_mode), info.pitch, info.guest_size,
+                static_cast<u32>(desc.type), info.guest_address,
+                got.size.width, got.size.height, vk::to_string(got.pixel_format),
+                static_cast<u32>(got.tile_mode), got.pitch, got.guest_size, got.guest_address,
+                view_mip, view_slice);
+            const std::string key = line.substr(0, line.find('@')) + line.substr(line.find("-> got"));
+            if (seen.size() < 80 && seen.insert(key).second) {
+                std::fprintf(stderr, "SOTC OVERLAP %s\n", line.c_str());
+            }
+        }
     }
 
     if (image_id) {

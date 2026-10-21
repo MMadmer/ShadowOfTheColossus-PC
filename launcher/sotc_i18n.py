@@ -227,12 +227,12 @@ TEXTS = {
         'オフ',
         '끔',
     ),
-    'DLSS Qualidade (1280 × 720)': (
-        'DLSS Calidad (1280 × 720)',
-        'DLSS Качество (1280 × 720)',
-        'DLSS 质量（1280 × 720）',
-        'DLSS クオリティ（1280 × 720）',
-        'DLSS 품질 (1280 × 720)',
+    'DLSS Qualidade (1296 × 729)': (
+        'DLSS Calidad (1296 × 729)',
+        'DLSS Качество (1296 × 729)',
+        'DLSS 质量（1296 × 729）',
+        'DLSS クオリティ（1296 × 729）',
+        'DLSS 품질 (1296 × 729)',
     ),
     'DLSS Equilibrado (1120 × 630)': (
         'DLSS Equilibrado (1120 × 630)',
