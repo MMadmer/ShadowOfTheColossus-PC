@@ -1452,6 +1452,13 @@ TEXTS = {
         '✓ セーブの場所：{}',
         '✓ 저장 위치 {}',
     ),
+    '⚠ Memória virtual: {:.1f} GB livres, o jogo precisa de {} GB. Aumente o arquivo de paginação para 16 GB.': (
+        '⚠ Memoria virtual: {:.1f} GB libres, el juego necesita {} GB. Aumente el archivo de paginación a 16 GB.',
+        '⚠ Виртуальная память: свободно {:.1f} ГБ, игре нужно {} ГБ. Увеличьте файл подкачки до 16 ГБ.',
+        '⚠ 虚拟内存：可用 {:.1f} GB，游戏需要 {} GB。请将页面文件增大到 16 GB。',
+        '⚠ 仮想メモリ：空き {:.1f} GB、ゲームには {} GB が必要です。ページファイルを 16 GB に増やしてください。',
+        '⚠ 가상 메모리: {:.1f} GB 사용 가능, 게임에 {} GB가 필요합니다. 페이징 파일을 16 GB로 늘려 주십시오.',
+    ),
     '• Ainda não há saves': (
         '• Aún no hay partidas',
         '• Сохранений пока нет',

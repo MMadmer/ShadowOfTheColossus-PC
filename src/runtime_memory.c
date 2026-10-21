@@ -318,23 +318,54 @@ static int host_protect(uintptr_t address, uint64_t size, int prot) {
 }
 /* Released pages read as zero when reused, like the memfd's punched holes. */
 static void host_discard(uint64_t phys, uint64_t size) { memset(backing_base+phys,0,size); }
+/* sotc: BB_DMEM_COMMIT_MB=<MiB> (test knob) acts as a commit limit: larger sections are refused
+ * and it is the free commit the fallback below sees. */
+static uint64_t test_commit_mb(void) {
+    const char *env=getenv("BB_DMEM_COMMIT_MB");
+    return env ? strtoull(env,NULL,10) : 0;
+}
+/* The pagefile-backed section of POOL_SIZE plus FLEX_SPAN bytes, committed at once. */
+static HANDLE create_section(void) {
+    const uint64_t bytes=POOL_SIZE+FLEX_SPAN, limit=test_commit_mb();
+    if (limit && bytes>>20>limit) { SetLastError(ERROR_COMMITMENT_LIMIT); return NULL; }
+    return CreateFileMapping2(INVALID_HANDLE_VALUE,NULL,FILE_MAP_ALL_ACCESS,PAGE_EXECUTE_READWRITE,SEC_COMMIT,bytes,NULL,NULL,0);
+}
 /* Direct memory occupies [0,POOL_SIZE) of the section, flexible memory [POOL_SIZE,+FLEX_SPAN). */
 static int pool(void) {
     if (backing_base) return 0;
     region_direct_init();
     runtime_memory_reserve();
-    uint64_t bytes=POOL_SIZE+FLEX_SPAN;
-    section=CreateFileMapping2(INVALID_HANDLE_VALUE,NULL,FILE_MAP_ALL_ACCESS,PAGE_EXECUTE_READWRITE,SEC_COMMIT,bytes,NULL,NULL,0);
+    section=create_section();
     if (!section && pool_size_mb>pool_base_mb()) {
         /* sotc: the larger pool (BB_DMEM_MB, 9152 MiB by default since 0.59) is committed at once;
          * with little RAM and a small page file Windows refuses it (error 1450) and the game
-         * stopped at boot. Fall back to the console's size. */
-        fprintf(stderr,"Runtime: %" PRIu64 " MiB of guest memory refused (error %lu): using %" PRIu64 " MiB; a larger page file allows more\n",
-                bytes>>20,GetLastError(),pool_base_mb());
-        pool_size_mb=pool_base_mb();
-        bytes=POOL_SIZE+FLEX_SPAN;
-        section=CreateFileMapping2(INVALID_HANDLE_VALUE,NULL,FILE_MAP_ALL_ACCESS,PAGE_EXECUTE_READWRITE,SEC_COMMIT,bytes,NULL,NULL,0);
+         * stopped at boot. The console's size is not enough for the port: the game's 64 KiB page
+         * bitmap fills up after a few minutes and its allocator reads past it (guest 0x1a371,
+         * GTX 1050 laptop, 2026-10-21). So the largest pool Windows still commits is taken,
+         * leaving room for the rest of the process (Vulkan, textures in system memory). */
+        const DWORD refused=GetLastError();
+        const uint64_t wanted=pool_size_mb, base=pool_base_mb(), flex_mb=FLEX_SPAN>>20, headroom_mb=2560, step_mb=512;
+        /* A system-managed page file grows after a refused commit: once more after a moment. */
+        Sleep(500);
+        section=create_section();
+        MEMORYSTATUSEX status={.dwLength=sizeof status};
+        uint64_t avail_mb=!section && GlobalMemoryStatusEx(&status) ? status.ullAvailPageFile>>20 : 0;
+        if (!section && test_commit_mb()) avail_mb=test_commit_mb();
+        uint64_t mb=avail_mb>headroom_mb+flex_mb ? (avail_mb-headroom_mb-flex_mb) & ~UINT64_C(63) : 0;
+        if (mb>=wanted) mb=wanted-step_mb;
+        for (; !section && mb>base; mb=mb>base+step_mb ? mb-step_mb : base) {
+            pool_size_mb=mb;
+            section=create_section();
+        }
+        if (!section) {
+            pool_size_mb=base;
+            section=create_section();
+        }
+        if (pool_size_mb<wanted)
+            fprintf(stderr,"Runtime: %" PRIu64 " MiB of guest memory refused (error %lu, %" PRIu64 " MiB of commit free): using %" PRIu64 " MiB; the game may run out of memory, a page file of 16 GB or more fixes it\n",
+                    wanted+flex_mb,refused,avail_mb,pool_size_mb);
     }
+    const uint64_t bytes=POOL_SIZE+FLEX_SPAN;
     if (!section) { fprintf(stderr,"Runtime: cannot create %" PRIu64 " MiB of guest memory (error %lu); is the page file large enough?\n",bytes>>20,GetLastError()); return -1; }
     backing_base=MapViewOfFile3(section,GetCurrentProcess(),NULL,0,bytes,0,PAGE_READWRITE,NULL,0);
     return backing_base ? 0 : -1;

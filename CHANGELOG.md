@@ -8,10 +8,14 @@
 - **Resolução de render 720p** cobria a cena de lixo gráfico em todas as placas, também no DLSS
   Qualidade: larguras de render de 1153 a 1280 dão aos alvos de render um passo de linha que o port
   não emula direito. O modo agora renderiza em 1296 × 729, com a mesma imagem.
-- **Jogo fechando em placas de 2 GB** (GTX 1050) com a memória de vídeo cheia: uma textura tirada
-  da memória de vídeo era gravada de volta na memória do jogo depois que ele já a usava para outra
-  coisa (a lista de blocos livres do heap). Agora só os bytes que o jogo não mudou desde então são
-  gravados.
+- **Jogo fechando após alguns minutos com pouca memória virtual** (`0x1a371`; notebook com
+  GTX 1050): com um arquivo de paginação pequeno o Windows recusava os 9152 MiB de memória do jogo
+  e o port caía direto para os 5056 MiB do console, que o port esgota. Agora o jogo recebe a maior
+  memória que o Windows ainda concede, deixando 2,5 GB para o resto do processo. O lançador avisa
+  quando a memória virtual livre não basta (recomendado: arquivo de paginação de 16 GB).
+  `BB_DMEM_COMMIT_MB=<MiB>` simula um limite menor para testes.
+- Uma textura tirada da memória de vídeo cheia só grava de volta na memória do jogo os bytes que o
+  jogo não mudou desde o pedido.
 - **Travamentos:** quando nenhum quadro do jogo chega por 60 s, o registro (`user/last_run.log`)
   recebe as pilhas de todas as threads, para encontrar a causa.
 

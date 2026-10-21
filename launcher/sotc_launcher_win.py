@@ -347,6 +347,28 @@ DLSS_MODES = [('off', ('Desligado', 'Off')),
 DLSS_RENDER = {'quality': 'res720', 'balanced': 'res630', 'performance': 'res540', 'ultra': 'res360'}
 
 
+# The game's memory (9152 MiB of direct memory and 1 GiB of flexible memory, committed at start)
+# and the room the rest of the game needs (Vulkan, textures in system memory). With less free
+# commit the game gets a smaller pool and runs out of memory after some minutes (bb-probe falls
+# back as far as Windows allows).
+GAME_COMMIT_MB = 9152 + 1024 + 2560
+
+
+def commit_free_mb():
+    """Free commit (RAM plus page file) in MiB, or None when Windows does not say."""
+    class MemoryStatus(ctypes.Structure):
+        _fields_ = [('length', ctypes.c_ulong), ('load', ctypes.c_ulong),
+                    ('total_phys', ctypes.c_ulonglong), ('avail_phys', ctypes.c_ulonglong),
+                    ('total_page_file', ctypes.c_ulonglong), ('avail_page_file', ctypes.c_ulonglong),
+                    ('total_virtual', ctypes.c_ulonglong), ('avail_virtual', ctypes.c_ulonglong),
+                    ('avail_extended_virtual', ctypes.c_ulonglong)]
+    status = MemoryStatus(length=ctypes.sizeof(MemoryStatus))
+    try:
+        return status.avail_page_file >> 20 if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)) else None
+    except (AttributeError, OSError):
+        return None
+
+
 def gpu_has_dlss(gpu_name):
     """DLSS Super Resolution: NVIDIA GeForce RTX cards."""
     return 'RTX' in str(gpu_name).upper()
@@ -1131,7 +1153,7 @@ class Launcher:
         info.grid(row=0, column=0, sticky='nw', padx=(0, 24))
         ttk.Label(info, text=_('Estado', 'Status'), style='Section.TLabel').pack(anchor='w', pady=(0, 6))
         self.checks = {}
-        for key in ('game', 'dlc', 'sound', 'saves', 'gpu'):
+        for key in ('game', 'dlc', 'sound', 'saves', 'gpu', 'memory'):
             self.checks[key] = ttk.Label(info, text='', justify='left', wraplength=self.px(440))
             self.checks[key].pack(anchor='w', pady=3)
         quick = ttk.Frame(body)
@@ -1487,7 +1509,13 @@ class Launcher:
         count = dlc_count(self.var('dlc_dir').get())
         dlc = (_('✓ DLC: {} instalada(s)', '✓ DLC: {} installed').format(count) if count
                else _('• Sem DLC', '• No DLC'))
-        for key, text in (('game', game), ('dlc', dlc), ('sound', sound), ('saves', save), ('gpu', self.gpu_text)):
+        free_mb = commit_free_mb()
+        memory = ('' if free_mb is None or free_mb >= GAME_COMMIT_MB else
+                  _('⚠ Memória virtual: {:.1f} GB livres, o jogo precisa de {} GB. Aumente o arquivo de paginação para 16 GB.',
+                    '⚠ Virtual memory: {:.1f} GB free, the game needs {} GB. Increase the page file to 16 GB.').format(
+                      free_mb / 1024, round(GAME_COMMIT_MB / 1024)))
+        for key, text in (('game', game), ('dlc', dlc), ('sound', sound), ('saves', save), ('gpu', self.gpu_text),
+                          ('memory', memory)):
             self.checks[key].configure(text=text, foreground=MUTED if text.startswith('•') else
                                        '#d9b441' if text.startswith('⚠') else '#d36b5c' if text.startswith('✗') else TEXT)
         if not self.process:
