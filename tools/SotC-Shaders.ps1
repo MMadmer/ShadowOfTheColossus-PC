@@ -6,7 +6,7 @@
 #   SotC-Play.bat    : starts the game normally and shows the same live status, so a pause is
 #                      shown as "COMPILING" (first time a shader is seen) instead of a mystery.
 #
-# How it works: the port saves every pipeline it builds (user\cache\CUSA08809[_nodma]\*.key) and
+# How it works: the port saves every pipeline it builds (user\cache\CUSA08809[_nodma...]\*.key) and
 # rebuilds all of them at startup ("Preloaded N pipelines"); Intel's driver keeps the compiled
 # code in %USERPROFILE%\AppData\LocalLow\Intel\ShaderCache, so known shaders load fast. Only
 # shaders never seen before compile during play, and on Intel Arc that can take minutes each.
@@ -18,8 +18,9 @@ param(
 $ErrorActionPreference = 'Stop'
 $Port = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Exe = Join-Path $Port 'SotC.exe'
-$Log = Join-Path $Port 'user\last_run.log'
-$SettingsPath = Join-Path $env:APPDATA 'sotc-launcher\settings.json'
+# Launcher settings of this copy; launchers before 0.59 kept them in %APPDATA%.
+$SettingsPath = Join-Path $Port 'user\launcher_settings.json'
+if (-not (Test-Path $SettingsPath)) { $SettingsPath = Join-Path $env:APPDATA 'sotc-launcher\settings.json' }
 $IntelCache = Join-Path $env:USERPROFILE 'AppData\LocalLow\Intel\ShaderCache'
 $Utf8 = New-Object System.Text.UTF8Encoding($false)
 
@@ -37,11 +38,22 @@ if (-not (Test-Path $Exe)) { Say "SotC.exe not found next to this script ($Port)
 if (-not (Test-Path $SettingsPath)) { Say "Open SotC.exe once first (no launcher settings yet)." Red; exit 1 }
 
 $settings = (ReadSettings) | ConvertFrom-Json
-$cacheName = if ($settings.perf_dma -eq $false) { 'CUSA08809_nodma' } else { 'CUSA08809' }
-$CacheDir = Join-Path $Port "user\cache\$cacheName"
+# The game's log and caches live in the data folder the launcher passes (user_dir).
+$UserDir = if ($settings.user_dir) { $settings.user_dir } else { Join-Path $Port 'user' }
+$Log = Join-Path $UserDir 'last_run.log'
+# The cache folder name also depends on the GPU (_noi64) and the PS4 Pro mode (_neo): the most
+# recently written CUSA08809* folder is the one in use.
+function CacheDir {
+    $dir = Get-ChildItem (Join-Path $UserDir 'cache') -Directory -Filter 'CUSA08809*' -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if ($dir) { return $dir.FullName }
+    $name = if ($settings.perf_dma -eq $false) { 'CUSA08809_nodma' } else { 'CUSA08809' }
+    return Join-Path $UserDir "cache\$name"
+}
 function CachedPipelines {
-    if (-not (Test-Path $CacheDir)) { return 0 }
-    return @(Get-ChildItem $CacheDir -Filter '*.key' -File -ErrorAction SilentlyContinue).Count
+    $dir = CacheDir
+    if (-not (Test-Path $dir)) { return 0 }
+    return @(Get-ChildItem $dir -Filter '*.key' -File -ErrorAction SilentlyContinue).Count
 }
 
 $host.UI.RawUI.WindowTitle = "SotC shaders - $Mode"
@@ -52,7 +64,7 @@ Say '=================================================================' DarkCyan
 $intelMB = 0
 if (Test-Path $IntelCache) { $intelMB = [math]::Round(((Get-ChildItem $IntelCache -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum) / 1MB) }
 $startCount = CachedPipelines
-Say ("  Pipeline cache : {0} pipelines in user\cache\{1}" -f $startCount, $cacheName)
+Say ("  Pipeline cache : {0} pipelines in {1}" -f $startCount, (CacheDir))
 Say ("  Intel driver   : {0} MB of compiled shaders" -f $intelMB)
 if ($Mode -eq 'warmup') {
     Say ''
@@ -75,13 +87,17 @@ $originalSettings = $null
 if ($Mode -eq 'warmup') {
     $originalSettings = ReadSettings
     $s = $originalSettings | ConvertFrom-Json
-    $s.fullscreen = $false
-    $s.mouse = $false
+    # Current launchers use window_mode; "fullscreen" is only in settings of older ones.
+    if ($s.PSObject.Properties['fullscreen']) { $s.fullscreen = $false }
+    $s | Add-Member -NotePropertyName window_mode -NotePropertyValue 'windowed' -Force
+    $s | Add-Member -NotePropertyName mouse -NotePropertyValue $false -Force
     WriteSettings ($s | ConvertTo-Json -Depth 8)
 }
 
 # Info-level GPU log: "Preloaded N pipelines" and one "Compiling ... pipeline" line per new one.
 $env:BB_GPU_LOG = 'info'
+# "SOTC FPS" lines every 5 s tell a running game from a frozen one, also with the FPS display off.
+$env:SOTC_FPS = '1'
 $launchTime = Get-Date
 Start-Process -FilePath $Exe -ArgumentList '--play' -WorkingDirectory $Port | Out-Null
 Say "[$(Stamp)] Game starting..." Green
