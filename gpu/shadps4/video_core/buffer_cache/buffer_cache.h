@@ -406,6 +406,8 @@ private:
 
     u32 arena_memory_type_index{};
     std::optional<u32> arena_fallback_memory_type_index;
+    /// sotc: until then a bind takes only free room (AllocateArenaBlocks failed as a whole).
+    std::chrono::steady_clock::time_point arena_oom_until{};
     u32 block_size{};
     u32 block_shift{};
     u32 blocks_per_arena_page{};

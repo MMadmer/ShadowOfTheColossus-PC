@@ -672,6 +672,7 @@ void BufferCache::ApplyDownloads(std::span<const ReadbackItem> pending, const u8
         VAddr base;
         u64 size;
         bool checked; ///< the guard was checked against the heap's signature in this batch
+        bool world;   ///< a heap a world created (#146): its guard follows every change
     };
     std::array<Active, 8> active{};
     size_t active_count = 0;
@@ -776,7 +777,7 @@ void BufferCache::ApplyDownloads(std::span<const ReadbackItem> pending, const u8
             if (!slot->used) {
                 slot->used.emplace(memory);
             }
-            active[active_count++] = {slot, heap_base, heap_size, false};
+            active[active_count++] = {slot, heap_base, heap_size, false, true};
             continue;
         }
         for (auto& candidate : slots) {
@@ -804,13 +805,14 @@ void BufferCache::ApplyDownloads(std::span<const ReadbackItem> pending, const u8
         if (!slot->used) {
             slot->used.emplace(memory);
         }
-        active[active_count++] = {slot, heap_base, heap_size, false};
+        active[active_count++] = {slot, heap_base, heap_size, false, false};
     }
     // The heap's guard, built again when its free tree changed (signature) since the last build.
     // sotc: free blocks are read from the physical chain at each write; the free tree only gives
     // the chain walk its starts. So a changed tree is walked again at most every 250 ms, at once
     // only when the old one gives no start for a range (Covers). SOTC_HEAP_GUARD_EVERY=0: every
-    // change.
+    // change. The world's heaps (#146) are walked again at every change, as upstream does: a
+    // kept guard's starts may lie in blocks merged since, and their crash is at the ending.
     static const auto rebuild_every = [] {
         const char* v = std::getenv("SOTC_HEAP_GUARD_EVERY");
         return std::chrono::milliseconds(v ? std::strtoull(v, nullptr, 10) : 250);
@@ -823,7 +825,7 @@ void BufferCache::ApplyDownloads(std::span<const ReadbackItem> pending, const u8
             const auto now = std::chrono::steady_clock::now();
             bool rebuild = !slot.guard;
             if (!rebuild && signature != slot.signature) {
-                rebuild = now - slot.built >= rebuild_every || !slot.guard->IsValid();
+                rebuild = a.world || now - slot.built >= rebuild_every || !slot.guard->IsValid();
                 for (const auto& item : pending) {
                     const VAddr lo = std::max(item.addr, a.base);
                     const VAddr hi = std::min(item.addr + item.size, a.base + a.size);
@@ -1684,6 +1686,16 @@ std::pair<vk::DeviceMemory, u64> BufferCache::AllocateArenaBlocks(u64 blocks) {
     if (auto placed = take(arena_memory_type_index)) {
         return *placed;
     }
+    // sotc: right after everything failed, each bind of the range would allocate and collect
+    // again (with GPU waits): a freeze on a full card. For a while only free room is taken.
+    if (std::chrono::steady_clock::now() < arena_oom_until) {
+        if (arena_fallback_memory_type_index) {
+            if (auto placed = take(*arena_fallback_memory_type_index)) {
+                return *placed;
+            }
+        }
+        return {};
+    }
     if (auto placed = grow(arena_memory_type_index, full_chunk)) {
         return *placed;
     }
@@ -1701,12 +1713,15 @@ std::pair<vk::DeviceMemory, u64> BufferCache::AllocateArenaBlocks(u64 blocks) {
         }
     }
     // Drop old cached images, wait for the GPU so their memory is really released, try again.
-    LOG_WARNING(Render,
-                "Video memory exhausted, collecting cached images (asked {} KB; in use {} MB of {} "
-                "MB; arenas {} chunks, {} MB)",
-                (blocks << block_shift) >> 10, instance.GetDeviceMemoryUsage() >> 20,
-                SotcStats::vram_budget.load() >> 20, SotcStats::arena_allocs.load(),
-                SotcStats::arena_bytes.load() >> 20);
+    static u32 collect_warnings = 0;
+    if (collect_warnings++ < 16) {
+        LOG_WARNING(Render,
+                    "Video memory exhausted, collecting cached images (asked {} KB; in use {} MB "
+                    "of {} MB; arenas {} chunks, {} MB)",
+                    (blocks << block_shift) >> 10, instance.GetDeviceMemoryUsage() >> 20,
+                    SotcStats::vram_budget.load() >> 20, SotcStats::arena_allocs.load(),
+                    SotcStats::arena_bytes.load() >> 20);
+    }
     // sotc: each round collects deeper (512 images, 4096, all the old ones) and then tries smaller
     // chunks down to the asked size (a nearly full or fragmented card refuses 64 MiB but takes
     // less, #137) before system memory. Under the texture cache lock (RefreshImage) the
@@ -1738,8 +1753,9 @@ std::pair<vk::DeviceMemory, u64> BufferCache::AllocateArenaBlocks(u64 blocks) {
             break;
         }
     }
-    // sotc: the range stays unbound (shaders read zeros there) and the next bind asks again,
-    // instead of closing the game.
+    // sotc: the range stays unbound (shaders read zeros there) and a bind after the pause asks
+    // again, instead of closing the game.
+    arena_oom_until = std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
     static u32 reported = 0;
     if (reported++ < 8) {
         LOG_CRITICAL(Render, "Out of video and system memory for buffers ({} KB left unbound); "
