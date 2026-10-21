@@ -36,6 +36,7 @@ typedef struct {
     int used, type, channels, is_float, frames, sample_bytes, std_layout;
     int32_t volume[8];
     SDL_AudioStream *stream;
+    uint64_t open_tried_ns; /* sotc: last attempt to open the device stream (open_stream) */
     uint64_t next_deadline_ns; /* next return of sceAudioOutOutput */
     int64_t adjust_ns; int window_min, window_count; /* queue level control */
     uint64_t last_output_us;
@@ -70,6 +71,15 @@ static int sdl_audio(void) {
         printf("Runtime: audio backend %s\n", sdl_ready ? SDL_GetCurrentAudioDriver() : "timer (silent)");
     }
     return sdl_ready;
+}
+/* sotc: the device stream of a port. With no device at the time (a Bluetooth headset not ready
+ * yet, a device change) the port used the timer sink for the whole session: it now tries again
+ * every second from the output path (#214). */
+static void open_stream(Port *p) {
+    SDL_AudioSpec spec={p->is_float ? SDL_AUDIO_F32 : SDL_AUDIO_S16, p->channels, 48000};
+    p->open_tried_ns=now_ns();
+    p->stream=SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK,&spec,NULL,NULL);
+    if (p->stream) SDL_ResumeAudioStreamDevice(p->stream);
 }
 static int port_range(int type, int *first, int *last) {
     switch (type) {
@@ -118,10 +128,8 @@ static ABI int32_t audio_open(int32_t user, int32_t type, int32_t index, uint32_
     p->sample_bytes=p->is_float ? 4 : 2; p->frames=(int)length; p->std_layout=format>=6;
     for (int c=0;c<8;++c) p->volume[c]=VOLUME_0DB;
     if (sdl_audio()) {
-        SDL_AudioSpec spec={p->is_float ? SDL_AUDIO_F32 : SDL_AUDIO_S16, p->channels, 48000};
-        p->stream=SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK,&spec,NULL,NULL);
-        if (p->stream) SDL_ResumeAudioStreamDevice(p->stream);
-        else fprintf(stderr,"Runtime: SDL audio stream failed (%s); port %d uses the timer sink\n",SDL_GetError(),id);
+        open_stream(p);
+        if (!p->stream) fprintf(stderr,"Runtime: SDL audio stream failed (%s); port %d uses the timer sink and retries\n",SDL_GetError(),id);
     }
     p->stats=getenv("BB_AUDIO_STATS")!=NULL;
     const char *dump=getenv("BB_AUDIO_DUMP");
@@ -237,6 +245,10 @@ static int32_t output_port(int32_t handle, const void *data, int pace) {
             if (!p->next_deadline_ns || now>p->next_deadline_ns+8*period) p->next_deadline_ns=now; /* start or stall: restart cadence */
             else sleep_until(p->next_deadline_ns);
             p->next_deadline_ns+=period;
+        }
+        if (!p->stream && sdl_ready>0 && now_ns()-p->open_tried_ns>=1000000000u) {
+            open_stream(p);
+            if (p->stream) printf("Runtime: audio port %d: device stream opened\n",(int)(p-ports));
         }
         if (p->stream) {
             /* The device drains the queue in quanta (21 ms on PipeWire), so the level
