@@ -164,7 +164,8 @@ APP_DEFAULTS = {'ui_language': '', 'game_dir': str(PORT_DIR.parent / GAME_ID), '
                 'fx_fog': True, 'fx_ssao': True, 'engine_cvars': '', 'perf_culling': True,
                 'perf_record_thread': True, 'perf_dma': True, 'gpu_submit': 'auto', 'vram_use': 'normal', 'volume': '100', 'shadow_reuse': '0', 'library_dirs': [], 'keys': {},
                 'auto_setup': True, 'dlc_dir': '', 'framegen': 'off',
-                'check_updates': True, 'skip_version': ''}
+                'check_updates': True, 'skip_version': '', 'dlss': 'off', 'vibration': '100',
+                'mouse_buttons': {}, 'gpu_name': ''}
 # Keyboard bindings (src/runtime_pad.c): PS4 input, its default SDL key name, label.
 KEY_INPUTS = [
     ('move_up', 'W', ('Andar para frente', 'Move forward')), ('move_down', 'S', ('Andar para trás', 'Move back')),
@@ -179,6 +180,15 @@ KEY_INPUTS = [
     ('up', 'I', ('Direcional ↑', 'D-pad ↑')), ('down', 'K', ('Direcional ↓', 'D-pad ↓')),
     ('left', 'J', ('Direcional ←', 'D-pad ←')), ('right', 'L', ('Direcional →', 'D-pad →')),
 ]
+# Mouse buttons (mouse.<input>= of sotc.ini, src/runtime_pad.c): its defaults, and the inputs that
+# take one (buttons only, not the move / look inputs).
+MOUSE_DEFAULTS = {'r1': 'left', 'square': 'right', 'l1': 'middle'}
+MOUSE_INPUTS = tuple(name for name, _d, _l in KEY_INPUTS if not name.startswith(('move_', 'look_')))
+MOUSE_BUTTONS = [('left', ('Mouse esquerdo', 'Left mouse')), ('right', ('Mouse direito', 'Right mouse')),
+                 ('middle', ('Mouse do meio', 'Middle mouse')), ('x1', ('Mouse X1', 'Mouse X1')),
+                 ('x2', ('Mouse X2', 'Mouse X2'))]
+# Tk button numbers: X1/X2 are 4/5 on Windows and 8/9 on X11 (where 4/5 are the wheel).
+TK_MOUSE_BUTTONS = {1: 'left', 2: 'middle', 3: 'right', 4: 'x1', 5: 'x2', 8: 'x1', 9: 'x2'}
 # Tk key symbols whose SDL scancode name differs (letters, digits, F-keys and arrows match).
 TK_TO_SDL = {
     'space': 'Space', 'Return': 'Return', 'Tab': 'Tab', 'BackSpace': 'Backspace', 'Escape': 'Escape',
@@ -204,6 +214,9 @@ SHADOW_REUSE = [('0', ('Desligado (sombras sem piscar)', 'Off (no blinking shado
                 ('auto', ('Automático (ligado na NVIDIA, desligado na AMD/Intel)', 'Automatic (on with NVIDIA, off on AMD/Intel)'))]
 VOLUME = [('100', ('100% (original)', '100% (original)')), ('150', ('150%', '150%')),
           ('200', ('200%', '200%')), ('300', ('300% (máximo)', '300% (maximum)'))]
+# Controller rumble strength (SOTC_VIBRATION, src/runtime_pad.c).
+VIBRATION = [('0', ('0% (desligada)', '0% (off)')), ('25', ('25%', '25%')), ('50', ('50%', '50%')),
+             ('75', ('75%', '75%')), ('100', ('100% (padrão)', '100% (default)'))]
 VRAM_LIMITS = {'low': ('50', '1024'), 'normal': ('60', '1536'), 'high': ('75', '4096'), 'max': ('85', '0')}
 
 
@@ -220,20 +233,58 @@ def sdl_key_name(keysym):
     return None
 
 
-def write_key_bindings(keys):
-    """The launcher's key bindings as key.<input>= lines of sotc.ini (BB_CONFIG), replacing its
-    earlier ones; other lines stay."""
-    ini = PORT_DIR / 'sotc.ini'
+def write_key_bindings(keys, mouse=None, ini=None):
+    """The launcher's key and mouse button bindings as key.<input>= and mouse.<input>= lines of
+    sotc.ini (BB_CONFIG), replacing its earlier ones; other lines stay. An empty value unbinds."""
+    ini = Path(ini or PORT_DIR / 'sotc.ini')
     try:
         lines = ini.read_text(encoding='utf-8').splitlines()
     except OSError:
         lines = []
-    lines = [line for line in lines if not line.startswith('key.') and line != '# key bindings (launcher)']
-    custom = dict(keys or {})  # an empty value unbinds the input
+    lines = [line for line in lines if not line.startswith(('key.', 'mouse.'))
+             and line not in ('# key bindings (launcher)', '# mouse buttons (launcher)')]
+    custom = dict(keys or {})
     if custom:
         lines.append('# key bindings (launcher)')
         lines += [f'key.{name}={value}' for name, value in sorted(custom.items())]
+    buttons = {name: value for name, value in dict(mouse or {}).items() if name in MOUSE_INPUTS}
+    if buttons:
+        lines.append('# mouse buttons (launcher)')
+        lines += [f'mouse.{name}={value}' for name, value in sorted(buttons.items())]
     ini.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+
+
+def ini_mouse_buttons(ini=None):
+    """mouse.<input>= lines of sotc.ini written by hand before the launcher bound mouse buttons
+    itself: its first settings take them over instead of dropping them."""
+    found = {}
+    try:
+        lines = Path(ini or PORT_DIR / 'sotc.ini').read_text(encoding='utf-8').splitlines()
+    except OSError:
+        return found
+    for line in lines:
+        name, sep, value = line.partition('=')
+        if line.startswith('mouse.') and sep and name[6:] in MOUSE_INPUTS:
+            found[name[6:]] = ','.join(b for b in value.replace(' ', ',').lower().split(',') if b)
+    return found
+
+
+def mouse_binding(custom, name):
+    """The mouse buttons of an input ('left', 'x1,x2', '' for none) with the custom bindings."""
+    return custom[name] if name in custom else MOUSE_DEFAULTS.get(name, '')
+
+
+def bind_mouse_button(custom, name, button):
+    """The custom mouse bindings after giving button to input name: the input that had it loses
+    it (an empty binding), and bindings equal to the defaults are dropped."""
+    custom = dict(custom or {})
+    for other in MOUSE_INPUTS:
+        buttons = [b for b in mouse_binding(custom, other).split(',') if b]
+        if other != name and button in buttons:
+            buttons.remove(button)
+            custom[other] = ','.join(buttons)
+    custom[name] = button
+    return {k: v for k, v in custom.items() if v != MOUSE_DEFAULTS.get(k, '')}
 # Engine effects verified to change the image when set on the command line (A/B, 08/10/2026).
 EFFECTS = [('fx_vignette', ('Vinheta (cantos escurecidos)', 'Vignette (darkened corners)'),
             'r_vignetteOverrideEnable=1 r_vignetteEnable=0'),
@@ -280,6 +331,54 @@ def weak_gpu_render_res(gpu_line):
     return ''
 
 
+# NVIDIA DLSS Super Resolution (SOTC_DLSS): the game renders at the mode's size (a res<height>
+# mode, as RENDER_RES) and DLSS rebuilds the 1080p display image; the game checks the support again
+# at start (Streamline) and shows the plain image without it.
+DLSS_MODES = [('off', ('Desligado', 'Off')),
+              ('quality', ('DLSS Qualidade (1280 × 720)', 'DLSS Quality (1280 × 720)')),
+              ('balanced', ('DLSS Equilibrado (1120 × 630)', 'DLSS Balanced (1120 × 630)')),
+              ('performance', ('DLSS Desempenho (960 × 540)', 'DLSS Performance (960 × 540)')),
+              ('ultra', ('DLSS Ultra Desempenho (640 × 360)', 'DLSS Ultra Performance (640 × 360)'))]
+DLSS_RENDER = {'quality': 'res720', 'balanced': 'res630', 'performance': 'res540', 'ultra': 'res360'}
+
+
+def gpu_has_dlss(gpu_name):
+    """DLSS Super Resolution: NVIDIA GeForce RTX cards."""
+    return 'RTX' in str(gpu_name).upper()
+
+
+def gpu_has_dlss_g(gpu_name):
+    """DLSS frame generation: RTX 40 and 50 series."""
+    return bool(re.search(r'RTX\s*(40|50)\d\d', str(gpu_name), re.I))
+
+
+def is_16_9(size):
+    """True for a WxH of the 16:9 shape (within 2%)."""
+    try:
+        w, h = map(int, str(size).split('x'))
+    except ValueError:
+        return False
+    return h > 0 and abs(w * 9 - h * 16) <= h * 16 * 0.02
+
+
+def dlss_blocked(s, gpu_name=None):
+    """Why DLSS cannot apply with settings s: 'gpu' (not an RTX card; an unknown card is not
+    held against it), 'output' (not 16:9: those render at the output size, SOTC_RENDER_RES),
+    'neo' (the PS4 Pro path keeps its own sizes), or ''."""
+    gpu_name = s.get('gpu_name', '') if gpu_name is None else gpu_name
+    if gpu_name and not gpu_has_dlss(gpu_name):
+        return 'gpu'
+    if not is_16_9(s.get('output_res') or '1920x1080'):
+        return 'output'
+    return 'neo' if s.get('neo') else ''
+
+
+def dlss_mode(s):
+    """The DLSS mode the game gets ('quality', ...), or '' (off or not possible)."""
+    mode = s.get('dlss')
+    return mode if mode in DLSS_RENDER and not dlss_blocked(s) else ''
+
+
 # Button icons in the game (SOTC_PAD_GLYPHS, gpu texture_cache/sotc_pad_glyphs.cpp).
 PAD_GLYPHS = [('', ('Automáticos (do dispositivo em uso)', 'Automatic (the device in use)')),
               ('xbox', ('Sempre Xbox', 'Always Xbox')),
@@ -297,6 +396,9 @@ FRAMEGEN = [('off', ('Desligada', 'Off')),
             ('auto', ('Automática (DLSS-G ou FSR 3, experimental)', 'Automatic (DLSS-G or FSR 3, experimental)')),
             ('dlss', ('NVIDIA DLSS-G (RTX 40/50)', 'NVIDIA DLSS-G (RTX 40/50)')),
             ('fsr', ('AMD FSR 3 (qualquer placa)', 'AMD FSR 3 (any GPU)'))]
+# Without DLSS-G (a card known not to be an RTX 40/50): automatic means FSR 3.
+FRAMEGEN_FSR = [FRAMEGEN[0], ('auto', ('Automática (FSR 3, experimental)', 'Automatic (FSR 3, experimental)')),
+                FRAMEGEN[3]]
 SHARPNESS = [('0', ('Alta', 'High')), ('250', ('Média (padrão)', 'Medium (default)')), ('600', ('Baixa', 'Low')),
              ('off', ('Desligada', 'Off'))]
 MOUSE_SENS = [('0.5', ('0,5 (lenta)', '0.5 (slow)')), ('0.75', ('0,75', '0.75')), ('1.0', ('1,0 (padrão)', '1.0 (default)')),
@@ -415,6 +517,14 @@ def keep_crash_log(log_dir, code):
         pass
 
 
+def near_path(path, base):
+    """path relative to base when on the same drive, else as is."""
+    try:
+        return os.path.relpath(path, base)
+    except ValueError:
+        return str(path)
+
+
 def short_path(path):
     """A path for display: relative to the port folder when inside it, else as is."""
     try:
@@ -470,6 +580,8 @@ def load_settings():
         if 'SOTC_DLSSG=1' in extra:
             settings['framegen'] = 'auto'
             settings['extra_env'] = ' '.join(item for item in extra if item != 'SOTC_DLSSG=1')
+    if 'mouse_buttons' not in saved:
+        settings['mouse_buttons'] = ini_mouse_buttons()
     return migrate_settings(settings)
 
 
@@ -517,6 +629,13 @@ def game_environment(s):
         env['SOTC_SYS_MODULES'] = s['sys_modules']
     if s.get('dlc_dir'):
         env['SOTC_DLC_DIR'] = s['dlc_dir']
+    # An update inside the game folder or next to its parent (sotc_discovery.find_update): sotc.py
+    # itself only looks at <game>-UPDATE / <game>-patch.
+    if 'SOTC_UPDATE_DIR' not in env:
+        from sotc_discovery import find_update
+        update = find_update(s['game_dir']) if s.get('game_dir') else ''
+        if update:
+            env['SOTC_UPDATE_DIR'] = update
     # The 30 FPS cap is applied or not by bb-probe (sotc_fps_cap.h), F7 switches it in game: no
     # fps60 code patch, vblanks at 120 Hz in every mode; 60 FPS limits the uncapped game. Above 30
     # the game also targets 60 FPS itself (fps60game), so its timing follows: ignoring its 30 FPS
@@ -525,7 +644,12 @@ def game_environment(s):
     modes = ['af16'] if s.get('af16') else []
     if fps_mode != '30':
         modes.append('fps60game')
-    if s.get('render_res') in {key for key, _t in RENDER_RES if key}:
+    # DLSS renders at its mode's size in place of the render resolution choice.
+    dlss = dlss_mode(s)
+    if dlss:
+        modes.append(DLSS_RENDER[dlss])
+        env['SOTC_DLSS'] = dlss
+    elif s.get('render_res') in {key for key, _t in RENDER_RES if key}:
         modes.append(s['render_res'])
     env['SOTC_MODES'] = ','.join(modes)
     env['SOTC_FPS_CAP'] = '30' if fps_mode == '30' else 'off'
@@ -568,7 +692,10 @@ def game_environment(s):
     env['SOTC_NEO'] = '1' if s.get('neo') and not is_wide(env['SOTC_OUTPUT_RES']) else '0'
     if s.get('neo') and env['SOTC_NEO'] == '0':
         env['SOTC_NOTE'] = f"{env['SOTC_OUTPUT_RES']} is wider than 16:9: PS4 Pro mode off (it renders 16:9 only)"
-    env['SOTC_FRAMEGEN'] = s.get('framegen') or 'off'
+    framegen = s.get('framegen') or 'off'
+    if framegen == 'dlss' and s.get('gpu_name') and not gpu_has_dlss_g(s['gpu_name']):
+        framegen = 'auto'  # FSR 3 on a card without DLSS-G
+    env['SOTC_FRAMEGEN'] = framegen
     # sotc: high quality textures: the texture banks sampled since the last report read as sampled
     # (sotc_lod_stats.h; before, none ever did and the game never streamed its fine mips: blurry
     # leaves and rocks). Off: the old behaviour, for cards short of video memory.
@@ -594,6 +721,7 @@ def game_environment(s):
         env['BB_GAMEPAD'] = str(s['gamepad']).strip()
     if s.get('pad_glyphs') in ('xbox', 'ps', 'keyboard'):
         env['SOTC_PAD_GLYPHS'] = s['pad_glyphs']
+    env['SOTC_VIBRATION'] = str(s.get('vibration', '100'))
     env['BB_CONFIG'] = str(PORT_DIR / 'sotc.ini')
     for item in str(s['extra_env']).split():
         if '=' in item:
@@ -647,6 +775,9 @@ class Launcher:
         self.output = queue.Queue()
         self.ui_calls = queue.Queue()
         self.gpu_text = _('• Verificando a placa de vídeo…', '• Checking the graphics card…')
+        # The card of the last detection until this one ends (detect_gpu): DLSS / DLSS-G choices.
+        self.gpu_name = self.app.get('gpu_name', '')
+        self.render_boxes, self.framegen_boxes = [], []
         self.banner_source = self.banner_image = None
         root.title('Shadow of the Colossus — ' + _('port nativo', 'native port'))
         root.configure(bg=BG)
@@ -777,17 +908,24 @@ class Launcher:
         return self.vars[key]
 
     def choice(self, parent, key, options, width=38):
+        """A read-only combobox for a setting; box.set_options(options) changes its entries (a value
+        no longer offered becomes the first one)."""
         var = self.var(key)
-        values = [v for v, _t in options]
-        labels = [text if isinstance(text, str) else _(*text) for _v, text in options]
-        box = self.ttk.Combobox(parent, values=labels, state='readonly', width=width)
-        if var.get() not in values:
-            var.set(values[0])
+        box = self.ttk.Combobox(parent, state='readonly', width=width)
+        values = []
 
         def show(*_args):
             current = var.get()
             box.current(values.index(current) if current in values else 0)
-        show()
+
+        def set_options(new_options):
+            values[:] = [v for v, _t in new_options]
+            box.configure(values=[text if isinstance(text, str) else _(*text) for _v, text in new_options])
+            if var.get() not in values:
+                var.set(values[0])
+            show()
+        box.set_options = set_options
+        set_options(options)
         box.bind('<<ComboboxSelected>>', lambda _e: var.set(values[box.current()]))
         var.trace_add('write', show)
         return box
@@ -816,6 +954,13 @@ class Launcher:
     def note(self, parent, text, top=12):
         self.ttk.Label(parent, text=text, style='Muted.TLabel', wraplength=self.px(680), justify='left').grid(
             row=self.next_row(parent), column=0, columnspan=2, sticky='w', pady=(top, 0))
+
+    def state_note(self, parent):
+        """A line under a setting that says why it is not available."""
+        label = self.ttk.Label(parent, text='', style='Muted.TLabel', foreground='#d9b441',
+                               wraplength=self.px(560), justify='left')
+        label.grid(row=self.next_row(parent), column=1, sticky='w')
+        return label
 
     def section(self, parent, title, top=18):
         self.ttk.Label(parent, text=title, style='Section.TLabel').grid(
@@ -935,6 +1080,10 @@ class Launcher:
         self.build_advanced()
         self.build_log()
         self.root.bind_all('<MouseWheel>', self.wheel)
+        for key in ('dlss', 'output_res', 'neo'):
+            self.vars[key].trace_add('write', lambda *_a: self.refresh_upscaling())
+        self.vars['dlss'].trace_add('write', lambda *_a: self.refresh_status())
+        self.refresh_gpu_choices()
         self.refresh_status()
 
     def wheel(self, event):
@@ -975,11 +1124,12 @@ class Launcher:
         quick.grid(row=0, column=1, sticky='nw')
         ttk.Label(quick, text=_('Ajustes rápidos', 'Quick settings'), style='Section.TLabel').grid(
             row=0, column=0, columnspan=2, sticky='w', pady=(0, 2))
-        self.row(quick, _('Render', 'Render'), self.choice(quick, 'render_res', RENDER_RES, 24))
+        self.render_boxes.append(self.row(quick, _('Render', 'Render'), self.choice(quick, 'render_res', RENDER_RES, 24)))
         self.row(quick, _('Saída', 'Output'), self.choice(quick, 'output_res', OUTPUTS, 24))
         self.row(quick, _('Upscaler', 'Upscaler'), self.choice(quick, 'upscaler', UPSCALERS, 24))
         self.row(quick, _('Nitidez (RCAS)', 'Sharpening (RCAS)'), self.choice(quick, 'sharpness', SHARPNESS, 24))
-        self.row(quick, _('Geração de quadros', 'Frame generation'), self.choice(quick, 'framegen', FRAMEGEN, 24))
+        self.framegen_boxes.append(self.row(quick, _('Geração de quadros', 'Frame generation'),
+                                            self.choice(quick, 'framegen', FRAMEGEN, 24)))
         self.row(quick, _('FPS', 'FPS'), self.choice(quick, 'fps_mode', FPS_MODES, 24))
         self.check(quick, 'af16', _('Texturas nítidas (filtro 16x)', 'Sharp textures (16x filtering)'))
         self.check(quick, 'hq_textures', _('Texturas em alta qualidade', 'High quality textures'))
@@ -1123,7 +1273,8 @@ class Launcher:
                    'most 60 (40 to 60 depending on the area, with a fast CPU). Unlimited: above 60 on fast '
                    'screens. Without the cap some scenes may behave differently. In game, F7 turns the 30 FPS '
                    'cap on and off at any time.'))
-        self.row(f, _('Geração de quadros', 'Frame generation'), self.choice(f, 'framegen', FRAMEGEN),
+        self.framegen_boxes.append(self.choice(f, 'framegen', FRAMEGEN))
+        self.row(f, _('Geração de quadros', 'Frame generation'), self.framegen_boxes[-1],
                  _('Uma imagem gerada entre duas do jogo: com 30 FPS (limite ligado) a tela mostra 60. DLSS-G: '
                    'NVIDIA RTX 40/50. FSR 3: qualquer placa (RTX 20/30, AMD, Intel). Automática: DLSS-G se a '
                    'placa tiver, senão FSR 3. Experimental: só faz diferença com o modo 60 FPS desligado, e a '
@@ -1138,7 +1289,8 @@ class Launcher:
                    'screen at 60 or 120 Hz, or G-SYNC/FreeSync.'))
         self.window_icon_row(f)
         self.section(f, _('Resolução', 'Resolution'))
-        self.row(f, _('Resolução de render', 'Render resolution'), self.choice(f, 'render_res', RENDER_RES),
+        self.render_boxes.append(self.choice(f, 'render_res', RENDER_RES))
+        self.row(f, _('Resolução de render', 'Render resolution'), self.render_boxes[-1],
                  _('Abaixo de 1080p o próprio jogo amplia a imagem para 1080p (como o PS4 Pro faz de 1440p para 4K): '
                    'menos trabalho para placas fracas (GTX 1050: 810p, 1050 Ti: 900p), texturas e névoa iguais, imagem um pouco '
                    'mais suave. Só na versão EU 1.01 e numa saída 16:9; numa saída de outro formato (16:10, 21:9, '
@@ -1147,6 +1299,18 @@ class Launcher:
                    '4K): less work for weak cards (GTX 1050: 810p, 1050 Ti: 900p), same textures and fog, a slightly softer '
                    'image. EU 1.01 and 16:9 outputs only; with another output shape (16:10, 21:9, 32:9) the game '
                    'renders at the output size.'))
+        self.render_note = self.state_note(f)
+        self.dlss_box = self.choice(f, 'dlss', DLSS_MODES)
+        self.row(f, _('Upscaling (DLSS)', 'Upscaling (DLSS)'), self.dlss_box,
+                 _('NVIDIA DLSS Super Resolution: o jogo renderiza num tamanho menor e o DLSS reconstrói a imagem '
+                   'em 1080p, com mais detalhe que a resolução de render simples. Substitui a resolução de render. '
+                   'Só numa saída 16:9 e sem o modo PS4 Pro. Ao abrir, o jogo confere o suporte de novo e, sem '
+                   'ele, mostra a imagem normal.',
+                   'NVIDIA DLSS Super Resolution: the game renders at a smaller size and DLSS rebuilds the image '
+                   'at 1080p, with more detail than the plain render resolution. It replaces the render '
+                   'resolution. 16:9 outputs only, without PS4 Pro mode. At start the game checks the support '
+                   'again and shows the plain image without it.'))
+        self.dlss_note = self.state_note(f)
         self.row(f, _('Saída', 'Output'), self.choice(f, 'output_res', OUTPUTS),
                  _('O jogo renderiza nesse tamanho; acima de cerca de 4,2 milhões de pixels (4K, 3440 × 1440) num '
                    'tamanho menor, que o upscaler amplia: maior que isso, os detalhes finos das texturas somem. '
@@ -1241,24 +1405,25 @@ class Launcher:
                    'PlayStation ones with a DualShock or DualSense, the bound keys and mouse buttons on the '
                    'keyboard, in the Options > Controls diagram too. It switches as soon as another device is '
                    'connected or used.'))
+        self.row(f, _('Vibração do controle', 'Controller vibration'), self.choice(f, 'vibration', VIBRATION, 20))
         self.section(f, _('Mouse', 'Mouse'))
         self.check(f, 'mouse', _('Câmera no mouse', 'Mouse camera'),
                    _('Clique na janela do jogo para capturar o mouse; Esc solta. Botão esquerdo = R1 (agarrar), '
-                     'direito = □ (atacar), meio = L1. Remapeie com mouse.<entrada>= no sotc.ini.',
+                     'direito = □ (atacar), meio = L1; os botões podem ser trocados na lista de teclas abaixo.',
                      'Click the game window to capture the mouse; Esc releases it. Left button = R1 (grip), right = □ '
-                     '(attack), middle = L1. Remap with mouse.<input>= in sotc.ini.'))
+                     '(attack), middle = L1; the buttons can be changed in the key list below.'))
         self.row(f, _('Sensibilidade', 'Sensitivity'), self.choice(f, 'mouse_sens', MOUSE_SENS, 20))
         self.check(f, 'mouse_invert', _('Inverter o eixo vertical', 'Invert the vertical axis'))
         self.section(f, _('Teclado (funciona junto com o controle)', 'Keyboard (works next to a gamepad)'))
-        self.note(f, _('Clique na tecla de uma ação e aperte a nova tecla (Esc cancela). Vale na próxima vez que '
-                       'o jogo abrir.',
-                       'Click the key of an action and press the new key (Esc cancels). Applies the next time the '
-                       'game starts.'), top=0)
+        self.note(f, _('Clique na tecla de uma ação e aperte a nova tecla ou um botão do mouse (Esc cancela). Vale '
+                       'na próxima vez que o jogo abrir.',
+                       'Click the key of an action and press the new key or a mouse button (Esc cancels). Applies '
+                       'the next time the game starts.'), top=0)
         self.key_buttons = {}
         for name, default, label in KEY_INPUTS:
             r = self.next_row(f)
             ttk.Label(f, text=_(*label)).grid(row=r, column=0, sticky='w', padx=(0, 24), pady=1)
-            button = ttk.Button(f, width=18, command=lambda n=name: self.capture_key(n))
+            button = ttk.Button(f, width=30, command=lambda n=name: self.capture_key(n))
             button.grid(row=r, column=1, sticky='w', pady=1)
             self.key_buttons[name] = button
         holder = ttk.Frame(f)
@@ -1271,13 +1436,20 @@ class Launcher:
                        'The gamepad can be remapped in sotc.ini too, e.g. pad.circle=b (SDL button names).'))
 
     def show_keys(self):
+        """Each action's key and mouse buttons; * marks a changed one."""
         keys = self.app.setdefault('keys', {})
+        mouse = self.app.setdefault('mouse_buttons', {})
+        labels = dict(MOUSE_BUTTONS)
         for name, default, _label in KEY_INPUTS:
             value = (keys[name] or '—') if name in keys else default
-            self.key_buttons[name].configure(text=value + (' *' if name in keys else ''))
+            buttons = [_(*labels[b]) for b in mouse_binding(mouse, name).split(',') if b in labels]
+            if buttons:
+                value += '  ·  ' + ', '.join(buttons)
+            self.key_buttons[name].configure(text=value + (' *' if name in keys or name in mouse else ''))
 
     def reset_keys(self):
         self.app['keys'] = {}
+        self.app['mouse_buttons'] = {}
         self.show_keys()
 
     def capture_key(self, name):
@@ -1289,7 +1461,8 @@ class Launcher:
         window.transient(self.root)
         window.resizable(False, False)
         label = next(_(*l) for n, _d, l in KEY_INPUTS if n == name)
-        ttk.Label(window, text=_('Aperte a tecla para: {}', 'Press the key for: {}').format(label),
+        ttk.Label(window, text=_('Aperte a tecla ou o botão do mouse para: {}',
+                                 'Press the key or mouse button for: {}').format(label),
                   font=(ui_font(), 12)).pack(padx=30, pady=(24, 6))
         hint = ttk.Label(window, text=_('Esc cancela', 'Esc cancels'), style='Muted.TLabel')
         hint.pack(padx=30, pady=(0, 22))
@@ -1314,7 +1487,19 @@ class Launcher:
                     keys[other] = ''
             self.show_keys()
             window.destroy()
+
+        def clicked(event):
+            button = TK_MOUSE_BUTTONS.get(event.num)
+            if not button:
+                return
+            if name not in MOUSE_INPUTS:
+                hint.configure(text=_('Esta ação não aceita botões do mouse.', 'This action does not take mouse buttons.'))
+                return
+            self.app['mouse_buttons'] = bind_mouse_button(self.app.get('mouse_buttons'), name, button)
+            self.show_keys()
+            window.destroy()
         window.bind('<KeyPress>', pressed)
+        window.bind('<ButtonPress>', clicked)
         window.grab_set()
         window.focus_force()
 
@@ -1406,8 +1591,10 @@ class Launcher:
                                                                      'Choose the game folder first.'), fg=MUTED)
 
     def summary(self):
+        dlss = dlss_mode(self.upscaling_state())
         parts = [dict((k, _(*v)) for k, v in FPS_MODES).get(self.var('fps_mode').get(), '30 FPS'),
                  self.var('output_res').get().replace('x', ' × '),
+                 _(*dict(DLSS_MODES)[dlss]) if dlss else
                  _('render {}', '{} render').format(render_height(self.var('render_res').get())),
                  'FSR 1' if self.var('upscaler').get() == 'fsr1' else 'bilinear']
         framegen = self.var('framegen').get()
@@ -1450,8 +1637,11 @@ class Launcher:
     def tune_for_gpu(self, gpu_line):
         """Once per graphics card: a weak one starts at a lower render resolution (the settings
         keep any choice made later, and a resolution chosen before is not replaced)."""
-        name = gpu_line.split(',')[0]
+        name = gpu_line.split(',')[0].strip()
+        self.gpu_name = self.app['gpu_name'] = name
+        self.refresh_gpu_choices()
         if self.app.get('gpu_tuned') == name:
+            self.collect()
             self.refresh_status()
             return
         self.app['gpu_tuned'] = name
@@ -1462,6 +1652,40 @@ class Launcher:
                                ' — {} render chosen for this card (Display & FPS)').format(render[3:] + 'p')
         self.collect()
         self.refresh_status()
+
+    def upscaling_state(self):
+        return {'dlss': self.var('dlss').get(), 'output_res': self.var('output_res').get(),
+                'neo': self.var('neo').get(), 'gpu_name': self.gpu_name}
+
+    def refresh_gpu_choices(self):
+        """The choices that depend on the graphics card: DLSS-G only on an RTX 40/50 (a saved DLSS-G
+        becomes automatic, i.e. FSR 3), DLSS Super Resolution only on an RTX card. An unknown card
+        keeps every choice; the game checks the support again at start."""
+        dlss_g = not self.gpu_name or gpu_has_dlss_g(self.gpu_name)
+        if not dlss_g and self.var('framegen').get() == 'dlss':
+            self.var('framegen').set('auto')
+        for box in self.framegen_boxes:
+            box.set_options(FRAMEGEN if dlss_g else FRAMEGEN_FSR)
+        self.refresh_upscaling()
+
+    def refresh_upscaling(self):
+        """DLSS Super Resolution and the render resolution it overrides: enabled or not, and why."""
+        if not getattr(self, 'dlss_box', None):
+            return
+        blocked = dlss_blocked(self.upscaling_state())
+        self.dlss_box.configure(state='disabled' if blocked else 'readonly')
+        self.dlss_note.configure(text={
+            'gpu': _('Requer uma placa de vídeo NVIDIA GeForce RTX.', 'Requires an NVIDIA GeForce RTX graphics card.'),
+            'output': _('Indisponível numa saída que não seja 16:9 (16:10, 21:9, 32:9).',
+                        'Not available with an output other than 16:9 (16:10, 21:9, 32:9).'),
+            'neo': _('Indisponível com o modo PS4 Pro.', 'Not available with PS4 Pro mode.'),
+        }.get(blocked, ''))
+        active = bool(dlss_mode(self.upscaling_state()))
+        for box in self.render_boxes:
+            box.configure(state='disabled' if active else 'readonly')
+        self.render_note.configure(text=_('Com o DLSS ligado, vale a resolução do modo DLSS escolhido.',
+                                          'While DLSS is on, the resolution of the chosen DLSS mode applies.')
+                                   if active else '')
 
     def collect(self):
         for key, var in self.vars.items():
@@ -1724,9 +1948,10 @@ class Launcher:
         lines = [
             ('✓', _('Jogo: {} (versão {})', 'Game: {} (version {})').format(*info) if info else result['game']),
             ('✓' if result['update'] else '•',
-             _('Atualização: {} (ao lado do jogo)', 'Update: {} (next to the game)').format(Path(result['update']).name)
+             _('Atualização: {}', 'Update: {}').format(near_path(result['update'], Path(result['game']).parent.parent))
              if result['update']
-             else _('Atualização: nenhuma pasta -UPDATE ou -patch', 'Update: no -UPDATE or -patch folder')),
+             else _('Atualização: nenhuma encontrada (-UPDATE, -patch, update ou patch)',
+                    'Update: none found (-UPDATE, -patch, update or patch)')),
             ('✓' if result['dlc_count'] else '•',
              _('DLC: {} encontrada(s)', 'DLC: {} found').format(result['dlc_count']) if result['dlc_count']
              else _('DLC: nenhuma encontrada na pasta do jogo', 'DLC: none found in the game folder')),
@@ -1915,7 +2140,7 @@ class Launcher:
             return
         self.set_log('')
         try:
-            write_key_bindings(self.app.get('keys'))
+            write_key_bindings(self.app.get('keys'), self.app.get('mouse_buttons'))
         except OSError as error:
             self.append(_('Não foi possível gravar as teclas no sotc.ini: {}',
                           'Could not write the keys to sotc.ini: {}').format(error) + '\n')
@@ -1975,6 +2200,7 @@ class Launcher:
                 except Exception:  # noqa: BLE001 - a value the widget does not take
                     continue
                 self.app[key] = saved[key]
+        self.refresh_gpu_choices()
 
     def drain_output(self):
         while not self.ui_calls.empty():
@@ -2185,7 +2411,7 @@ def play_without_window(settings):
     log_dir = user_dir(settings)
     log_dir.mkdir(parents=True, exist_ok=True)
     try:
-        write_key_bindings(settings.get('keys'))
+        write_key_bindings(settings.get('keys'), settings.get('mouse_buttons'))
     except OSError:
         pass
     with open_session_log(log_dir) as log:

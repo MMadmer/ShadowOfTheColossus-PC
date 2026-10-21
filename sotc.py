@@ -121,8 +121,20 @@ def fingerprint(game, modules):
     return digest.hexdigest()
 
 
+def is_game_patch(folder):
+    """True for an update of this game: its param.sfo says TITLE_ID CUSA08809, CATEGORY gp*."""
+    try:
+        sys.path.insert(0, str(PORT / 'scripts'))
+        from prepare import sfo
+        values = sfo((folder / 'sce_sys' / 'param.sfo').read_bytes())
+    except (OSError, ValueError, ImportError):
+        return False
+    return values.get('TITLE_ID') == 'CUSA08809' and str(values.get('CATEGORY', '')).startswith('gp')
+
+
 def game_update(game):
-    """The game update next to the dump, as shadPS4 uses it (<game>-UPDATE or <game>-patch), or
+    """The game update next to the dump, as shadPS4 uses it (<game>-UPDATE or <game>-patch), else
+    an update or patch folder in the dump or next to it that is a patch of the game (#66), or
     SOTC_UPDATE_DIR; None without one."""
     named = os.environ.get('SOTC_UPDATE_DIR')
     if named:
@@ -131,6 +143,11 @@ def game_update(game):
         folder = game.with_name(game.name + suffix)
         if folder.is_dir():
             return folder
+    for base in (game, game.parent):
+        for name in ('update', 'patch'):
+            folder = base / name
+            if folder.is_dir() and is_game_patch(folder):
+                return folder
     return None
 
 

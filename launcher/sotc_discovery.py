@@ -143,13 +143,31 @@ def find_game_in(folder):
     return games[0] if games else None
 
 
+def is_game_patch(folder):
+    """True for an update folder of the game: param.sfo with TITLE_ID CUSA08809 and a patch
+    CATEGORY ('gp', game patch)."""
+    try:
+        from prepare import sfo
+        values = sfo((Path(folder) / 'sce_sys' / 'param.sfo').read_bytes())
+    except (OSError, ValueError, ImportError):
+        return False
+    return values.get('TITLE_ID') == GAME_ID and str(values.get('CATEGORY', '')).startswith('gp')
+
+
 def find_update(game_dir):
-    """The update folder next to the base game (<game>-UPDATE or <game>-patch, as shadPS4)."""
+    """The update folder of the base game: <game>-UPDATE or <game>-patch next to it (as shadPS4),
+    else an update / patch folder inside the game folder or next to it (#66), when its param.sfo
+    says it is a patch of the game."""
     game_dir = Path(game_dir)
     for suffix in UPDATE_SUFFIXES:
         folder = game_dir.with_name(game_dir.name + suffix)
         if folder.is_dir():
             return str(folder)
+    for base in (game_dir, game_dir.parent):
+        for name in ('update', 'patch'):
+            folder = base / name
+            if folder.is_dir() and is_game_patch(folder):
+                return str(folder)
     return ''
 
 
