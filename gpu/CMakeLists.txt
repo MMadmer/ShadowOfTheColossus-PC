@@ -10,8 +10,10 @@ if (NOT CMAKE_BUILD_TYPE)
 endif()
 # Frame pointers keep the loader's thread dumps (watchdog, SIGUSR2 sampling) walkable.
 add_compile_options(-fno-omit-frame-pointer)
-# sotc: the port already requires a Haswell / Zen CPU (BMI1/LZCNT/MOVBE check in probe.c), which
-# all have x86-64-v3 (AVX2, BMI2, FMA): use it. BB_MARCH="" builds for any x86-64.
+# sotc: x86-64-v3 (AVX2, BMI1/2, FMA: Haswell / Excavator / Zen and newer). build.sh also builds
+# bb-probe-compat.exe with BB_MARCH=x86-64-v2 for older AVX CPUs, whose BMI1/LZCNT/MOVBE uses in
+# the game are emulated (probe.c); sotc.py picks the one the CPU runs. BB_MARCH="" builds for any
+# x86-64.
 set(BB_MARCH "x86-64-v3" CACHE STRING "-march for the port (empty: none)")
 if (BB_MARCH)
     add_compile_options(-march=${BB_MARCH} -mtune=skylake)

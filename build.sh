@@ -34,6 +34,21 @@ MINGW*|MSYS*)
     fi
     cp out/gpu/bb-probe.exe out/gpu/bb-gpu-capabilities.exe out/
     echo "Built $PWD/out/bb-probe.exe"
+    # sotc: the same build for CPUs without x86-64-v3 (AVX2, BMI1/2, FMA: Sandy/Ivy Bridge, AMD
+    # FX), whose BMI1/LZCNT/MOVBE uses in the game are emulated; sotc.py starts it on those CPUs.
+    # The GPU probe the launcher runs comes from it. BB_COMPAT=0 skips it.
+    if [[ ${BB_COMPAT:-1} != 0 ]]; then
+        cmake -S gpu -B out/gpu-compat -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBB_PGO="$pgo" \
+            -DBB_PGO_DIR="$PWD/pgo" -DBB_LTO="${BB_LTO:-ON}" -DBB_MARCH=x86-64-v2 \
+            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_RC_COMPILER=llvm-windres >/dev/null
+        if ! ninja -C out/gpu-compat bb-probe bb-gpu-capabilities > out/gpu-compat-build.log 2>&1; then
+            grep -v '^\[' out/gpu-compat-build.log | tail -40 >&2
+            echo 'x86-64-v2 build failed (full log: out/gpu-compat-build.log)' >&2; exit 1
+        fi
+        cp out/gpu-compat/bb-probe.exe out/bb-probe-compat.exe
+        cp out/gpu-compat/bb-gpu-capabilities.exe out/
+        echo "Built $PWD/out/bb-probe-compat.exe (x86-64-v2)"
+    fi
     exit 0
     ;;
 esac

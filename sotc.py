@@ -20,7 +20,12 @@ Settings (environment variables, or sotc.ini beside this script as NAME=value li
                       fps60game (the game's own 60 FPS target, as the PS4 Pro Performance mode;
                       with SOTC_FPS_CAP=off),
                       res720/res810/res900/res960 (render below 1080p, the game scales up; a
-                      render size of another shape, SOTC_RENDER_RES, takes their place)
+                      render size of another shape, SOTC_RENDER_RES, takes their place);
+                      res360/res540/res630 are the DLSS modes' sizes
+    SOTC_DLSS         off, quality, balanced, performance, ultra or dlaa: NVIDIA DLSS Super
+                      Resolution upscales the render (GeForce RTX; with a res<height> mode)
+    SOTC_PROBE_COMPAT 1 starts bb-probe-compat.exe (x86-64-v2), 0 bb-probe.exe (x86-64-v3); by
+                      default the one the CPU runs
     SOTC_RENDER_RES   optional: the game renders at WxH instead of 1920x1080 (e.g. 2560x1080 for
                       21:9, a wider view); the output follows its aspect; PS4 mode only; at most 1080
                       lines tall and 4.2 million pixels, larger sizes are scaled down
@@ -67,12 +72,69 @@ def no_console():
     return 0 if ctypes.windll.kernel32.GetConsoleWindow() else subprocess.CREATE_NO_WINDOW
 
 
+def cpu_runs_x86_64_v3():
+    """Whether the CPU has x86-64-v3 (AVX2, BMI1/2, FMA, F16C, LZCNT, MOVBE, YMM state saved by
+    Windows), which bb-probe.exe is built for; None when CPUID cannot be run."""
+    import ctypes
+    kernel32 = ctypes.windll.kernel32
+    kernel32.VirtualAlloc.restype = ctypes.c_void_p
+    kernel32.VirtualAlloc.argtypes = (ctypes.c_void_p, ctypes.c_size_t, ctypes.c_uint32, ctypes.c_uint32)
+    kernel32.VirtualFree.argtypes = (ctypes.c_void_p, ctypes.c_size_t, ctypes.c_uint32)
+    # cpuid(leaf, subleaf, u32 out[4]): push rbx; mov eax,ecx; mov ecx,edx; cpuid; mov [r8],eax;
+    # mov [r8+4],ebx; mov [r8+8],ecx; mov [r8+12],edx; pop rbx; ret. At +24 xgetbv(0): xor ecx,ecx;
+    # xgetbv; shl rdx,32; or rax,rdx; ret.
+    code = bytes.fromhex('5389c889d10fa241890041895804418948084189500c5bc3' '31c90f01d048c1e2204809d0c3')
+    memory = kernel32.VirtualAlloc(None, len(code), 0x3000, 0x40)  # commit + reserve, RWX
+    if not memory:
+        return None
+    try:
+        ctypes.memmove(memory, code, len(code))
+        regs = (ctypes.c_uint32 * 4)()
+        cpuid = ctypes.CFUNCTYPE(None, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p)(memory)
+        xgetbv = ctypes.CFUNCTYPE(ctypes.c_uint64)(memory + 24)
+
+        def leaf(number, sub=0):
+            cpuid(number, sub, ctypes.addressof(regs))
+            return tuple(regs)
+
+        def bits(value, *positions):
+            return all(value >> p & 1 for p in positions)
+
+        top = leaf(0)[0]
+        ext_top = leaf(0x80000000)[0]
+        if top < 7 or ext_top < 0x80000001:
+            return False
+        ecx1 = leaf(1)[2]
+        ebx7 = leaf(7)[1]
+        ecx_ext = leaf(0x80000001)[2]
+        # FMA, MOVBE, OSXSAVE, AVX, F16C; then BMI1, AVX2, BMI2; then LZCNT.
+        if not (bits(ecx1, 12, 22, 27, 28, 29) and bits(ebx7, 3, 5, 8) and bits(ecx_ext, 5)):
+            return False
+        return xgetbv() & 6 == 6  # XMM and YMM state
+    except OSError:
+        return None
+    finally:
+        kernel32.VirtualFree(memory, 0, 0x8000)  # release
+
+
 def find_probe():
-    name = 'bb-probe.exe' if os.name == 'nt' else 'bb-probe'  # Linux: run.sh builds out/bb-probe
-    for candidate in (PORT / 'bin' / name, PORT / 'out' / name):
-        if candidate.is_file():
-            return candidate
-    fail(f'{name} not found: build it with build.sh (MSYS2 CLANG64 on Windows) or use a packaged build.')
+    if os.name != 'nt':
+        names = ['bb-probe']  # Linux: run.sh builds out/bb-probe
+    else:
+        # bb-probe-compat.exe (x86-64-v2) for older CPUs; SOTC_PROBE_COMPAT=1 or 0 forces the choice.
+        forced = os.environ.get('SOTC_PROBE_COMPAT', '')
+        v3 = forced != '1' if forced in ('0', '1') else cpu_runs_x86_64_v3()
+        if v3 is None:
+            import ctypes
+            v3 = bool(ctypes.windll.kernel32.IsProcessorFeaturePresent(40))  # PF_AVX2_INSTRUCTIONS_AVAILABLE
+        names = ['bb-probe.exe'] if v3 else ['bb-probe-compat.exe', 'bb-probe.exe']
+    for name in names:
+        for candidate in (PORT / 'bin' / name, PORT / 'out' / name):
+            if candidate.is_file():
+                if name == 'bb-probe-compat.exe':
+                    print('CPU without x86-64-v3 (AVX2, BMI2, FMA): starting the x86-64-v2 build')
+                return candidate
+    fail(f'{names[-1]} not found: build it with build.sh (MSYS2 CLANG64 on Windows) or use a packaged build.')
 
 
 # Above about 4.2 million rendered pixels the fine detail textures (ground, cloth) shimmer, flicker

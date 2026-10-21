@@ -35,5 +35,7 @@ rm -f pgo/*.profraw
 restore
 echo "Profile: $PWD/pgo/bbgpu.profdata"
 # Ninja does not track the profile file: recompile everything with the new one.
-[[ -d out/gpu ]] && ninja -C out/gpu -t clean >/dev/null
+for tree in out/gpu out/gpu-compat; do
+    [[ -d $tree ]] && ninja -C "$tree" -t clean >/dev/null
+done
 bash build.sh

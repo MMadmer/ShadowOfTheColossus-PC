@@ -8,7 +8,8 @@ set -euo pipefail
 cd -- "$(dirname -- "$0")/../.."
 export MSYS2_ROOT=${MSYS2_ROOT:-/c/msys64}
 export PATH="$MSYS2_ROOT/clang64/bin:$MSYS2_ROOT/usr/bin:$PATH"
-[[ -f out/bb-probe.exe && -f out/bb-gpu-capabilities.exe ]] || { echo 'Build first: bash build.sh' >&2; exit 1; }
+[[ -f out/bb-probe.exe && -f out/bb-probe-compat.exe && -f out/bb-gpu-capabilities.exe ]] ||
+    { echo 'Build first: bash build.sh (with the x86-64-v2 build, BB_COMPAT=1)' >&2; exit 1; }
 python=${WINPYTHON:-/c/PyBuild312/python.exe}
 "$python" -m PyInstaller --version >/dev/null || { echo "Need PyInstaller in $python (WINPYTHON)" >&2; exit 1; }
 # The scripts run inside SotC.exe (--script): the standard modules they import come along.
@@ -29,11 +30,11 @@ cp launcher/sotc.ico launcher/sotc.png launcher/window_icon.png "$dest/launcher/
 # Xbox-style button icons drawn for the port (tools/make_button_icons.py).
 cp -r glyphs "$dest/"
 # Without debug information (out/ keeps the symbols for crash reports).
-for exe in bb-probe.exe bb-gpu-capabilities.exe; do
+for exe in bb-probe.exe bb-probe-compat.exe bb-gpu-capabilities.exe; do
     llvm-strip --strip-debug -o "$dest/bin/$exe" "out/$exe"
 done
 # Every DLL the loader takes from the CLANG64 tree (SDL3, FFmpeg, Vulkan loader, ...).
-ldd "$dest/bin/bb-probe.exe" "$dest/bin/bb-gpu-capabilities.exe" | awk '/\/clang64\/bin\// {print $3}' | sort -u | while read -r dll; do
+ldd "$dest/bin/bb-probe.exe" "$dest/bin/bb-probe-compat.exe" "$dest/bin/bb-gpu-capabilities.exe" | awk '/\/clang64\/bin\// {print $3}' | sort -u | while read -r dll; do
     cp -u "$dll" "$dest/bin/"
 done
 # DLSS Frame Generation (RTX 40/50): the official NVIDIA Streamline runtime next to bb-probe.exe,
