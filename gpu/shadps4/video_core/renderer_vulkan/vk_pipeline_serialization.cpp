@@ -550,6 +550,9 @@ void PipelineCache::WarmUp() {
         }
     }
     preload_computes.clear();
+    // sotc: the saver checks the driver cache once the preload is done (SaveDriverCache only
+    // writes it when the driver added to it).
+    new_since_driver_save.fetch_add(1, std::memory_order_relaxed);
 
     LOG_INFO(Render,
              "Preloaded {} pipelines in {} ms (SPIR-V reads {} ms, shader modules {} ms, "

@@ -635,6 +635,7 @@ void PipelineCache::CollectAsyncPipelines() {
             if (!job->preloaded) {
                 RegisterPipelineData(job->key, job->hash, job->sdata);
                 ++num_new_pipelines;
+                new_since_driver_save.fetch_add(1, std::memory_order_relaxed);
             }
             continue;
         }
@@ -643,6 +644,8 @@ void PipelineCache::CollectAsyncPipelines() {
             // it compiles it, as when WarmUp builds it itself and it fails.
             if (job->pipeline->Handle()) {
                 it.value() = std::move(job->pipeline);
+                // sotc: a preloaded pipeline the driver had to compile again adds to its cache.
+                new_since_driver_save.fetch_add(1, std::memory_order_relaxed);
             } else {
                 graphics_pipelines.erase(it);
             }
