@@ -203,22 +203,24 @@ TK_TO_SDL = {
     'KP_Add': 'Keypad +', 'KP_Subtract': 'Keypad -', 'KP_Multiply': 'Keypad *', 'KP_Divide': 'Keypad /',
     'KP_Decimal': 'Keypad .',
 }
-GPU_SUBMIT = [('auto', ('Automático (ligado em NVIDIA)', 'Automatic (on with NVIDIA)')),
-              ('on', ('Ligado em qualquer placa (AMD/Intel: experimental)', 'On with any card (AMD/Intel: experimental)')),
+# Automatic: on with NVIDIA, off on AMD/Intel (game_environment).
+GPU_SUBMIT = [('auto', ('Automático', 'Automatic')),
+              ('on', ('Sempre ligado', 'Always on')),
               ('off', ('Desligado', 'Off'))]
 # Video memory use (#143): (texture collection from % of the card's budget, arena release from MB; 0 = never).
-VRAM_USE = [('low', ('Econômico (placas de 4–6 GB)', 'Economy (4–6 GB cards)')),
+VRAM_USE = [('low', ('Baixo (4–6 GB)', 'Low (4–6 GB)')),
             ('normal', ('Padrão', 'Default')),
-            ('high', ('Alto (placas de 8–12 GB)', 'High (8–12 GB cards)')),
-            ('max', ('Máximo (placas de 16 GB ou mais)', 'Maximum (16 GB cards or more)'))]
+            ('high', ('Alto (8–12 GB)', 'High (8–12 GB)')),
+            ('max', ('Máximo (16 GB ou mais)', 'Maximum (16 GB or more)'))]
 # Far sun shadows drawn on alternate frames (SOTC_SHADOW_REUSE): more FPS, but they may blink (#178).
-SHADOW_REUSE = [('0', ('Desligado (sombras sem piscar)', 'Off (no blinking shadows)')),
-                ('1', ('Ligado (mais FPS; sombras distantes podem piscar)', 'On (more FPS; far shadows may blink)')),
-                ('auto', ('Automático (ligado na NVIDIA, desligado na AMD/Intel)', 'Automatic (on with NVIDIA, off on AMD/Intel)'))]
+# Automatic: on with NVIDIA, off on AMD/Intel.
+SHADOW_REUSE = [('0', ('Desligado', 'Off')),
+                ('1', ('Ligado', 'On')),
+                ('auto', ('Automático', 'Automatic'))]
 VOLUME = [('100', ('100% (original)', '100% (original)')), ('150', ('150%', '150%')),
-          ('200', ('200%', '200%')), ('300', ('300% (máximo)', '300% (maximum)'))]
+          ('200', ('200%', '200%')), ('300', ('300%', '300%'))]
 # Controller rumble strength (SOTC_VIBRATION, src/runtime_pad.c).
-VIBRATION = [('0', ('0% (desligada)', '0% (off)')), ('25', ('25%', '25%')), ('50', ('50%', '50%')),
+VIBRATION = [('0', ('Desligada', 'Off')), ('25', ('25%', '25%')), ('50', ('50%', '50%')),
              ('75', ('75%', '75%')), ('100', ('100% (padrão)', '100% (default)'))]
 VRAM_LIMITS = {'low': ('50', '1024'), 'normal': ('60', '1536'), 'high': ('75', '4096'), 'max': ('85', '0')}
 
@@ -289,7 +291,7 @@ def bind_mouse_button(custom, name, button):
     custom[name] = button
     return {k: v for k, v in custom.items() if v != MOUSE_DEFAULTS.get(k, '')}
 # Engine effects verified to change the image when set on the command line (A/B, 08/10/2026).
-EFFECTS = [('fx_vignette', ('Vinheta (cantos escurecidos)', 'Vignette (darkened corners)'),
+EFFECTS = [('fx_vignette', ('Vinheta', 'Vignette'),
             'r_vignetteOverrideEnable=1 r_vignetteEnable=0'),
            ('fx_fog', ('Névoa atmosférica', 'Atmospheric fog'), 'fog_enable=0'),
            ('fx_ssao', ('Oclusão ambiente (SSAO)', 'Ambient occlusion (SSAO)'), 'AO_Mode=0')]
@@ -304,10 +306,10 @@ OUTPUTS = [('1280x720', ('1280 × 720 (16:9, 720p)', '1280 × 720 (16:9, 720p)')
 # Engine render resolution (scripts/sotc_modes.py res<height>): the frame is scaled up to the 1080p
 # display buffer by the game itself, as the PS4 Pro does from 1440p to 4K. A render size of another
 # shape (SOTC_RENDER_RES, outputs other than 16:9) takes its place.
-RENDER_RES = [('', ('1080p (nativa, como no PS4)', '1080p (native, as on PS4)')),
-              ('res900', ('900p (GPUs fracas)', '900p (weak GPUs)')),
+RENDER_RES = [('', ('1080p (nativa)', '1080p (native)')),
+              ('res900', ('900p', '900p')),
               ('res810', ('810p', '810p')),
-              ('res720', ('720p (GPU muito fraca)', '720p (very weak GPU)'))]
+              ('res720', ('720p', '720p'))]
 
 
 def render_height(key):
@@ -383,25 +385,26 @@ def dlss_mode(s):
 
 
 # Button icons in the game (SOTC_PAD_GLYPHS, gpu texture_cache/sotc_pad_glyphs.cpp).
-PAD_GLYPHS = [('', ('Automáticos (do dispositivo em uso)', 'Automatic (the device in use)')),
-              ('xbox', ('Sempre Xbox', 'Always Xbox')),
-              ('ps', ('Sempre PlayStation', 'Always PlayStation')),
-              ('keyboard', ('Sempre teclado e mouse', 'Always keyboard and mouse'))]
-UPSCALERS = [('fsr1', ('FSR 1 (AMD, qualquer placa)', 'FSR 1 (AMD, any GPU)')),
-             ('bilinear', ('Bilinear (simples)', 'Bilinear (plain)'))]
+# Automatic: the icons of the device in use.
+PAD_GLYPHS = [('', ('Automático', 'Automatic')),
+              ('xbox', ('Xbox', 'Xbox')),
+              ('ps', ('PlayStation', 'PlayStation')),
+              ('keyboard', ('Teclado e mouse', 'Keyboard and mouse'))]
+UPSCALERS = [('fsr1', ('AMD FSR 1', 'AMD FSR 1')),
+             ('bilinear', ('Bilinear', 'Bilinear'))]
 # Frame rate: 30 (the game's cap, as on PS4), 60 (the game's own 60 FPS mode, that of the PS4 Pro
 # Performance mode, at most one frame per two 120 Hz vblanks: SOTC_FPS_LIMIT=60) or unlimited.
-FPS_MODES = [('30', ('30 FPS (como no PS4)', '30 FPS (as on PS4)')),
-             ('60', ('60 FPS (modo 60 do jogo)', "60 FPS (the game's 60 FPS mode)")),
-             ('unlimited', ('Ilimitado (acima de 60)', 'Unlimited (above 60)'))]
-# Frame generation (bb-probe: SOTC_FRAMEGEN; F8 in game switches off / DLSS-G / FSR 3).
+FPS_MODES = [('30', ('30 FPS', '30 FPS')),
+             ('60', ('60 FPS', '60 FPS')),
+             ('unlimited', ('Ilimitado', 'Unlimited'))]
+# Frame generation (bb-probe: SOTC_FRAMEGEN; F8 in game switches off / DLSS-G / FSR 3.1).
+# Automatic: DLSS-G on an RTX 40/50, else FSR 3.1.
 FRAMEGEN = [('off', ('Desligada', 'Off')),
-            ('auto', ('Automática (DLSS-G ou FSR 3, experimental)', 'Automatic (DLSS-G or FSR 3, experimental)')),
-            ('dlss', ('NVIDIA DLSS-G (RTX 40/50)', 'NVIDIA DLSS-G (RTX 40/50)')),
-            ('fsr', ('AMD FSR 3 (qualquer placa)', 'AMD FSR 3 (any GPU)'))]
-# Without DLSS-G (a card known not to be an RTX 40/50): automatic means FSR 3.
-FRAMEGEN_FSR = [FRAMEGEN[0], ('auto', ('Automática (FSR 3, experimental)', 'Automatic (FSR 3, experimental)')),
-                FRAMEGEN[3]]
+            ('auto', ('Automática', 'Automatic')),
+            ('dlss', ('NVIDIA DLSS-G', 'NVIDIA DLSS-G')),
+            ('fsr', ('AMD FSR 3.1', 'AMD FSR 3.1'))]
+# Without DLSS-G (a card known not to be an RTX 40/50): automatic means FSR 3.1.
+FRAMEGEN_FSR = [FRAMEGEN[0], FRAMEGEN[1], FRAMEGEN[3]]
 SHARPNESS = [('0', ('Alta', 'High')), ('250', ('Média (padrão)', 'Medium (default)')), ('600', ('Baixa', 'Low')),
              ('off', ('Desligada', 'Off'))]
 MOUSE_SENS = [('0.5', ('0,5 (lenta)', '0.5 (slow)')), ('0.75', ('0,75', '0.75')), ('1.0', ('1,0 (padrão)', '1.0 (default)')),
@@ -410,16 +413,16 @@ MOUSE_SENS = [('0.5', ('0,5 (lenta)', '0.5 (slow)')), ('0.75', ('0,75', '0.75'))
 WINDOW_MODES = [('windowed', ('Janela', 'Windowed')),
                 ('borderless', ('Tela cheia em janela', 'Borderless fullscreen')),
                 ('fullscreen', ('Tela cheia', 'Fullscreen'))]
-PRESENT_MODES = [('Mailbox', ('Mailbox (baixa latência, sem cortes)', 'Mailbox (low latency, no tearing)')),
+PRESENT_MODES = [('Mailbox', ('Mailbox (baixa latência)', 'Mailbox (low latency)')),
                  ('Fifo', ('FIFO (VSync)', 'FIFO (VSync)')),
-                 ('Immediate', ('Immediate (pode cortar a imagem)', 'Immediate (tearing)'))]
+                 ('Immediate', ('Immediate (sem VSync)', 'Immediate (no VSync)'))]
 # System language (BB_LANGUAGE, PS4 ids); '' keeps the game's own choice.
 LANGUAGES = [('', ('Automático (o do Windows)', 'Automatic (Windows\' language)')),
              ('7', ('Português (Portugal)', 'Portuguese (Portugal)')), ('15', ('Português (Brasil)', 'Portuguese (Brazil)')),
              ('1', ('Inglês', 'English')), ('3', ('Espanhol', 'Spanish')), ('2', ('Francês', 'French')),
              ('4', ('Alemão', 'German')), ('5', ('Italiano', 'Italian')), ('8', ('Russo', 'Russian')),
              ('0', ('Japonês', 'Japanese'))]
-READBACKS = [('', ('Precisas (padrão; o jogo precisa)', 'Precise (default; the game needs them)')),
+READBACKS = [('', ('Precisas (padrão)', 'Precise (default)')),
              ('1', ('Relaxadas (pode travar)', 'Relaxed (may hang)'))]
 # Each language by its own name (a plain string: not translated).
 UI_LANGUAGES = [('', ('Automático', 'Automatic')), ('en', 'English'), ('es', 'Español'), ('pt', 'Português'),
@@ -700,7 +703,7 @@ def game_environment(s):
         env['SOTC_NOTE'] = f"{env['SOTC_OUTPUT_RES']} is wider than 16:9: PS4 Pro mode off (it renders 16:9 only)"
     framegen = s.get('framegen') or 'off'
     if framegen == 'dlss' and s.get('gpu_name') and not gpu_has_dlss_g(s['gpu_name']):
-        framegen = 'auto'  # FSR 3 on a card without DLSS-G
+        framegen = 'auto'  # FSR 3.1 on a card without DLSS-G
     env['SOTC_FRAMEGEN'] = framegen
     # sotc: high quality textures: the texture banks sampled since the last report read as sampled
     # (sotc_lod_stats.h; before, none ever did and the game never streamed its fine mips: blurry
@@ -987,15 +990,10 @@ class Launcher:
             if chosen:
                 var.set(str(Path(chosen)))
         ttk.Button(holder, text=_('Escolher imagem…', 'Choose picture…'), command=browse).pack(side='left', padx=(6, 0))
-        ttk.Button(holder, text=_('Usar o do jogo', "Use the game's"), command=lambda: var.set('game')).pack(side='left', padx=(6, 0))
+        ttk.Button(holder, text=_('Ícone do jogo', 'Game icon'), command=lambda: var.set('game')).pack(side='left', padx=(6, 0))
         ttk.Button(holder, text=_('Padrão', 'Default'), command=lambda: var.set('')).pack(side='left', padx=(6, 0))
-        return self.row(parent, _('Ícone da janela do jogo', "Game window's icon"), holder,
-                        _('Padrão: o desenho do port (o menino erguendo a espada). "game": o ícone do próprio jogo. '
-                          'Ou escolha uma imagem sua (PNG/JPG): ela é recortada em quadrado no centro. Vale na '
-                          'próxima vez que o jogo abrir.',
-                          'Default: the port\'s drawing (the boy raising his sword). "game": the game\'s own icon. '
-                          'Or choose a picture of yours (PNG/JPG): it is cropped to a centred square. Applies the '
-                          'next time the game starts.'))
+        return self.row(parent, _('Ícone da janela', 'Window icon'), holder,
+                        _('Aplica-se no próximo início do jogo.', 'Applies the next time the game starts.'))
 
     def folder(self, parent, key, title, prompt, hint=None, on_change=None):
         ttk = self.ttk
@@ -1047,7 +1045,7 @@ class Launcher:
                  font=(ui_font(), 9)).pack(anchor='w', padx=22, pady=(2, 20))
         self.nav, self.current_page = {}, None
         for name, title in (('play', _('Jogar', 'Play')), ('game', _('Jogo e saves', 'Game & saves')),
-                            ('graphics', _('Imagem e FPS', 'Display & FPS')), ('controls', _('Controles', 'Controls')),
+                            ('graphics', _('Gráficos', 'Graphics')), ('controls', _('Controles', 'Controls')),
                             ('advanced', _('Avançado', 'Advanced'))):
             item = tk.Label(side, text='    ' + title, bg=BG, fg=TEXT, anchor='w', font=(ui_font(), 11),
                             pady=10, cursor='hand2')
@@ -1122,7 +1120,7 @@ class Launcher:
         body.columnconfigure(1, weight=2)
         info = ttk.Frame(body)
         info.grid(row=0, column=0, sticky='nw', padx=(0, 24))
-        ttk.Label(info, text=_('Verificação', 'Ready check'), style='Section.TLabel').pack(anchor='w', pady=(0, 6))
+        ttk.Label(info, text=_('Estado', 'Status'), style='Section.TLabel').pack(anchor='w', pady=(0, 6))
         self.checks = {}
         for key in ('game', 'dlc', 'sound', 'saves', 'gpu'):
             self.checks[key] = ttk.Label(info, text='', justify='left', wraplength=self.px(440))
@@ -1134,13 +1132,13 @@ class Launcher:
         self.render_boxes.append(self.row(quick, _('Render', 'Render'), self.choice(quick, 'render_res', RENDER_RES, 24)))
         self.row(quick, _('Saída', 'Output'), self.choice(quick, 'output_res', OUTPUTS, 24))
         self.row(quick, _('Upscaler', 'Upscaler'), self.choice(quick, 'upscaler', UPSCALERS, 24))
-        self.row(quick, _('Nitidez (RCAS)', 'Sharpening (RCAS)'), self.choice(quick, 'sharpness', SHARPNESS, 24))
+        self.row(quick, _('Nitidez', 'Sharpening'), self.choice(quick, 'sharpness', SHARPNESS, 24))
         self.framegen_boxes.append(self.row(quick, _('Geração de quadros', 'Frame generation'),
                                             self.choice(quick, 'framegen', FRAMEGEN, 24)))
         self.row(quick, _('FPS', 'FPS'), self.choice(quick, 'fps_mode', FPS_MODES, 24))
-        self.check(quick, 'af16', _('Texturas nítidas (filtro 16x)', 'Sharp textures (16x filtering)'))
+        self.check(quick, 'af16', _('Filtragem anisotrópica 16x', '16x anisotropic filtering'))
         self.check(quick, 'hq_textures', _('Texturas em alta qualidade', 'High quality textures'))
-        self.row(quick, _('Modo', 'Mode'), self.choice(quick, 'window_mode', WINDOW_MODES, 24))
+        self.row(quick, _('Modo de exibição', 'Display mode'), self.choice(quick, 'window_mode', WINDOW_MODES, 24))
         self.check(quick, 'neo', _('Modo PS4 Pro', 'PS4 Pro mode'))
         for key in ('af16', 'hq_textures', 'fps_mode', 'window_mode', 'neo', 'output_res', 'render_res', 'upscaler',
                     'sharpness', 'framegen'):
@@ -1167,8 +1165,8 @@ class Launcher:
             c.create_rectangle(0, h - 24, w, h, fill=PANEL, outline='')
         else:
             c.create_text(30, h - 80, text='Shadow of the Colossus', anchor='w', fill='#f2ead9', font=(title_font(), 32))
-            c.create_text(w // 2, h // 2 - 40, text=_('Escolha a pasta do jogo (Jogo e saves)',
-                                                       'Choose your game folder (Game & saves)'),
+            c.create_text(w // 2, h // 2 - 40, text=_('Escolha a pasta do jogo em Jogo e saves.',
+                                                       'Select the game folder in Game & saves.'),
                           fill=MUTED, font=(ui_font(), 11))
         info = game_info(self.var('game_dir').get())
         sub = (_('{} · versão do jogo {}', '{} · game version {}').format(*info) if info
@@ -1188,13 +1186,10 @@ class Launcher:
     def build_game(self):
         ttk = self.ttk
         f = self.scrolled_page('game', _('Jogo e saves', 'Game & saves'),
-                               _('O seu dump do jogo, a pasta dos saves e, se quiser, os módulos de som do seu console.',
-                                 'Your game dump, the saves folder and, if you like, your console\'s sound modules.'))
+                               _('Pasta do jogo, saves e som.', 'Game folder, saves and sound.'))
         self.section(f, _('Biblioteca de jogos', 'Game library'), top=4)
-        self.note(f, _('Como no shadPS4: adicione as pastas onde ficam os seus jogos e escolha o Shadow of the '
-                       'Colossus na lista (duplo clique).',
-                       'As in shadPS4: add the folders that hold your games and pick Shadow of the Colossus in the '
-                       'list (double click).'), top=0)
+        self.note(f, _('Adicione as pastas com os seus jogos e selecione Shadow of the Colossus na lista.',
+                       'Add the folders that contain your games and select Shadow of the Colossus in the list.'), top=0)
         tree_holder = ttk.Frame(f)
         tree_holder.grid(row=self.next_row(f), column=0, columnspan=2, sticky='we', pady=(6, 0))
         style = self.ttk.Style()
@@ -1223,209 +1218,108 @@ class Launcher:
         self.library_label.grid(row=self.next_row(f), column=0, columnspan=2, sticky='w', pady=(4, 0))
         self.section(f, _('Jogo', 'Game'))
         self.folder(f, 'game_dir', _('Pasta do jogo', 'Game folder'), _('Pasta com eboot.bin', 'Folder with eboot.bin'),
-                    _('O dump CUSA08809 (versão europeia 1.01), com eboot.bin, sce_module e sce_sys.',
-                      'The CUSA08809 dump (EU version 1.01) with eboot.bin, sce_module and sce_sys.'),
+                    _('Requer a versão europeia 1.01 (CUSA08809).', 'Requires the European version 1.01 (CUSA08809).'),
                     on_change=self.game_changed)
         self.section(f, _('Som', 'Sound'))
         self.folder(f, 'sys_modules', _('Módulos de som', 'Sound modules'),
                     _('Pasta com libSceNgs2.sprx e libSceUlt.sprx', 'Folder with libSceNgs2.sprx and libSceUlt.sprx'),
-                    _('Opcional: o port tem a sua própria biblioteca de som, que toca todos os sons. Com '
-                      'libSceNgs2.sprx e libSceUlt.sprx do SEU console (decriptados; o shadPS4 os guarda em '
-                      'user/sys_modules) o jogo usa a do console. São firmware da Sony e nunca vêm com o port.',
-                      "Optional: the port has its own sound library, which plays every sound. With libSceNgs2.sprx "
-                      "and libSceUlt.sprx from YOUR console (decrypted; shadPS4 keeps them in user/sys_modules) the "
-                      "game uses the console's instead. They are Sony firmware and never come with the port."),
+                    _('Opcional: libSceNgs2.sprx e libSceUlt.sprx do seu próprio console.',
+                      'Optional: libSceNgs2.sprx and libSceUlt.sprx from your own console.'),
                     on_change=self.refresh_status)
-        self.row(f, _('Volume', 'Volume'), self.choice(f, 'volume', VOLUME),
-                 _('Aumenta o som do jogo, que sai baixo. Acima de 100% os picos são suavizados em vez de '
-                   'estourar. No jogo, o modo de alto-falante "TV" também deixa o som mais alto.',
-                   'Raises the game sound, which is quiet. Above 100% the peaks are softened instead of '
-                   'clipping. In game, the "TV" speaker mode is louder too.'))
+        self.row(f, _('Volume', 'Volume'), self.choice(f, 'volume', VOLUME))
         self.section(f, _('DLC', 'DLC'))
         self.folder(f, 'dlc_dir', _('Pasta de DLC', 'DLC folder'), _('Pasta com as DLCs do jogo', "Folder with the game's DLC"),
-                    _('Como no shadPS4: uma pasta com uma subpasta por DLC (cada uma com sce_sys/param.sfo), ou a '
-                      'pasta addcont do shadPS4 (que tem a subpasta CUSA08809). Vazio = sem DLC.',
-                      "As in shadPS4: a folder with one subfolder per DLC (each with sce_sys/param.sfo), or "
-                      "shadPS4's addcont folder (which holds the CUSA08809 subfolder). Empty = no DLC."),
-                    on_change=self.refresh_status)
+                    _('Opcional.', 'Optional.'), on_change=self.refresh_status)
         self.section(f, _('Saves', 'Saves'))
         self.folder(f, 'user_dir', _('Pasta de dados', 'Data folder'), _('Pasta dos saves', 'Saves folder'),
-                    _('Saves, cache de shaders e capturas. Vazio = a pasta user ao lado do port.',
-                      'Saves, shader cache and screenshots. Empty = the user folder next to the port.'),
+                    _('Saves, cache de shaders e capturas de tela.', 'Saves, shader cache and screenshots.'),
                     on_change=self.refresh_status)
         holder = ttk.Frame(f)
         holder.grid(row=self.next_row(f), column=0, columnspan=2, sticky='w', pady=(10, 0))
         ttk.Button(holder, text=_('Importar save do shadPS4…', 'Import a shadPS4 save…'), command=self.import_save).pack(side='left')
-        ttk.Label(holder, text=_('Copia a pasta savedata/CUSA08809 do shadPS4 para cá.',
-                                 'Copies shadPS4\'s savedata/CUSA08809 folder here.'), style='Muted.TLabel').pack(side='left', padx=10)
         self.section(f, _('Sistema', 'System'))
-        self.row(f, _('Idioma do sistema', 'System language'), self.choice(f, 'language', LANGUAGES),
-                 _('O idioma que o jogo vê no "console".', 'The language the game sees on the "console".'))
+        self.row(f, _('Idioma do jogo', 'Game language'), self.choice(f, 'language', LANGUAGES))
         self.row(f, _('Nome do jogador', 'Player name'), ttk.Entry(f, textvariable=self.var('player_name'), width=30))
 
     def build_graphics(self):
-        f = self.scrolled_page('graphics', _('Imagem e FPS', 'Display & FPS'),
-                               _('Os modos vêm do fork shadPS4 SotC e valem para a versão EU 1.01.',
-                                 'The modes come from the shadPS4 SotC fork and apply to EU version 1.01.'))
-        self.section(f, _('Modos', 'Modes'), top=4)
-        self.check(f, 'af16', _('Texturas nítidas (filtro anisotrópico 16x)', 'Sharp textures (16x anisotropic filtering)'),
-                   _('Chão, grama e rochas ficam nítidos à distância, quase sem custo.',
-                     'Ground, grass and rocks stay sharp at a distance, at almost no cost.'))
-        self.row(f, _('FPS', 'FPS'), self.choice(f, 'fps_mode', FPS_MODES),
-                 _('30: o limite do próprio jogo, como no PS4 (a física é feita para ele). 60: sem o limite do '
-                   'jogo, no máximo 60 (40 a 60 conforme a região, num processador rápido). Ilimitado: acima de '
-                   '60 em telas rápidas. Sem o limite, algumas cenas podem se comportar diferente. No jogo, F7 '
-                   'liga e desliga o limite de 30 a qualquer momento.',
-                   '30: the game\'s own cap, as on PS4 (its physics are made for it). 60: the game\'s cap off, at '
-                   'most 60 (40 to 60 depending on the area, with a fast CPU). Unlimited: above 60 on fast '
-                   'screens. Without the cap some scenes may behave differently. In game, F7 turns the 30 FPS '
-                   'cap on and off at any time.'))
+        f = self.scrolled_page('graphics', _('Gráficos', 'Graphics'),
+                               _('Configurações de imagem e desempenho.', 'Display and performance settings.'))
+        self.section(f, _('Geral', 'General'), top=4)
+        self.check(f, 'af16', _('Filtragem anisotrópica 16x', '16x anisotropic filtering'))
+        self.row(f, _('Limite de FPS', 'Frame rate limit'), self.choice(f, 'fps_mode', FPS_MODES),
+                 _('Acima de 30 FPS, algumas cenas podem se comportar de forma diferente.',
+                   'Above 30 FPS, some scenes may behave differently.'))
         self.framegen_boxes.append(self.choice(f, 'framegen', FRAMEGEN))
         self.row(f, _('Geração de quadros', 'Frame generation'), self.framegen_boxes[-1],
-                 _('Uma imagem gerada entre duas do jogo: com 30 FPS (limite ligado) a tela mostra 60. DLSS-G: '
-                   'NVIDIA RTX 40/50. FSR 3: qualquer placa (RTX 20/30, AMD, Intel). Automática: DLSS-G se a '
-                   'placa tiver, senão FSR 3. Experimental: só faz diferença com o modo 60 FPS desligado, e a '
-                   'barra de vida e de stamina pode tremer (a imagem gerada inclui a interface). '
-                   'No jogo, F8 troca o modo (desligada, DLSS-G, FSR 3). Melhor com '
-                   'a tela a 60 ou 120 Hz, ou G-SYNC/FreeSync.',
-                   'One generated frame between two game frames: at 30 FPS (capped) the screen shows '
-                   '60. DLSS-G: NVIDIA RTX 40/50. FSR 3: any GPU (RTX 20/30, AMD, Intel). Automatic: DLSS-G when '
-                   'the GPU has it, else FSR 3. Experimental: it only matters with the 60 FPS mode off, and the '
-                   'health and stamina bars may shake (the generated frame includes the interface). '
-                   'In game, F8 switches the mode (off, DLSS-G, FSR 3). Best with the '
-                   'screen at 60 or 120 Hz, or G-SYNC/FreeSync.'))
+                 _('Recurso experimental; só tem efeito com o limite de 30 FPS.',
+                   'Experimental feature; effective only with the 30 FPS limit.'))
         self.window_icon_row(f)
         self.section(f, _('Resolução', 'Resolution'))
         self.render_boxes.append(self.choice(f, 'render_res', RENDER_RES))
         self.row(f, _('Resolução de render', 'Render resolution'), self.render_boxes[-1],
-                 _('Abaixo de 1080p o próprio jogo amplia a imagem para 1080p (como o PS4 Pro faz de 1440p para 4K): '
-                   'menos trabalho para placas fracas (GTX 1050: 810p, 1050 Ti: 900p), texturas e névoa iguais, imagem um pouco '
-                   'mais suave. Só na versão EU 1.01 e numa saída 16:9; numa saída de outro formato (16:10, 21:9, '
-                   '32:9) o jogo renderiza no tamanho dela.',
-                   'Below 1080p the game itself scales the frame up to 1080p (as the PS4 Pro does from 1440p to '
-                   '4K): less work for weak cards (GTX 1050: 810p, 1050 Ti: 900p), same textures and fog, a slightly softer '
-                   'image. EU 1.01 and 16:9 outputs only; with another output shape (16:10, 21:9, 32:9) the game '
-                   'renders at the output size.'))
+                 _('Aplica-se apenas a resoluções de saída 16:9.', 'Applies only to 16:9 output resolutions.'))
         self.render_note = self.state_note(f)
         self.dlss_box = self.choice(f, 'dlss', DLSS_MODES)
-        self.row(f, _('Upscaling (DLSS)', 'Upscaling (DLSS)'), self.dlss_box,
-                 _('NVIDIA DLSS Super Resolution: o jogo renderiza num tamanho menor e o DLSS reconstrói a imagem '
-                   'em 1080p, com mais detalhe que a resolução de render simples. Substitui a resolução de render. '
-                   'Só numa saída 16:9 e sem o modo PS4 Pro. Ao abrir, o jogo confere o suporte de novo e, sem '
-                   'ele, mostra a imagem normal.',
-                   'NVIDIA DLSS Super Resolution: the game renders at a smaller size and DLSS rebuilds the image '
-                   'at 1080p, with more detail than the plain render resolution. It replaces the render '
-                   'resolution. 16:9 outputs only, without PS4 Pro mode. At start the game checks the support '
-                   'again and shows the plain image without it.'))
+        self.row(f, 'NVIDIA DLSS', self.dlss_box,
+                 _('Substitui a resolução de render.', 'Replaces the render resolution.'))
         self.dlss_note = self.state_note(f)
-        self.row(f, _('Saída', 'Output'), self.choice(f, 'output_res', OUTPUTS),
-                 _('O jogo renderiza nesse tamanho; acima de cerca de 4,2 milhões de pixels (4K, 3440 × 1440) num '
-                   'tamanho menor, que o upscaler amplia: maior que isso, os detalhes finos das texturas somem. '
-                   'Mais largo que 16:9 (21:9, 32:9) mostra mais dos lados (Hor+), sem esticar; menus e vídeos '
-                   'podem ficar esticados. 720p renderiza em 1080p; o modo PS4 Pro usa os tamanhos do Pro. '
-                   'Num monitor menor que a saída, a janela cabe na tela e a tela cheia usa o monitor todo.',
-                   'The game renders at this size; above about 4.2 million pixels (4K, 3440 × 1440) at a smaller '
-                   'size that the upscaler enlarges: larger than that, the fine texture detail disappears. Wider '
-                   'than 16:9 (21:9, 32:9) shows more at the sides (Hor+), not stretched; menus and videos may '
-                   'look stretched. 720p renders at 1080p; PS4 Pro mode uses the Pro sizes. On a monitor smaller '
-                   'than the output the window fits the screen and fullscreen uses the whole monitor.'))
+        self.row(f, _('Resolução de saída', 'Output resolution'), self.choice(f, 'output_res', OUTPUTS),
+                 _('Em telas ultralargas, menus e vídeos podem aparecer esticados.',
+                   'On ultrawide screens, menus and videos may appear stretched.'))
         self.row(f, _('Upscaler', 'Upscaler'), self.choice(f, 'upscaler', UPSCALERS),
-                 _('FSR 1 amplia com bordas nítidas (acima de 1080p).', 'FSR 1 upscales with sharp edges (above 1080p).'))
-        self.row(f, _('Nitidez (RCAS)', 'Sharpening (RCAS)'), self.choice(f, 'sharpness', SHARPNESS))
+                 _('Usado em resoluções de saída acima de 1080p.', 'Used for output resolutions above 1080p.'))
+        self.row(f, _('Nitidez', 'Sharpening'), self.choice(f, 'sharpness', SHARPNESS))
         self.section(f, _('Modo PS4 Pro', 'PS4 Pro mode'))
-        self.check(f, 'neo', _('Apresentar-se como PS4 Pro', 'Present as a PS4 Pro'),
-                   _('O jogo passa a oferecer, no menu Opções > Apresentação, o Modo Grafismo do PS4 Pro: '
-                     'Cinematográfico (1440p, mais detalhe) ou Desempenho. Mais pesado: no campo aberto mediu ~25 FPS '
-                     'contra ~38 no modo normal.',
-                     'The game then offers, in Options > Presentation, the PS4 Pro graphics mode: Cinematic '
-                     '(1440p, more detail) or Performance. Heavier: ~25 FPS in the open world against ~38 normally.'))
+        self.check(f, 'neo', _('Ativar o modo PS4 Pro', 'Enable PS4 Pro mode'),
+                   _('Adiciona o modo gráfico do PS4 Pro em Opções > Apresentação; reduz o desempenho.',
+                     'Adds the PS4 Pro graphics mode under Options > Presentation; lowers performance.'))
         self.section(f, _('Desempenho', 'Performance'))
-        self.check(f, 'perf_culling', _('Culling sem a GPU (recomendado)', 'Culling without the GPU (recommended)'),
-                   _('Desliga o culling de índices feito na GPU (técnica do Pink-shadPS4): mesma imagem e bem menos '
-                     'esperas pela GPU. No santuário: ~22 → ~28 FPS.',
-                     'Turns off the GPU index-buffer culling (Pink-shadPS4): same image, far fewer GPU waits. '
-                     'Sanctuary: ~22 → ~28 FPS.'))
-        self.check(f, 'perf_record_thread', _('Comandos Vulkan em thread própria (recomendado)',
-                                               'Vulkan commands on their own thread (recommended)'),
-                   _('Grava e envia os comandos da GPU em outra thread (cp_record_thread do Pink-shadPS4). '
-                     'Ponte do cânion no demo: ~24 → ~28 FPS. Desligue se notar travamentos.',
-                     'Records and submits the GPU commands on another thread (cp_record_thread of '
-                     'Pink-shadPS4). Canyon bridge in the demo: ~24 → ~28 FPS. Turn it off if the game hangs.'))
-        self.check(f, 'perf_dma', _('Reflexos completos da água (acesso direto à memória)',
-                                     'Full water reflections (direct memory access)'),
-                   _('Deixa os shaders lerem tabelas da memória do jogo direto (como o Pink-shadPS4): o lago ondula '
-                     'e reflete até longe. Desligado ganha ~10% de FPS, mas a água longe fica mais lisa. '
-                     'Ao trocar, os shaders são compilados de novo na primeira vez. Em placas AMD fica '
-                     'desligado (desenhava listras nas sombras e na água).',
-                     'Lets shaders read tables straight from game memory (as Pink-shadPS4 does): the lake ripples '
-                     'and reflects far away. Off gains ~10% FPS, but distant water is flatter. After a change '
-                     'the shaders are compiled again the first time. Off on AMD cards (it drew stripes over '
-                     'shadows and water).'))
-        self.row(f, _('Envio de trabalho à GPU', 'GPU work submission'), self.choice(f, 'gpu_submit', GPU_SUBMIT),
-                 _('Manda trabalho à GPU a cada 0,5 ms e lê resultados por um atalho (técnicas do Pink-shadPS4). '
-                   'Medido em NVIDIA (+10–15%); em AMD/Intel use "Ligado" para testar e volte para "Automático" '
-                   'se a tela ficar preta.',
-                   'Sends work to the GPU every 0.5 ms and reads results through a shortcut (Pink-shadPS4 '
-                   'techniques). Measured on NVIDIA (+10–15%); on AMD/Intel pick "On" to try it and go back to '
-                   '"Automatic" if the screen turns black.'))
-        self.row(f, _('Sombras distantes', 'Far shadows'), self.choice(f, 'shadow_reuse', SHADOW_REUSE),
-                 _('Redesenha as sombras distantes do sol só a cada dois quadros e reaproveita no outro: um '
-                   'pouco mais de FPS (~0,5%), mas elas piscam ao longe (AMD e NVIDIA GTX 1080, RTX 40/50). '
-                   'Por isso vem desligado.',
-                   'Draws the far sun shadows only every other frame and reuses them in between: a little more '
-                   'FPS (~0.5%), but they blink in the distance (AMD and NVIDIA GTX 1080, RTX 40/50). Hence off '
-                   'by default.'))
-        self.row(f, _('Uso de memória de vídeo', 'Video memory use'), self.choice(f, 'vram_use', VRAM_USE),
-                 _('Até onde o jogo enche a memória da placa antes de liberar texturas e buffers. Padrão: '
-                   'libera a partir de 60%. Em placas de 8 GB ou mais, "Alto" ou "Máximo" evita recarregar '
-                   'texturas (menos engasgos). Se aparecer erro de falta de memória, volte um nível.',
-                   'How far the game fills the card memory before it frees textures and buffers. Default: '
-                   'frees from 60%. On 8 GB cards or more, "High" or "Maximum" avoids reloading textures '
-                   '(less stutter). On an out-of-memory error, go back one level.'))
+        self.check(f, 'perf_culling', _('Otimização de culling (recomendado)', 'Culling optimization (recommended)'))
+        self.check(f, 'perf_record_thread', _('Renderização multithread (recomendado)',
+                                               'Multithreaded rendering (recommended)'),
+                   _('Desative se o jogo travar.', 'Turn off if the game freezes.'))
+        self.check(f, 'perf_dma', _('Reflexos completos da água', 'Full water reflections'),
+                   _('Desativar melhora o desempenho; não é usado em placas AMD.',
+                     'Turning it off improves performance; not used on AMD graphics cards.'))
+        self.row(f, _('Otimização de envio à GPU', 'GPU submission optimization'), self.choice(f, 'gpu_submit', GPU_SUBMIT),
+                 _('Experimental em placas AMD e Intel; se a tela ficar preta, selecione "Automático".',
+                   'Experimental on AMD and Intel graphics cards; if the screen turns black, select "Automatic".'))
+        self.row(f, _('Sombras distantes', 'Distant shadows'), self.choice(f, 'shadow_reuse', SHADOW_REUSE),
+                 _('Ligado: um pouco mais de FPS, mas as sombras distantes podem piscar.',
+                   'On: slightly higher FPS, but distant shadows may flicker.'))
+        self.row(f, _('Uso de memória de vídeo', 'Video memory usage'), self.choice(f, 'vram_use', VRAM_USE),
+                 _('Se ocorrer erro de falta de memória, escolha um nível abaixo.',
+                   'If an out-of-memory error occurs, select a lower level.'))
         self.section(f, _('Efeitos', 'Effects'))
         for key, title, _off in EFFECTS:
             self.check(f, key, _(*title))
-        self.note(f, _('O motion blur, o brilho e os filtros ficam no menu do próprio jogo (Opções > Apresentação).',
-                       "Motion blur, brightness and filters are in the game's own menu (Options > Presentation)."), top=4)
+        self.note(f, _('Desfoque de movimento, brilho e filtros ficam no menu do jogo (Opções > Apresentação).',
+                       'Motion blur, brightness and filters are in the in-game menu (Options > Presentation).'), top=4)
         self.section(f, _('Tela', 'Display'))
-        self.row(f, _('Modo da janela', 'Window mode'), self.choice(f, 'window_mode', WINDOW_MODES),
-                 _('Tela cheia em janela cobre o monitor sem mudar a resolução dele (troca rápida com Alt+Tab); '
-                   'tela cheia passa o monitor para a resolução de saída.',
-                   'Borderless fullscreen covers the monitor without changing its resolution (quick Alt+Tab); '
-                   'fullscreen switches the monitor to the output resolution.'))
-        self.row(f, _('Apresentação', 'Presentation'), self.choice(f, 'present_mode', PRESENT_MODES))
+        self.row(f, _('Modo de exibição', 'Display mode'), self.choice(f, 'window_mode', WINDOW_MODES))
+        self.row(f, _('Sincronização vertical', 'Vertical sync'), self.choice(f, 'present_mode', PRESENT_MODES))
 
     def build_controls(self):
         ttk = self.ttk
         f = self.scrolled_page('controls', _('Controles', 'Controls'),
-                               _('Um controle (DualShock 4, DualSense, Xbox…) é usado automaticamente.',
-                                 'A gamepad (DualShock 4, DualSense, Xbox…) is used automatically.'))
+                               _('Controles conectados são detectados automaticamente.',
+                                 'Connected gamepads are detected automatically.'))
         self.section(f, _('Controle', 'Gamepad'), top=4)
         self.row(f, _('Controle preferido', 'Preferred gamepad'), ttk.Entry(f, textvariable=self.var('gamepad'), width=30),
-                 _('Nome (ou parte) do controle a usar quando houver vários; vazio = o primeiro.',
-                   'Name (or part of it) of the gamepad to use when several are connected; empty = the first.'))
-        self.row(f, _('Ícones dos botões', 'Button icons'), self.choice(f, 'pad_glyphs', PAD_GLYPHS, 44),
-                 _('O jogo mostra os botões do que está em uso: Xbox com um controle Xbox (ou genérico), os do '
-                   'PlayStation com DualShock ou DualSense, as teclas e o mouse configurados no teclado, também '
-                   'no esquema de Opções > Controles. Troca na hora ao conectar ou usar outro dispositivo.',
-                   'The game shows the buttons of what is in use: Xbox with an Xbox (or generic) gamepad, the '
-                   'PlayStation ones with a DualShock or DualSense, the bound keys and mouse buttons on the '
-                   'keyboard, in the Options > Controls diagram too. It switches as soon as another device is '
-                   'connected or used.'))
-        self.row(f, _('Vibração do controle', 'Controller vibration'), self.choice(f, 'vibration', VIBRATION, 20))
+                 _('Nome do controle a usar quando houver vários conectados.',
+                   'Name of the gamepad to use when several are connected.'))
+        self.row(f, _('Ícones dos botões', 'Button prompts'), self.choice(f, 'pad_glyphs', PAD_GLYPHS, 44))
+        self.row(f, _('Intensidade da vibração', 'Vibration strength'), self.choice(f, 'vibration', VIBRATION, 20))
         self.section(f, _('Mouse', 'Mouse'))
-        self.check(f, 'mouse', _('Câmera no mouse', 'Mouse camera'),
-                   _('Clique na janela do jogo para capturar o mouse; Esc solta. Botão esquerdo = R1 (agarrar), '
-                     'direito = □ (atacar), meio = L1; os botões podem ser trocados na lista de teclas abaixo.',
-                     'Click the game window to capture the mouse; Esc releases it. Left button = R1 (grip), right = □ '
-                     '(attack), middle = L1; the buttons can be changed in the key list below.'))
+        self.check(f, 'mouse', _('Câmera com o mouse', 'Mouse camera control'),
+                   _('Clique na janela do jogo para capturar o mouse; pressione Esc para liberá-lo.',
+                     'Click the game window to capture the mouse; press Esc to release it.'))
         self.row(f, _('Sensibilidade', 'Sensitivity'), self.choice(f, 'mouse_sens', MOUSE_SENS, 20))
-        self.check(f, 'mouse_invert', _('Inverter o eixo vertical', 'Invert the vertical axis'))
-        self.section(f, _('Teclado (funciona junto com o controle)', 'Keyboard (works next to a gamepad)'))
-        self.note(f, _('Clique na tecla de uma ação e aperte a nova tecla ou um botão do mouse (Esc cancela). Vale '
-                       'na próxima vez que o jogo abrir.',
-                       'Click the key of an action and press the new key or a mouse button (Esc cancels). Applies '
-                       'the next time the game starts.'), top=0)
+        self.check(f, 'mouse_invert', _('Inverter eixo vertical', 'Invert vertical axis'))
+        self.section(f, _('Teclado', 'Keyboard'))
+        self.note(f, _('Clique em uma ação e pressione a nova tecla ou botão do mouse; aplica-se no próximo início do jogo.',
+                       'Click an action and press the new key or mouse button; changes apply the next time the game '
+                       'starts.'), top=0)
         self.key_buttons = {}
         for name, default, label in KEY_INPUTS:
             r = self.next_row(f)
@@ -1435,12 +1329,9 @@ class Launcher:
             self.key_buttons[name] = button
         holder = ttk.Frame(f)
         holder.grid(row=self.next_row(f), column=0, columnspan=2, sticky='w', pady=(8, 0))
-        ttk.Button(holder, text=_('Restaurar as teclas padrão', 'Restore the default keys'),
+        ttk.Button(holder, text=_('Restaurar padrões', 'Restore defaults'),
                    command=self.reset_keys).pack(side='left')
         self.show_keys()
-        self.note(f, _('O controle também pode ser remapeado no sotc.ini, por exemplo pad.circle=b '
-                       '(nomes de botão do SDL).',
-                       'The gamepad can be remapped in sotc.ini too, e.g. pad.circle=b (SDL button names).'))
 
     def show_keys(self):
         """Each action's key and mouse buttons; * marks a changed one."""
@@ -1468,7 +1359,7 @@ class Launcher:
         window.transient(self.root)
         window.resizable(False, False)
         label = next(_(*l) for n, _d, l in KEY_INPUTS if n == name)
-        ttk.Label(window, text=_('Aperte a tecla ou o botão do mouse para: {}',
+        ttk.Label(window, text=_('Pressione a tecla ou o botão do mouse para: {}',
                                  'Press the key or mouse button for: {}').format(label),
                   font=(ui_font(), 12)).pack(padx=30, pady=(24, 6))
         hint = ttk.Label(window, text=_('Esc cancela', 'Esc cancels'), style='Muted.TLabel')
@@ -1515,28 +1406,22 @@ class Launcher:
         f = self.scrolled_page('advanced', _('Avançado', 'Advanced'),
                                _('Opções do lançador e diagnóstico.', 'Launcher options and diagnostics.'))
         self.section(f, _('Lançador', 'Launcher'), top=4)
-        self.row(f, _('Idioma do lançador', 'Launcher language'), self.choice(f, 'ui_language', UI_LANGUAGES),
-                 _('Troca na hora (com o jogo aberto: na próxima vez que o lançador abrir).',
-                   'Switches at once (while the game runs: the next time the launcher opens).'))
+        self.row(f, _('Idioma do lançador', 'Launcher language'), self.choice(f, 'ui_language', UI_LANGUAGES))
         self.vars['ui_language'].trace_add('write', lambda *_a: self.switch_language())
         self.check(f, 'close_on_play', _('Fechar o lançador quando o jogo abrir', 'Close the launcher when the game starts'))
-        self.check(f, 'check_updates', _('Procurar atualizações ao abrir', 'Check for updates at startup'),
-                   _('Pergunta antes de baixar. Saves, cache de shaders e sotc.ini são mantidos.',
-                     'Asks before downloading. Saves, shader cache and sotc.ini are kept.'))
+        self.check(f, 'check_updates', _('Procurar atualizações ao abrir', 'Check for updates at startup'))
         holder = ttk.Frame(f)
         holder.grid(row=self.next_row(f), column=0, columnspan=2, sticky='w', pady=(10, 0))
         ttk.Button(holder, text=_('Atalho na área de trabalho', 'Desktop shortcut'), command=self.shortcut).pack(side='left')
         ttk.Button(holder, text=_('Pasta do port', 'Port folder'), command=lambda: self.open_path(PORT_DIR)).pack(side='left', padx=6)
         ttk.Button(holder, text=_('Limpar cache de shaders', 'Clear shader cache'), command=self.clear_cache).pack(side='left')
         self.section(f, _('Diagnóstico', 'Diagnostics'))
-        self.check(f, 'show_fps', _('FPS no registro (a cada 5 s)', 'FPS in the log (every 5 s)'))
+        self.check(f, 'show_fps', _('FPS no registro', 'FPS in the log'))
         self.row(f, _('Leituras da GPU', 'GPU readbacks'), self.choice(f, 'readbacks', READBACKS))
         self.row(f, _('Cvars do motor', 'Engine cvars'), ttk.Entry(f, textvariable=self.var('engine_cvars'), width=58),
-                 _('Avançado: NOME=valor separados por espaço, acrescentados à linha de comando do jogo.',
-                   "Advanced: NAME=value separated by spaces, added to the game's command line."))
-        self.row(f, _('Variáveis extras', 'Extra variables'), ttk.Entry(f, textvariable=self.var('extra_env'), width=58),
-                 _('Pares NOME=valor separados por espaço (veja o README).',
-                   'NAME=value pairs separated by spaces (see the README).'))
+                 _('NOME=valor, separados por espaço.', 'NAME=value, separated by spaces.'))
+        self.row(f, _('Variáveis de ambiente', 'Environment variables'), ttk.Entry(f, textvariable=self.var('extra_env'), width=58),
+                 _('NOME=valor, separados por espaço.', 'NAME=value, separated by spaces.'))
 
     def build_log(self):
         tk, ttk = self.tk, self.ttk
@@ -1570,21 +1455,21 @@ class Launcher:
     def refresh_status(self):
         info = game_info(self.var('game_dir').get())
         if not info:
-            game = _('✗ Não há eboot.bin na pasta do jogo (Jogo e saves)', '✗ No eboot.bin in the game folder (Game & saves)')
+            game = _('✗ Jogo não encontrado na pasta escolhida', '✗ Game not found in the selected folder')
         elif info == (GAME_ID, GAME_VERSION):
-            game = _('✓ {} versão {}: todos os modos disponíveis', '✓ {} version {}: every mode available').format(*info)
+            game = _('✓ {} versão {}', '✓ {} version {}').format(*info)
         else:
-            game = _('⚠ {} versão {}: o port foi feito para {} {}; os modos não se aplicam',
-                     '⚠ {} version {}: the port targets {} {}; the modes do not apply').format(*info, GAME_ID, GAME_VERSION)
+            game = _('⚠ {} versão {}: alguns recursos exigem {} {}',
+                     '⚠ {} version {}: some features require {} {}').format(*info, GAME_ID, GAME_VERSION)
         modules = Path(self.var('sys_modules').get() or '.')
         if self.var('sys_modules').get() and all((modules / m).is_file() for m in SYS_MODULES):
             sound = _('✓ Som: módulos do seu console', '✓ Sound: your console\'s modules')
         else:
-            sound = _('✓ Som: biblioteca própria do port', '✓ Sound: the port\'s own library')
+            sound = _('✓ Som: integrado', '✓ Sound: built-in')
         user = user_dir({'user_dir': self.var('user_dir').get()})
         saves = user / 'savedata' / '1' / GAME_ID
         save = (_('✓ Saves em {}', '✓ Saves in {}').format(saves) if saves.is_dir() and any(saves.iterdir())
-                else _('• Ainda sem saves: o jogo cria em {}', '• No saves yet: the game creates them in {}').format(saves))
+                else _('• Ainda não há saves', '• No saves yet'))
         from sotc_discovery import dlc_count
         count = dlc_count(self.var('dlc_dir').get())
         dlc = (_('✓ DLC: {} instalada(s)', '✓ DLC: {} installed').format(count) if count
@@ -1607,7 +1492,7 @@ class Launcher:
         framegen = self.var('framegen').get()
         if framegen != 'off':
             parts.append({'auto': _('geração de quadros', 'frame generation'), 'dlss': 'DLSS-G',
-                          'fsr': 'FSR 3'}.get(framegen, framegen))
+                          'fsr': 'FSR 3.1'}.get(framegen, framegen))
         if self.var('af16').get():
             parts.append(_('AF 16x', '16x AF'))
         if self.var('neo').get():
@@ -1655,8 +1540,8 @@ class Launcher:
         render = weak_gpu_render_res(gpu_line)
         if render and not self.var('render_res').get():
             self.var('render_res').set(render)
-            self.gpu_text += _(' — render {} escolhido para esta placa (Imagem e FPS)',
-                               ' — {} render chosen for this card (Display & FPS)').format(render[3:] + 'p')
+            self.gpu_text += _(' — resolução de render ajustada para {}',
+                               ' — render resolution set to {}').format(render[3:] + 'p')
         self.collect()
         self.refresh_status()
 
@@ -1666,7 +1551,7 @@ class Launcher:
 
     def refresh_gpu_choices(self):
         """The choices that depend on the graphics card: DLSS-G only on an RTX 40/50 (a saved DLSS-G
-        becomes automatic, i.e. FSR 3), DLSS Super Resolution only on an RTX card. An unknown card
+        becomes automatic, i.e. FSR 3.1), DLSS Super Resolution only on an RTX card. An unknown card
         keeps every choice; the game checks the support again at start."""
         dlss_g = not self.gpu_name or gpu_has_dlss_g(self.gpu_name)
         if not dlss_g and self.var('framegen').get() == 'dlss':
@@ -1683,15 +1568,13 @@ class Launcher:
         self.dlss_box.configure(state='disabled' if blocked else 'readonly')
         self.dlss_note.configure(text={
             'gpu': _('Requer uma placa de vídeo NVIDIA GeForce RTX.', 'Requires an NVIDIA GeForce RTX graphics card.'),
-            'output': _('Indisponível numa saída que não seja 16:9 (16:10, 21:9, 32:9).',
-                        'Not available with an output other than 16:9 (16:10, 21:9, 32:9).'),
+            'output': _('Disponível apenas com saída 16:9.', 'Available only with a 16:9 output.'),
             'neo': _('Indisponível com o modo PS4 Pro.', 'Not available with PS4 Pro mode.'),
         }.get(blocked, ''))
         active = bool(dlss_mode(self.upscaling_state()))
         for box in self.render_boxes:
             box.configure(state='disabled' if active else 'readonly')
-        self.render_note.configure(text=_('Com o DLSS ligado, vale a resolução do modo DLSS escolhido.',
-                                          'While DLSS is on, the resolution of the chosen DLSS mode applies.')
+        self.render_note.configure(text=_('Definida pelo modo DLSS.', 'Set by the DLSS mode.')
                                    if active else '')
 
     def collect(self):
@@ -1769,16 +1652,14 @@ class Launcher:
         inner = tk.Frame(frame, bg=BG)
         inner.place(relx=0.5, rely=0.45, anchor='center')
         tk.Label(inner, text='SHADOW OF THE COLOSSUS', bg=BG, fg=GOLD, font=(title_font(), 26)).pack()
-        tk.Label(inner, text=_('Bem-vindo. Só falta dizer onde está o jogo.',
-                               'Welcome. Just tell us where the game is.'),
+        tk.Label(inner, text=_('Bem-vindo. Selecione a pasta do jogo para continuar.',
+                               'Welcome. Select the game folder to continue.'),
                  bg=BG, fg=TEXT, font=(ui_font(), 13)).pack(pady=(8, 26))
         self.setup_button = ttk.Button(inner, text=_('Escolher a pasta do jogo…', 'Choose the game folder…'),
                                        style='Play.TButton', command=self.choose_game_for_setup)
         self.setup_button.pack(ipadx=18)
-        tk.Label(inner, text=_('A pasta principal do jogo, como no shadPS4: as subpastas do jogo (CUSA08809), da '
-                               'atualização (-UPDATE/-patch) e das DLCs são encontradas sozinhas.',
-                               "The game's main folder, as in shadPS4: the game (CUSA08809), update (-UPDATE/-patch) "
-                               'and DLC subfolders are found on their own.'),
+        tk.Label(inner, text=_('A atualização e as DLCs são detectadas automaticamente.',
+                               'The update and DLC are detected automatically.'),
                  bg=BG, fg=MUTED, font=(ui_font(), 10), wraplength=self.px(560), justify='center').pack(pady=(10, 0))
         self.setup_hint = tk.Label(inner, text='', bg=BG, fg=MUTED, font=(ui_font(), 10), cursor='hand2',
                                    wraplength=self.px(640), justify='center')
@@ -1823,8 +1704,8 @@ class Launcher:
     def offer_packages(self, folder):
         if not getattr(self, 'setup_hint', None) or not self.setup_hint.winfo_exists():
             return
-        self.setup_hint.configure(text=_('Dump empacotado (.pkg) em {}   —   clique aqui para desempacotar',
-                                         'Packed dump (.pkg) in {}   —   click here to unpack it').format(folder),
+        self.setup_hint.configure(text=_('Pacote do jogo (.pkg) encontrado em {}   —   clique aqui para desempacotar',
+                                         'Game package (.pkg) found in {}   —   click here to unpack it').format(folder),
                                   fg=GOLD)
         self.setup_hint.bind('<Button-1>', lambda _e: self.unpack_for_setup(folder))
 
@@ -1843,10 +1724,10 @@ class Launcher:
         counts = {kind: sum(p['kind'] == kind for p in packages) for kind in ('game', 'update', 'dlc')}
         size = needed_bytes(packages, folder)
         if size and not self.messagebox.askyesno('Shadow of the Colossus', _(
-                'Encontrei o jogo empacotado (.pkg) em\n{}\n(jogo: {}, atualizações: {}, DLC: {}).\n\n'
-                'Desempacotar para {}? Precisa de {:.1f} GB livres e leva alguns minutos.',
-                'Found the packed game (.pkg) in\n{}\n(game: {}, updates: {}, DLC: {}).\n\n'
-                'Unpack it into {}? It needs {:.1f} GB free and takes a few minutes.').format(
+                'Pacotes do jogo (.pkg) encontrados em\n{}\n(jogo: {}, atualizações: {}, DLC: {}).\n\n'
+                'Desempacotar para {}? São necessários {:.1f} GB livres, e o processo leva alguns minutos.',
+                'Game packages (.pkg) found in\n{}\n(game: {}, updates: {}, DLC: {}).\n\n'
+                'Unpack to {}? This requires {:.1f} GB of free space and takes a few minutes.').format(
                     folder, counts['game'], counts['update'], counts['dlc'], folder, size / 2 ** 30)):
             return True
         self.setup_button.configure(state='disabled')
@@ -1867,7 +1748,7 @@ class Launcher:
                 self.ui_calls.put(lambda: (self.setup_button.configure(state='normal'),
                                            self.setup_hint.configure(text='', fg=MUTED),
                                            self.messagebox.showerror('Shadow of the Colossus', _(
-                                               'Não consegui desempacotar:\n{}', 'Could not unpack:\n{}').format(message))))
+                                               'Não foi possível desempacotar:\n{}', 'Could not unpack:\n{}').format(message))))
                 return
             game = places.get('game') or str(targets(folder)['game'])
             self.ui_calls.put(lambda: self.configure_from_game(game, folder))
@@ -1885,8 +1766,8 @@ class Launcher:
             return
         if not game:
             self.messagebox.showerror('Shadow of the Colossus', _(
-                'Não achei o jogo (eboot.bin do CUSA08809) em\n{}\n\nEscolha a pasta do seu dump.',
-                'The game (eboot.bin of CUSA08809) is not in\n{}\n\nChoose the folder of your dump.').format(chosen))
+                'O jogo (CUSA08809) não foi encontrado em\n{}\n\nSelecione a pasta do jogo.',
+                'The game (CUSA08809) was not found in\n{}\n\nSelect the game folder.').format(chosen))
             return
         self.configure_from_game(game, chosen)
 
@@ -1960,15 +1841,14 @@ class Launcher:
             ('✓' if result['update'] else '•',
              _('Atualização: {}', 'Update: {}').format(near_path(result['update'], Path(result['game']).parent.parent))
              if result['update']
-             else _('Atualização: nenhuma encontrada (-UPDATE, -patch, update ou patch)',
-                    'Update: none found (-UPDATE, -patch, update or patch)')),
+             else _('Atualização: não encontrada', 'Update: not found')),
             ('✓' if result['dlc_count'] else '•',
              _('DLC: {} encontrada(s)', 'DLC: {} found').format(result['dlc_count']) if result['dlc_count']
-             else _('DLC: nenhuma encontrada na pasta do jogo', 'DLC: none found in the game folder')),
+             else _('DLC: não encontrada', 'DLC: not found')),
             ('✓', _('Saves: {}', 'Saves: {}').format(short_path(saves)) + (
                 _('  (copiado do shadPS4)', '  (copied from shadPS4)') if result['save'] else '')),
             ('✓', _('Som: módulos do seu console', 'Sound: your console\'s modules') if result['sound'] else
-             _('Som: biblioteca própria do port', 'Sound: the port\'s own library')),
+             _('Som: integrado', 'Sound: built-in')),
         ]
         for mark, text in lines:
             color = GOLD if mark == '✓' else '#d9b441' if mark == '⚠' else MUTED
@@ -2058,8 +1938,8 @@ class Launcher:
         chosen = next((f for f in folders if selection and Path(selection[0]).is_relative_to(f)),
                       folders[-1] if folders else None)
         if chosen and self.messagebox.askyesno('Shadow of the Colossus', _(
-                'Tirar {} da biblioteca? (nada é apagado do disco)',
-                'Remove {} from the library? (nothing is deleted from the disk)').format(chosen)):
+                'Remover {} da biblioteca? Nenhum arquivo será excluído.',
+                'Remove {} from the library? No files will be deleted.').format(chosen)):
             folders.remove(chosen)
             self.refresh_library()
 
@@ -2112,8 +1992,8 @@ class Launcher:
             own = user_dir({'user_dir': self.var('user_dir').get()}).resolve()
             outside = [p for p in found['saves'] if not Path(p).resolve().is_relative_to(own)]
             if outside and self.messagebox.askyesno('Shadow of the Colossus', _(
-                    'Encontrei um save do jogo em\n{}\nImportar para o port?',
-                    'Found a save of the game in\n{}\nImport it into the port?').format(outside[0])):
+                    'Foi encontrado um save do jogo em\n{}\nImportar?',
+                    'A game save was found in\n{}\nImport it?').format(outside[0])):
                 self.copy_save(Path(outside[0]))
                 done.append(_('save importado', 'save imported'))
         self.collect()
@@ -2144,8 +2024,8 @@ class Launcher:
             return
         self.collect()
         if not game_info(self.app['game_dir']):
-            self.messagebox.showerror('Shadow of the Colossus', _('Escolha a pasta do jogo com eboot.bin (CUSA08809).',
-                                                                  'Choose the game folder with eboot.bin (CUSA08809).'))
+            self.messagebox.showerror('Shadow of the Colossus', _('Selecione a pasta do jogo (CUSA08809).',
+                                                                  'Select the game folder (CUSA08809).'))
             self.show('game')
             return
         self.set_log('')
@@ -2167,8 +2047,7 @@ class Launcher:
         threading.Thread(target=self.read_output, args=(self.process,), daemon=True).start()
         self.play_button.configure(state='disabled')
         self.stop_button.configure(state='normal')
-        self.status.configure(text=_('Preparando o jogo; ele abre na própria janela…',
-                                     'Preparing the game; it opens in its own window…'), fg=GOLD)
+        self.status.configure(text=_('Iniciando o jogo…', 'Starting the game…'), fg=GOLD)
         if self.app.get('close_on_play'):
             self.root.after(5000, self.root.destroy)
 
@@ -2232,7 +2111,7 @@ class Launcher:
                     self.refresh_status()
                 else:
                     if 'Entering original x86-64 code' in item:
-                        self.status.configure(text=_('O jogo está rodando.', 'The game is running.'), fg=GOLD)
+                        self.status.configure(text=_('O jogo está em execução.', 'The game is running.'), fg=GOLD)
                     self.append(item)
         except queue.Empty:
             pass
@@ -2274,8 +2153,8 @@ class Launcher:
         for name in ('cache', 'shader'):
             shutil.rmtree(user_dir(self.app) / name, ignore_errors=True)
         self.messagebox.showinfo('Shadow of the Colossus', _(
-            'Cache de shaders limpo. A próxima partida engasga alguns minutos enquanto ele é refeito.',
-            'Shader cache cleared. The next start stutters for a few minutes while it is rebuilt.'))
+            'Cache de shaders limpo. O próximo início pode apresentar engasgos por alguns minutos.',
+            'Shader cache cleared. The next start may stutter for a few minutes.'))
 
     def shortcut(self):
         self.collect()
@@ -2331,18 +2210,16 @@ class Launcher:
         notes = release['notes'].strip()
         if len(notes) > 900:
             notes = notes[:900].rsplit('\n', 1)[0] + '\n…'
-        question = _('Há uma versão nova: v{new} (você tem v{cur}).\n\n{notes}\n\n',
-                     'A new version is available: v{new} (you have v{cur}).\n\n{notes}\n\n').format(
+        question = _('Nova versão disponível: v{new} (versão atual: v{cur}).\n\n{notes}\n\n',
+                     'A new version is available: v{new} (current version: v{cur}).\n\n{notes}\n\n').format(
             new=release['version'], cur=VERSION, notes=notes)
         if not FROZEN:  # running from the sources: nothing to replace, show the release
             if self.messagebox.askyesno('Shadow of the Colossus', question + _('Abrir a página?', 'Open the page?')):
                 os.startfile(release['page'])
             return
         if self.messagebox.askyesno('Shadow of the Colossus', question + _(
-                'Baixar e instalar agora? Saves, cache de shaders e sotc.ini são mantidos, e o lançador abre '
-                'de novo sozinho.',
-                'Download and install now? Saves, shader cache and sotc.ini are kept, and the launcher opens '
-                'again by itself.')):
+                'Baixar e instalar agora? Os saves e as configurações serão mantidos.',
+                'Download and install now? Your saves and settings will be kept.')):
             self.install_update(release)
         else:
             self.app['skip_version'] = release['version']  # no question at startup for this one again
