@@ -42,7 +42,7 @@ de que o jogo precisa, no estilo do [bloodborne_pc](https://github.com/Supermedo
 
 | Versão | Melhorias e correções |
 |---|---|
-| **1.1.1** | **Sons dos efeitos de volta em CPUs de 4 threads** (prioridade das threads de som), **resolução de render 720p sem lixo gráfico** (também no DLSS Qualidade), registro das threads quando o jogo trava. |
+| **1.1.1** | **Sons dos efeitos de volta em CPUs de 4 threads** (prioridade das threads de som), **resolução de render 720p sem lixo gráfico** (também no DLSS Qualidade), **sem fechamento com a memória de vídeo cheia nas placas de 2 GB**, registro das threads quando o jogo trava. |
 | **1.1.0** | **Tudo do projeto original até a 0.60.4 e as pull requests abertas dele**, **NVIDIA DLSS** (GeForce RTX), **geração de quadros FSR 3.1 / DLSS-G com a interface nítida** (multiplicador x3/x4 nas RTX 50), **sem travamentos por shaders traduzidos de novo a cada abertura**, cache do driver guardado, texturas corretas nas GTX 10 com o cache de shaders, executável para CPUs sem AVX2, compilação com PGO, menu dentro do jogo nos 7 idiomas, lançador com textos curtos, vibração e botões do mouse configuráveis. |
 | **0.60.4** | **Sem blocos ciano nas pedras nem flores piscando** com texturas em alta qualidade (a proteção contra quedas da 0.60.3 trocava o nível de detalhe das texturas a cada um ou dois segundos; agora com histerese). |
 | **0.60.3** | **O jogo pode ser concluído do início ao fim** (jogado do último colosso até o final e os créditos): correção da queda com texturas em alta qualidade em vistas amplas (#186), correção da queda no carregamento depois dos créditos, +2,7% de FPS no templo. |
@@ -178,7 +178,7 @@ game needs, in the style of [bloodborne_pc](https://github.com/Supermedo/bloodbo
 
 | Version | Improvements and fixes |
 |---|---|
-| **1.1.1** | **Sound effects back on 4-thread CPUs** (sound thread priority), **720p render resolution without garbage** (DLSS Quality too), thread stacks in the log when the game hangs. |
+| **1.1.1** | **Sound effects back on 4-thread CPUs** (sound thread priority), **720p render resolution without garbage** (DLSS Quality too), **no crash with full video memory on 2 GB cards**, thread stacks in the log when the game hangs. |
 | **1.1.0** | **Everything from the original project up to 0.60.4 and its open pull requests**, **NVIDIA DLSS** (GeForce RTX), **FSR 3.1 / DLSS-G frame generation with a sharp HUD** (x3/x4 multiplier on RTX 50), **no stutter from shaders translated again at every start**, driver cache kept, correct textures on GTX 10 with the shader cache, an executable for CPUs without AVX2, PGO build, in-game menu in 7 languages, launcher with short texts, adjustable vibration and mouse button remapping. |
 | **0.60.4** | **No more cyan blocks on stone or blinking flowers** with high quality textures (the 0.60.3 crash protection switched the texture detail every second or two; now with hysteresis). |
 | **0.60.3** | **The game can be finished from start to end** (played from the last colossus through the ending and credits): fix for the high quality textures crash in wide views (#186), fix for the crash on the load after the credits, +2.7% FPS at the Shrine. |
