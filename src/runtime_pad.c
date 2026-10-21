@@ -398,10 +398,22 @@ int runtime_pad_binding(const char *input, int *pad_button, char *label, int lab
     pthread_mutex_unlock(&lock);
     return found;
 }
+/* sotc: SOTC_VIBRATION=0..100: the strength of the controller rumble in percent (0: none, #210). */
+static unsigned vibration_percent(void) {
+    static int percent=-1;
+    if (percent<0) {
+        const char *v=getenv("SOTC_VIBRATION");
+        const long p=v && *v ? strtol(v,NULL,10) : 100;
+        percent=p<0 ? 0 : p>100 ? 100 : (int)p;
+    }
+    return (unsigned)percent;
+}
 static void rumble(SDL_Gamepad *g, uint64_t now) {
     if (!g) return;
     const int on=rumble_large || rumble_small;
-    SDL_RumbleGamepad(g,(uint16_t)(rumble_large*257),(uint16_t)(rumble_small*257),on ? 2000 : 0);
+    const unsigned scale=vibration_percent();
+    SDL_RumbleGamepad(g,(uint16_t)(rumble_large*257u*scale/100u),(uint16_t)(rumble_small*257u*scale/100u),
+                      on && scale ? 2000 : 0);
     rumble_at=now;
 }
 
