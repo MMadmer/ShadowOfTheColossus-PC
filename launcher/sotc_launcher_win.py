@@ -12,6 +12,7 @@ so a packaged port needs no Python installation.
 """
 import ctypes
 import json
+import math
 import os
 from pathlib import Path
 import queue
@@ -1509,15 +1510,22 @@ class Launcher:
         count = dlc_count(self.var('dlc_dir').get())
         dlc = (_('✓ DLC: {} instalada(s)', '✓ DLC: {} installed').format(count) if count
                else _('• Sem DLC', '• No DLC'))
-        free_mb = commit_free_mb()
-        memory = ('' if free_mb is None or free_mb >= GAME_COMMIT_MB else
+        # A running game holds its own commit: the row keeps what it showed before the start.
+        free_mb = None if self.process else commit_free_mb()
+        memory = (self.checks['memory'].cget('text') if self.process else
+                  '' if free_mb is None or free_mb >= GAME_COMMIT_MB else
                   _('⚠ Memória virtual: {:.1f} GB livres, o jogo precisa de {} GB. Aumente o arquivo de paginação para 16 GB.',
                     '⚠ Virtual memory: {:.1f} GB free, the game needs {} GB. Increase the page file to 16 GB.').format(
-                      free_mb / 1024, round(GAME_COMMIT_MB / 1024)))
+                      free_mb / 1024, math.ceil(GAME_COMMIT_MB / 1024)))
         for key, text in (('game', game), ('dlc', dlc), ('sound', sound), ('saves', save), ('gpu', self.gpu_text),
                           ('memory', memory)):
             self.checks[key].configure(text=text, foreground=MUTED if text.startswith('•') else
                                        '#d9b441' if text.startswith('⚠') else '#d36b5c' if text.startswith('✗') else TEXT)
+        # The memory row is the last one: shown only with a warning, without an empty line otherwise.
+        if memory:
+            self.checks['memory'].pack(anchor='w', pady=3)
+        else:
+            self.checks['memory'].pack_forget()
         if not self.process:
             self.play_button.configure(state='normal' if info else 'disabled')
             self.status.configure(text=self.summary() if info else _('Escolha primeiro a pasta do jogo.',

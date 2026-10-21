@@ -361,14 +361,15 @@ static int pool(void) {
             pool_size_mb=base;
             section=create_section();
         }
-        if (pool_size_mb<wanted)
+        if (section && pool_size_mb<wanted)
             fprintf(stderr,"Runtime: %" PRIu64 " MiB of guest memory refused (error %lu, %" PRIu64 " MiB of commit free): using %" PRIu64 " MiB; the game may run out of memory, a page file of 16 GB or more fixes it\n",
                     wanted+flex_mb,refused,avail_mb,pool_size_mb);
     }
     const uint64_t bytes=POOL_SIZE+FLEX_SPAN;
     if (!section) { fprintf(stderr,"Runtime: cannot create %" PRIu64 " MiB of guest memory (error %lu); is the page file large enough?\n",bytes>>20,GetLastError()); return -1; }
     backing_base=MapViewOfFile3(section,GetCurrentProcess(),NULL,0,bytes,0,PAGE_READWRITE,NULL,0);
-    return backing_base ? 0 : -1;
+    if (!backing_base) { CloseHandle(section); section=NULL; return -1; }
+    return 0;
 }
 #else
 /* Direct memory occupies [0,POOL_SIZE) of the memfd, flexible memory [POOL_SIZE,+FLEX_SPAN). */
