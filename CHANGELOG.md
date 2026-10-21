@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.1.0 — não publicada (fork MMadmer)
+## 1.1.0 — 2026-10-21 (fork MMadmer)
 Junta ao fork tudo da 0.58 até a 0.60.4 do projeto original e as pull requests abertas dele, com
 correções de issues ainda abertas, NVIDIA DLSS e otimizações. Obrigado a **Lucas-blip-png,
 Oussama268, DUDUYG, jownatan e AjncSystem**, cujos commits entram com a autoria de cada um.
