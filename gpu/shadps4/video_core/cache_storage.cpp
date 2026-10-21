@@ -189,6 +189,13 @@ void DataBase::SeedFromPack() {
     if (!pack_id.empty() && read_text(seeded_file) == pack_id) {
         return;
     }
+    // sotc: WarmUp set this cache aside as made for another profile: a pack of another profile
+    // was seeded again at the next start and set aside again (19 s of copying and an empty cache
+    // at every start). The fresh cache is stamped with the pack instead, so it is not seeded.
+    if (pack_rejected) {
+        fs::copy_file(pack_id_file, seeded_file, fs::copy_options::overwrite_existing, ec);
+        return;
+    }
     const auto start = std::chrono::steady_clock::now();
     for (const auto& entry : fs::directory_iterator{cache_path, ec}) {
         if (entry.is_regular_file(ec)) {
@@ -542,6 +549,7 @@ void DataBase::Reset() {
             std::filesystem::remove_all(cache_path, error);
         }
     }
+    pack_rejected = true;
     Open();
 }
 

@@ -19,7 +19,7 @@
 namespace Serialization {
 /* You should increment versions below once corresponding serialization scheme is changed. */
 // Above both lines before the upstream merge: generation changed, so old caches are dropped.
-static constexpr u32 ShaderBinaryVersion = 33u;
+static constexpr u32 ShaderBinaryVersion = 34u;
 // sotc: 33 = the draw thread merge (SRT walker faults read zero instead of patching).
 static constexpr u32 ShaderMetaVersion = 21u;
 static constexpr u32 PipelineKeyVersion = 3u;
@@ -482,10 +482,28 @@ void PipelineCache::WarmUp() {
             std::memcpy(&cached_profile, profile_data.data(), sizeof(cached_profile));
         }
         compatible = profile_data.size() == sizeof(Shader::Profile) && cached_profile == profile;
-        if (!compatible) {
+        // sotc: shader binaries are stored by program hash and permutation only: those of another
+        // recompiler (an older build, or a shader pack made with one) took the names of this
+        // one's, which were then never cached ("another one on disk") and translated again at
+        // every start. A cache without this build's ShaderBinaryVersion stamp is set aside.
+        std::vector<u8> version_data{};
+        Storage::DataBase::Instance().Load(Storage::BlobType::ShaderProfile, "binary_version",
+                                           version_data);
+        u32 cached_version{};
+        if (version_data.size() == sizeof(cached_version)) {
+            std::memcpy(&cached_version, version_data.data(), sizeof(cached_version));
+        }
+        if (compatible && cached_version != Serialization::ShaderBinaryVersion) {
+            LOG_WARNING(Render, "Pipeline cache of shader binary version {} (now {}): starting a "
+                                "new cache",
+                        cached_version, Serialization::ShaderBinaryVersion);
+            compatible = false;
+        } else if (!compatible) {
             LOG_WARNING(Render, "Pipeline cache isn't compatible with current system (profile of "
                                 "{} bytes, expected {}). Starting a new cache",
                         profile_data.size(), sizeof(Shader::Profile));
+        }
+        if (!compatible) {
             Storage::DataBase::Instance().Reset();
         }
     }
@@ -496,6 +514,10 @@ void PipelineCache::WarmUp() {
         std::memcpy(profile_data.data(), &profile, sizeof(profile));
         Storage::DataBase::Instance().Save(Storage::BlobType::ShaderProfile, "profile",
                                            std::move(profile_data));
+        std::vector<u8> version(sizeof(Serialization::ShaderBinaryVersion));
+        std::memcpy(version.data(), &Serialization::ShaderBinaryVersion, version.size());
+        Storage::DataBase::Instance().Save(Storage::BlobType::ShaderProfile, "binary_version",
+                                           std::move(version));
         return;
     }
 

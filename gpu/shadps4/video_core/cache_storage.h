@@ -65,6 +65,7 @@ private:
     std::jthread io_worker{};
     std::filesystem::path cache_path{};
     bool opened{};
+    bool pack_rejected{}; ///< sotc: Reset set the cache aside: the shader pack is not seeded again
     /// sotc: every loose cache file read up front (in parallel) for the boot preload, by file
     /// name; ordered like an NTFS directory listing. Emptied by FinishPreload.
     std::map<std::string, std::vector<u8>> prefetched{};
