@@ -96,22 +96,51 @@ static uint64_t host_tsc(void) {
     return __rdtsc();
 }
 static ABI uint64_t read_tsc(void) { return host_tsc(); }
+/* sotc: a clock reading and the TSC at its middle: the TSC is read just before and after the
+ * clock, the narrowest of 16 tries kept (a thread preempted between two reads was off by the
+ * time it lost). */
+typedef struct { uint64_t ns, tsc; } TscSample;
+static TscSample tsc_sample(void) {
+    TscSample best={0,0};
+    uint64_t narrowest=UINT64_MAX;
+    for (int i=0;i<16;++i) {
+        struct timespec t;
+        const uint64_t before=__rdtsc();
+        clock_gettime(CLOCK_MONOTONIC,&t);
+        const uint64_t after=__rdtsc();
+        if (after-before<narrowest) {
+            narrowest=after-before;
+            best.ns=(uint64_t)t.tv_sec*1000000000+(uint64_t)t.tv_nsec;
+            best.tsc=before+(after-before)/2;
+        }
+    }
+    return best;
+}
 static uint64_t tsc_hz;
+static int32_t tsc_once;
 static ABI uint64_t tsc_frequency(void) {
 #ifdef _WIN32
     if (tsc_from_qpc) return compat_qpc_tsc_frequency();
 #endif
-    if (!tsc_hz) {
-        struct timespec a,b,nap={0,20000000};
-        clock_gettime(CLOCK_MONOTONIC,&a); uint64_t t0=__rdtsc();
+    /* sotc: measured once (other threads wait) over 100 ms instead of an unbracketed 20 ms
+     * window: an error there made the game's TSC clock drift against the audio clock (#91). */
+    int32_t state=__atomic_load_n(&tsc_once,__ATOMIC_ACQUIRE);
+    if (state!=1) {
+        if (state==0 && __atomic_compare_exchange_n(&tsc_once,&state,2,0,__ATOMIC_ACQ_REL,__ATOMIC_ACQUIRE)) {
+            const TscSample a=tsc_sample();
 #ifdef _WIN32
-        (void)nap; compat_sleep_ns(20000000);
+            compat_sleep_ns(100000000);
 #else
-        nanosleep(&nap,NULL);
+            struct timespec nap={0,100000000};
+            while (nanosleep(&nap,&nap)) {}
 #endif
-        clock_gettime(CLOCK_MONOTONIC,&b); uint64_t t1=__rdtsc();
-        uint64_t ns=(uint64_t)(b.tv_sec-a.tv_sec)*1000000000+(uint64_t)(b.tv_nsec-a.tv_nsec);
-        tsc_hz=(t1-t0)*1000000000/(ns ? ns : 1);
+            const TscSample b=tsc_sample();
+            const uint64_t ns=b.ns-a.ns;
+            tsc_hz=(uint64_t)((unsigned __int128)(b.tsc-a.tsc)*1000000000u/(ns ? ns : 1));
+            __atomic_store_n(&tsc_once,1,__ATOMIC_RELEASE);
+        } else {
+            while (__atomic_load_n(&tsc_once,__ATOMIC_ACQUIRE)!=1) sched_yield();
+        }
     }
     return tsc_hz;
 }
