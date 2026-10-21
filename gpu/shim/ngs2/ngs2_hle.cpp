@@ -25,6 +25,8 @@
 #include <deque>
 #include <map>
 #include <memory>
+#include <atomic>
+#include <chrono>
 #include <mutex>
 #include <numbers>
 #include <set>
@@ -38,6 +40,10 @@ extern "C" {
 #define NGS2_ABI __attribute__((sysv_abi))
 
 namespace {
+
+// sotc: SOTC_FPS: every 5 s the voices started, the ATRAC9 voices that ran out of data and the
+// system renders (sound missing on small CPUs: are voices started, are they fed).
+std::atomic<unsigned> stat_plays{0}, stat_dry{0}, stat_renders{0};
 
 using u8 = std::uint8_t;
 using u16 = std::uint16_t;
@@ -1097,6 +1103,7 @@ void AdvanceAtrac9(Voice& v) {
     while ((v.phase >> 32) != 0 && v.state == Play::Playing) {
         if (!EnsureFrames(v, 1)) {
             // Out of data: drop the whole-frame part so a stream does not race ahead.
+            stat_dry.fetch_add(1, std::memory_order_relaxed);
             v.phase &= 0xffffffffull;
             return;
         }
@@ -1307,6 +1314,7 @@ void SetEvent(Voice& v, u32 event) {
     switch (event) {
     case EVENT_PLAY:
         if (v.state == Play::Empty || v.state == Play::Stopped) {
+            stat_plays.fetch_add(1, std::memory_order_relaxed);
             v.state = Play::Playing;
             if (IsSampler(v)) {
                 StartEnvelope(v);
@@ -1842,6 +1850,16 @@ void WriteOutput(const RenderBufferInfo& out, const std::vector<float>& mix) {
 
 void RenderSystem(System& sys, const RenderBufferInfo* buffers, u32 count) {
     const u32 grain = sys.grain;
+    static const bool stats = std::getenv("SOTC_FPS") != nullptr;
+    if (stats) {
+        stat_renders.fetch_add(1, std::memory_order_relaxed);
+        static auto last = std::chrono::steady_clock::now();
+        if (const auto now = std::chrono::steady_clock::now(); now - last >= std::chrono::seconds(5)) {
+            last = now;
+            std::fprintf(stderr, "SOTC NGS2: %u renders, %u voices started, %u ATRAC9 out of data (5 s)\n",
+                         stat_renders.exchange(0), stat_plays.exchange(0), stat_dry.exchange(0));
+        }
+    }
     // sotc: kept between calls (their allocations showed in the sound thread's profile).
     thread_local std::vector<Voice*> voices;
     voices.clear();

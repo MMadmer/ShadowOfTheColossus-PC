@@ -304,8 +304,21 @@ static void *host_start(void *p) {
     /* sotc: host thread ids of guest threads, for traces that print GetCurrentThreadId. */
     if (getenv("SOTC_THREAD_IDS")) fprintf(stderr,"Runtime: guest thread '%s' is host thread %lu\n",t->name,GetCurrentThreadId());
     /* sotc: PS4 priorities below 400 (SotC: the sound mixer and streamers, 256-258) run above
-     * normal: the mixer must not wait behind the renderer and the job workers on small CPUs. */
-    if (t->attr.prio<400) SetThreadPriority(GetCurrentThread(),THREAD_PRIORITY_ABOVE_NORMAL);
+     * normal: the mixer must not wait behind the renderer and the job workers on small CPUs.
+     * The sound system's own thread (SoundSystemSndx, 700: it starts the sound effects) too:
+     * left at normal on a 4-thread CPU it ran behind the job workers and the GPU threads (above
+     * normal there, liverpool.cpp) and effects went missing while the streamed music played.
+     * With 4 CPU threads or fewer the sound threads are above the GPU threads; they mostly
+     * sleep. */
+    {
+        const int sound=t->attr.prio<400 || (strstr(t->name,"Sound") || strstr(t->name,"sndx"));
+        if (sound) {
+            DWORD_PTR process_mask=0, system_mask=0;
+            const int small_cpu=GetProcessAffinityMask(GetCurrentProcess(),&process_mask,&system_mask) &&
+                                __builtin_popcountll((unsigned long long)process_mask)<=4;
+            SetThreadPriority(GetCurrentThread(),small_cpu ? THREAD_PRIORITY_HIGHEST : THREAD_PRIORITY_ABOVE_NORMAL);
+        }
+    }
 #endif
     if (!exit_setjmp(t)) t->result=t->entry(t->argument);
     runtime_thread_keys_cleanup();
