@@ -828,6 +828,38 @@ void LoadingScreen() {
                   ImVec2(centre.x - full.x * 0.5f, centre.y + radius + 22.0f * unit), dim, text);
     // While the shader cache is read at boot: a bar with the percentage.
     const u32 total = SotcStats::warmup_total.load(std::memory_order_relaxed);
+    // sotc: without a cache to read (the first start, or a cache of another version) the shaders
+    // are translated as the game asks for them, a number not known ahead: a running bar with the
+    // count of this loading screen, so a slow PC does not look frozen.
+    static u64 compiled_base = 0;
+    static long long last_frame_ms = 0;
+    const u64 compiled = SotcStats::shaders_compiled.load(std::memory_order_relaxed);
+    const long long now_ms = NowMs();
+    if (now_ms - last_frame_ms > 500) {
+        compiled_base = compiled;
+    }
+    last_frame_ms = now_ms;
+    if (total == 0 && compiled > compiled_base) {
+        const float bar_w = size.x * 0.4f, bar_h = 10.0f * unit;
+        const ImVec2 bar0(origin.x + (size.x - bar_w) * 0.5f, centre.y + radius + 70.0f * unit);
+        const float span = bar_w * 0.25f;
+        const float phase = std::fmod(t * 0.6f, 1.0f);
+        const float x0 = bar0.x + (bar_w + span) * phase - span;
+        draw->AddRectFilled(bar0, ImVec2(bar0.x + bar_w, bar0.y + bar_h), IM_COL32(60, 60, 64, 255),
+                            bar_h * 0.5f);
+        draw->PushClipRect(bar0, ImVec2(bar0.x + bar_w, bar0.y + bar_h), true);
+        draw->AddRectFilled(ImVec2(x0, bar0.y), ImVec2(x0 + span, bar0.y + bar_h), gold,
+                            bar_h * 0.5f);
+        draw->PopClipRect();
+        char line[192];
+        std::snprintf(line, sizeof(line), SotcUi::T("Compilando shaders: %llu", "Compiling shaders: %llu"),
+                      static_cast<unsigned long long>(compiled - compiled_base));
+        const float line_px = 22.0f * unit;
+        const ImVec2 line_size = ImGui::GetFont()->CalcTextSizeA(line_px, FLT_MAX, 0.0f, line);
+        draw->AddText(ImGui::GetFont(), line_px,
+                      ImVec2(origin.x + (size.x - line_size.x) * 0.5f, bar0.y + bar_h + 14.0f * unit),
+                      dim, line);
+    }
     if (total > 0) {
         const u32 done = std::min(SotcStats::warmup_done.load(std::memory_order_relaxed), total);
         const float frac = float(done) / float(total);

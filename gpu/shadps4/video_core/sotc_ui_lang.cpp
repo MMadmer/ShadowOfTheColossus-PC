@@ -309,6 +309,12 @@ constexpr Texts kTexts[] = {
       "正在加载着色器…",
       "シェーダーを読み込んでいます…",
       "셰이더를 불러오는 중입니다…"}},
+    {"Compilando shaders: %llu",
+     {"Compilando shaders: %llu",
+      "Компиляция шейдеров: %llu",
+      "正在编译着色器：%llu",
+      "シェーダーをコンパイルしています：%llu",
+      "셰이더 컴파일 중: %llu"}},
 
     // Performance overlay (F10).
     {"%.1f ms   alvo %.0f FPS",
