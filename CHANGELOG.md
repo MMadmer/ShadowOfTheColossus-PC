@@ -104,6 +104,8 @@ Oussama268, DUDUYG, jownatan e AjncSystem**, cujos commits entram com a autoria 
   copiá-los (VK_NV_geometry_shader_passthrough), sobre a implementação da PR #169
   (`SOTC_GS_PASSTHROUGH=0` desliga).
 - As tabelas que o jogo replica a cada quadro são comparadas nas threads de cópia.
+- O executável é compilado com otimização guiada por perfil (PGO), treinada no demo da tela de
+  título.
 
 O cache de shaders é refeito na primeira abertura.
 
