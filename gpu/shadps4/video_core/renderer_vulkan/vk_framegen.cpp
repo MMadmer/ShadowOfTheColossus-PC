@@ -80,12 +80,17 @@ std::atomic<bool> have_dlss{false}, have_fsr{false};
 
 } // namespace
 
+bool NvidiaGpu() {
+    static const bool nvidia = HasNvidiaGpu();
+    return nvidia;
+}
+
 bool WantStreamline() {
     // With fsr too, so that F8 can still switch to DLSS-G.
     if (AskedMode() == Asked::Off) {
         return false;
     }
-    if (!HasNvidiaGpu()) {
+    if (!NvidiaGpu()) {
         std::fprintf(stderr, "SOTC FRAMEGEN: no NVIDIA GPU, DLSS-G unavailable (FSR 3 possible)\n");
         return false;
     }

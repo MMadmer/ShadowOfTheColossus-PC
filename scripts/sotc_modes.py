@@ -12,7 +12,9 @@ Writes two files for the loader:
                           60 FPS and its timing follows
                    res720, res810, res900, res960  render resolution below the 1080p output
                           (the engine scales the frame up, as the Pro does from 1440p to 4K);
-                          not with --render, whose size takes their place
+                          not with --render, whose size takes their place. res360, res540 and
+                          res630 are the DLSS Ultra Performance, Performance and Balanced sizes
+                          (res720: Quality; SOTC_DLSS upscales the scene in the GPU library)
                    --render WxH (e.g. 3840x1600)  the game renders at this size instead of
                           1920x1080, with its aspect for the cameras (Hor+: a wider view, not a
                           stretched one); PS4 mode only, the PS4 Pro path keeps its sizes
@@ -54,7 +56,7 @@ MODES = {
 # up by the video output init, base PS4 path: render width / height immediates).
 RENDER_WIDTH = (0x00495d61, bytes.fromhex('b880070000'))
 RENDER_HEIGHT = (0x00495d7c, bytes.fromhex('b938040000'))
-RENDER_HEIGHTS = {720: 1280, 810: 1440, 900: 1600, 960: 1704, 1080: 1920}
+RENDER_HEIGHTS = {360: 640, 540: 960, 630: 1120, 720: 1280, 810: 1440, 900: 1600, 960: 1704, 1080: 1920}
 
 
 def render_resolution_patch(height):

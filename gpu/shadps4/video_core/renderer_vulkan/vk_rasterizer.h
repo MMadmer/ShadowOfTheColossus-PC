@@ -327,6 +327,11 @@ private:
     std::unordered_map<VAddr, HudlessImage> hudless_images; ///< by video out address
     HudlessImage hudless_clear;  ///< 1x1, all zero: the UI layer of the redraw
     s32 hudless_ui_info{-1};     ///< this draw: image_infos index of the UI texture, -1 none
+    /// sotc: this draw is the composite DLSS SR upscales the scene of: image_infos index of the
+    /// scene, -1 none; the scene and the size of the UI layer (the output).
+    s32 sr_scene_info{-1};
+    VideoCore::ImageId sr_scene_id{};
+    u32 sr_out_width{}, sr_out_height{};
     VAddr hudless_vo{};          ///< this draw: the video out image it renders to, 0 none
     vk::Format hudless_vo_format{};
     u32 hudless_vo_width{}, hudless_vo_height{};

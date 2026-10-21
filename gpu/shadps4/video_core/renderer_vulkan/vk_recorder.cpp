@@ -250,6 +250,16 @@ struct LastPushConstants {
 LastPushSet g_last_sets[2]; // graphics, compute
 LastPushConstants g_last_constants;
 
+} // Anonymous namespace
+
+void CommandRecorder::ForgetPushes() {
+    g_last_sets[0].valid = false;
+    g_last_sets[1].valid = false;
+    g_last_constants.valid = false;
+}
+
+namespace {
+
 bool PushDedupeEnabled() {
     static const bool enabled = [] {
         const char* v = std::getenv("SOTC_PUSH_DEDUPE");

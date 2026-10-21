@@ -27,6 +27,7 @@ class TextureCache;
 namespace Vulkan {
 class Instance;
 class Runtime;
+class Scheduler;
 }
 
 namespace Vulkan::Dlssg {
@@ -75,6 +76,17 @@ void NoInputs(u32 frame_id);
 /// Present thread: options, tags and the present start marker, right before vkQueuePresentKHR.
 /// `rect` is where the game image is in the swapchain image of size `extent`.
 void BeforePresent(u32 frame_id, vk::Rect2D rect, vk::Extent2D extent);
+
+/// sotc: DLSS Super Resolution (SOTC_DLSS) is supported and switched on (in-game menu).
+bool SrActive();
+
+/// sotc: draw thread, at the game's final composite (a render-size fp16 scene and the UI layer
+/// into the video out image): DLSS upscales the scene to out_w x out_h, recorded into the
+/// scheduler's stream. The view to sample instead (ShaderReadOnlyOptimal), or null when it does
+/// not run (off, no G-buffer this frame, sizes it does not take).
+vk::ImageView UpscaleScene(Scheduler& scheduler, Runtime& runtime,
+                           VideoCore::TextureCache& texture_cache, VideoCore::ImageId scene_id,
+                           u32 out_w, u32 out_h);
 
 /// Present thread: present end marker and status, right after vkQueuePresentKHR.
 void AfterPresent(u32 frame_id);

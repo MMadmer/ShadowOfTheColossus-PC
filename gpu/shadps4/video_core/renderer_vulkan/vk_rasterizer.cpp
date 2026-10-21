@@ -1062,6 +1062,7 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset, const Pipeline* resolve
     }
     hudless_ui_info = -1; // sotc: TakeHudless, set by BindTextures and BeginRendering
     hudless_vo = 0;
+    sr_scene_info = -1; // sotc: DLSS SR at the composite, set by BindTextures
     if (Dlssg::CapturingInputs()) { // sotc: camera and inputs of frame generation
         Dlssg::NoteDraw(regs, pipeline->GetGraphicsKey().mrt_mask, db_desc.first,
                         cb_descs[4].first, texture_cache);
@@ -1069,6 +1070,17 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset, const Pipeline* resolve
     if (!BindResources(pipeline)) {
         SotcStats::Drop(1, regs.color_buffers[0].Address(), 0);
         return;
+    }
+    // sotc: the composite samples DLSS's upscale of the scene instead (outside a render pass).
+    if (sr_scene_info >= 0) {
+        scheduler.EndRendering();
+        if (const vk::ImageView upscaled = Dlssg::UpscaleScene(
+                scheduler, runtime, texture_cache, sr_scene_id, sr_out_width, sr_out_height)) {
+            auto& scene = image_infos[sr_scene_info];
+            scene.imageView = upscaled;
+            scene.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+            image_info_images[sr_scene_info] = {};
+        }
     }
     const auto state = BeginRendering(pipeline);
     RefreshImageLayouts();
@@ -2246,8 +2258,9 @@ void Rasterizer::NoBindMemo(u32 reason) {
 
 void Rasterizer::FinishBindMemo(const Pipeline* pipeline, bool uses_dma) {
     auto& memo = bind_memo;
-    // The HUD-less composite is found by BindTextures alone: a reused bind would miss it.
-    if (hudless_ui_info >= 0) {
+    // The composite (HUD-less redraw, DLSS SR) is found by BindTextures alone: a reused bind
+    // would miss it.
+    if (hudless_ui_info >= 0 || sr_scene_info >= 0) {
         NoBindMemo(8);
     }
     if (!memo.recording) {
@@ -2618,14 +2631,29 @@ void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
         const char* v = std::getenv("SOTC_FG_HUDLESS");
         return v && v[0] == '1';
     }();
-    if (hudless_on && stage.sw_stage == Shader::SwStage::Fragment && image_bindings.size() == 2 &&
-        image_bindings[0].first && image_bindings[1].first &&
-        FrameGen::Current() != FrameGen::Mode::Off) {
-        const auto& ui = texture_cache.GetImage(image_bindings[0].first);
-        const auto& scene = texture_cache.GetImage(image_bindings[1].first);
-        if (ui.usage.render_target && ui.info.pixel_format == vk::Format::eR8G8B8A8Srgb &&
-            scene.info.pixel_format == vk::Format::eR16G16B16A16Sfloat) {
-            hudless_ui_info = static_cast<s32>(first_image_idx);
+    // sotc: in gameplay the composite binds the scene first and the UI layer second
+    // (SOTC_DLSS_PROBE, res810), so either order is taken. DLSS SR (Dlssg::UpscaleScene) upscales
+    // the scene there when it is smaller than the UI layer (a render resolution mode).
+    if (stage.sw_stage == Shader::SwStage::Fragment && image_bindings.size() == 2 &&
+        image_bindings[0].first && image_bindings[1].first) {
+        for (u32 ui_index = 0; ui_index < 2; ++ui_index) {
+            const auto& ui = texture_cache.GetImage(image_bindings[ui_index].first);
+            const auto& scene = texture_cache.GetImage(image_bindings[1 - ui_index].first);
+            if (!ui.usage.render_target || ui.info.pixel_format != vk::Format::eR8G8B8A8Srgb ||
+                scene.info.pixel_format != vk::Format::eR16G16B16A16Sfloat) {
+                continue;
+            }
+            if (hudless_on && FrameGen::Current() != FrameGen::Mode::Off) {
+                hudless_ui_info = static_cast<s32>(first_image_idx + ui_index);
+            }
+            if (Dlssg::SrActive() && scene.info.size.width <= ui.info.size.width &&
+                scene.info.size.height <= ui.info.size.height) {
+                sr_scene_info = static_cast<s32>(first_image_idx + 1 - ui_index);
+                sr_scene_id = image_bindings[1 - ui_index].first;
+                sr_out_width = ui.info.size.width;
+                sr_out_height = ui.info.size.height;
+            }
+            break;
         }
     }
 

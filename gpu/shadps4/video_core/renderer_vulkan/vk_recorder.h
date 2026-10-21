@@ -54,6 +54,11 @@ public:
 
     [[nodiscard]] static bool IsFake(VkCommandBuffer cmdbuf) noexcept;
 
+    /// sotc: commands recorded outside the stream (RecordDeferred: Streamline's evaluation)
+    /// changed the bound descriptors and push constants: the next pushes are not dropped as
+    /// repeats of the last ones.
+    static void ForgetPushes();
+
     /// Give the producer a fake handle for a command buffer that the consumer will allocate later
     /// The queued closure calls Bind to connect it with the real buffer before recording its
     /// commands
