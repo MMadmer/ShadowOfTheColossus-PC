@@ -505,6 +505,7 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
         static_cast<float>(EmulatorSettings.GetRcasAttenuation() / 1000.f);
 
     fsr_pass.Create(device, instance.GetAllocator(), num_images);
+    hudless_fsr_pass.Create(device, instance.GetAllocator(), num_images);
     pp_pass.Create(device, swapchain.GetSurfaceFormat().format);
 
     // sotc: the pipeline cache is read here, once frames can be presented, and blank frames with
@@ -805,11 +806,13 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
         attribute.attrib.pixel_format == Libraries::VideoOut::PixelFormat::A2R10G10B10Srgb;
     pp_pass.Render(cmdbuf, image_view, image_size, *frame, pp_settings);
 
-    // sotc: the game frame without the HUD, through the same pass (frame generation keeps the
-    // HUD of the real frame instead of interpolating it). Not with FSR 1 scaling, whose images
-    // are a ring meant for one frame each.
-    if (const vk::ImageView hudless_view = rasterizer->TakeHudless(cpu_address, view_info.format);
-        hudless_view && !DebugState.is_using_fsr) {
+    // sotc: the game frame without the HUD, through the same passes (frame generation keeps the
+    // HUD of the real frame instead of interpolating it); FSR 1 through a pass of its own, its
+    // images being a ring for one frame each.
+    frame->hudless_ui = vk::ImageView{};
+    if (const vk::ImageView hudless_view = rasterizer->TakeHudless(cpu_address, view_info.format)) {
+        frame->hudless_ui = rasterizer->HudlessUi(cpu_address, frame->hudless_ui_width,
+                                                  frame->hudless_ui_height);
         Frame& hudless = hudless_frames[frame->id];
         if (hudless.width != frame->width || hudless.height != frame->height ||
             hudless.is_hdr != frame->is_hdr || !hudless.image) {
@@ -821,7 +824,12 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
             .imageMemoryBarrierCount = 1,
             .pImageMemoryBarriers = &hudless_barrier,
         });
-        pp_pass.Render(cmdbuf, hudless_view, image_size, hudless, pp_settings);
+        const bool fsr1 = DebugState.is_using_fsr;
+        const vk::ImageView hudless_source =
+            hudless_fsr_pass.Render(cmdbuf, hudless_view, image_size,
+                                    {frame->width, frame->height}, fsr_settings, frame->is_hdr);
+        DebugState.is_using_fsr = fsr1;
+        pp_pass.Render(cmdbuf, hudless_source, image_size, hudless, pp_settings);
         frame->hudless = &hudless;
         Dlssg::NoteHudless(frame->id, hudless.image, hudless.image_view,
                            swapchain.GetSurfaceFormat().format, hudless.width, hudless.height);
@@ -1312,7 +1320,8 @@ bool Presenter::PresentGenerated(Frame* frame) {
     const auto cmdbuf = scheduler.CommandBuffer();
     const vk::Image generated =
         FsrFg::Generate(cmdbuf, frame->id, frame->image, frame->width, frame->height,
-                        frame->hudless ? frame->hudless->image : vk::Image{});
+                        frame->hudless ? frame->hudless->image : vk::Image{},
+                        frame->hudless ? frame->hudless_ui : vk::ImageView{});
 
     // FSR 3 reads the game frame and its inputs: after the frame's own commands.
     if (frame->ready_semaphore == draw_scheduler.GetWorkSemaphore()->Handle()) {

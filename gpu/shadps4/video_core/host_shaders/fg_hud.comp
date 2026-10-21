@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-// sotc: FSR 3.1 frame generation with a HUD-less frame (vk_fsrfg.cpp). The SDK adds the HUD as
-// the difference of the real frame and the HUD-less one to the interpolated scene, which lets
-// the scene's motion show through an opaque UI layer and dims a fading one. Where the two frames
-// differ (the HUD, the UI layer) the generated frame takes the real frame's pixel instead.
+// sotc: FSR 3.1 frame generation with a HUD-less frame (vk_fsrfg.cpp). FSR 3.1 interpolates only
+// the HUD-less scene; the real frame's HUD is then laid over the generated scene. With the UI
+// layer's alpha a (the game blends the UI over the scene: frame = ui + (1 - a) * hudless), the
+// generated frame is frame + (1 - a) * (generated - hudless): the real HUD over the moved scene.
+// Without it, the real frame's pixel is taken wherever the two frames differ.
 
 #version 450 core
 
@@ -10,10 +11,12 @@ layout (local_size_x = 8, local_size_y = 8) in;
 
 layout (binding = 0, set = 0, rgba8) uniform readonly image2D frame_in;
 layout (binding = 1, set = 0, rgba8) uniform readonly image2D hudless_in;
-layout (binding = 2, set = 0, rgba8) uniform writeonly image2D generated;
+layout (binding = 2, set = 0, rgba8) uniform image2D generated;
+layout (binding = 3, set = 0) uniform sampler2D ui_layer;
 
 layout (push_constant) uniform Params {
     uvec2 size;
+    uint has_ui;
 } pc;
 
 void main() {
@@ -23,6 +26,16 @@ void main() {
     }
     const vec4 frame = imageLoad(frame_in, at);
     const vec4 hudless = imageLoad(hudless_in, at);
+    if (pc.has_ui != 0u) {
+        const float alpha = texture(ui_layer, (vec2(at) + 0.5) / vec2(pc.size)).a;
+        if (alpha > 0.0) {
+            const vec4 scene = imageLoad(generated, at);
+            imageStore(generated, at,
+                       vec4(clamp(frame.rgb + (1.0 - alpha) * (scene.rgb - hudless.rgb), 0.0, 1.0),
+                            1.0));
+        }
+        return;
+    }
     // Outside the HUD both come from the same composite: equal to the bit.
     if (any(greaterThan(abs(frame.rgb - hudless.rgb), vec3(0.5 / 255.0)))) {
         imageStore(generated, at, frame);

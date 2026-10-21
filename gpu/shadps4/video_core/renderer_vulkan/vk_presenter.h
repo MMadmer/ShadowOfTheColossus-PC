@@ -38,6 +38,8 @@ struct Frame {
     u8 id{};
     /// sotc: this frame without the HUD (Rasterizer::TakeHudless) for frame generation, or null.
     Frame* hudless{};
+    vk::ImageView hudless_ui{}; ///< sotc: the UI layer of that composite (Rasterizer::HudlessUi)
+    u32 hudless_ui_width{}, hudless_ui_height{};
 
     ImTextureID imgui_texture;
 };
@@ -122,6 +124,7 @@ private:
     Frontend::WindowSDL& window;
     Instance instance;
     HostPasses::FsrPass fsr_pass;
+    HostPasses::FsrPass hudless_fsr_pass; ///< sotc: FSR 1 of the HUD-less frame (its own images)
     HostPasses::FsrPass::Settings fsr_settings{};
     HostPasses::PostProcessingPass::Settings pp_settings{};
     HostPasses::PostProcessingPass pp_pass;

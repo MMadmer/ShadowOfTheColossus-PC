@@ -68,6 +68,7 @@ vk::ShaderModule hud_shader;
 vk::UniqueDescriptorSetLayout hud_set_layout;
 vk::UniquePipelineLayout hud_layout;
 vk::UniquePipeline hud_pipeline;
+vk::UniqueSampler hud_sampler;
 
 // Present thread.
 FfxVkFsr3_3_1_6FrameGenerationContext* context{};
@@ -361,12 +362,24 @@ void Init(const Instance& instance) {
 
     // The HUD pass: frame, HUD-less frame, generated frame (storage images).
     hud_shader = CompileSPV(FG_HUD_COMP, device);
-    std::array<vk::DescriptorSetLayoutBinding, 3> hud_bindings{};
+    // ... and the UI layer, sampled for its alpha at the frame's size.
+    std::array<vk::DescriptorSetLayoutBinding, 4> hud_bindings{};
     for (u32 i = 0; i < hud_bindings.size(); ++i) {
         hud_bindings[i] = {.binding = i,
-                           .descriptorType = vk::DescriptorType::eStorageImage,
+                           .descriptorType = i == 3 ? vk::DescriptorType::eCombinedImageSampler
+                                                    : vk::DescriptorType::eStorageImage,
                            .descriptorCount = 1,
                            .stageFlags = vk::ShaderStageFlagBits::eCompute};
+    }
+    if (auto [sampler_result, sampler] = device.createSamplerUnique({
+            .magFilter = vk::Filter::eLinear,
+            .minFilter = vk::Filter::eLinear,
+            .addressModeU = vk::SamplerAddressMode::eClampToEdge,
+            .addressModeV = vk::SamplerAddressMode::eClampToEdge,
+            .addressModeW = vk::SamplerAddressMode::eClampToEdge,
+        });
+        sampler_result == vk::Result::eSuccess) {
+        hud_sampler = std::move(sampler);
     }
     auto [hud_set_result, hud_set] = device.createDescriptorSetLayoutUnique({
         .flags = vk::DescriptorSetLayoutCreateFlagBits::ePushDescriptorKHR,
@@ -374,7 +387,7 @@ void Init(const Instance& instance) {
         .pBindings = hud_bindings.data(),
     });
     const vk::PushConstantRange hud_push = {
-        .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = 2 * sizeof(u32)};
+        .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = 3 * sizeof(u32)};
     if (hud_set_result == vk::Result::eSuccess) {
         hud_set_layout = std::move(hud_set);
         const vk::DescriptorSetLayout hud_layouts[] = {*hud_set_layout};
@@ -398,15 +411,17 @@ void Init(const Instance& instance) {
             }
         }
     }
-    if (!hud_pipeline) {
+    if (!hud_pipeline || !hud_sampler) {
+        hud_pipeline.reset();
         std::fprintf(stderr, "SOTC FSR3 FG: HUD pass unavailable, the SDK composes the HUD\n");
     }
     supported = true;
 }
 
-/// sotc: where the real frame differs from the HUD-less one, its pixel replaces the generated
-/// one (fg_hud.comp). Recorded after the FSR 3.1 dispatch wrote `output`.
-void PutHudBack(vk::CommandBuffer cmdbuf, u32 width, u32 height) {
+/// sotc: the real frame's HUD over the generated scene (fg_hud.comp): by the UI layer's alpha,
+/// or without it where the real frame differs from the HUD-less one. Recorded after the FSR 3.1
+/// dispatch wrote `output`.
+void PutHudBack(vk::CommandBuffer cmdbuf, u32 width, u32 height, vk::ImageView ui_view) {
     const auto written = Barrier(output.image, vk::PipelineStageFlagBits2::eComputeShader,
                                  vk::AccessFlagBits2::eShaderWrite, vk::ImageLayout::eGeneral,
                                  vk::PipelineStageFlagBits2::eComputeShader,
@@ -416,21 +431,27 @@ void PutHudBack(vk::CommandBuffer cmdbuf, u32 width, u32 height) {
         .pImageMemoryBarriers = &written,
     });
     cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, *hud_pipeline);
+    // Without a UI layer the descriptor still needs an image: the HUD-less frame (unused).
     const std::array infos{
         vk::DescriptorImageInfo{.imageView = color.view, .imageLayout = vk::ImageLayout::eGeneral},
         vk::DescriptorImageInfo{.imageView = hudless_color.view,
                                 .imageLayout = vk::ImageLayout::eGeneral},
         vk::DescriptorImageInfo{.imageView = output.view, .imageLayout = vk::ImageLayout::eGeneral},
+        vk::DescriptorImageInfo{.sampler = *hud_sampler,
+                                .imageView = ui_view ? ui_view : hudless_color.view,
+                                .imageLayout = ui_view ? vk::ImageLayout::eShaderReadOnlyOptimal
+                                                       : vk::ImageLayout::eGeneral},
     };
-    std::array<vk::WriteDescriptorSet, 3> writes{};
+    std::array<vk::WriteDescriptorSet, 4> writes{};
     for (u32 i = 0; i < writes.size(); ++i) {
         writes[i] = {.dstBinding = i,
                      .descriptorCount = 1,
-                     .descriptorType = vk::DescriptorType::eStorageImage,
+                     .descriptorType = i == 3 ? vk::DescriptorType::eCombinedImageSampler
+                                              : vk::DescriptorType::eStorageImage,
                      .pImageInfo = &infos[i]};
     }
     cmdbuf.pushDescriptorSetKHR(vk::PipelineBindPoint::eCompute, *hud_layout, 0, writes);
-    const u32 params[2] = {width, height};
+    const u32 params[3] = {width, height, ui_view ? 1u : 0u};
     cmdbuf.pushConstants(*hud_layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(params),
                          params);
     cmdbuf.dispatch((width + 7) / 8, (height + 7) / 8, 1);
@@ -523,7 +544,7 @@ void NoteGameFrame() {
 }
 
 vk::Image Generate(vk::CommandBuffer cmdbuf, u32 frame_id, vk::Image frame_image, u32 width,
-                   u32 height, vk::Image hudless_image) {
+                   u32 height, vk::Image hudless_image, vk::ImageView ui_view) {
     if (!Supported()) {
         return {};
     }
@@ -596,11 +617,14 @@ vk::Image Generate(vk::CommandBuffer cmdbuf, u32 frame_id, vk::Image frame_image
         .imageMemoryBarrierCount = static_cast<u32>(post.size()),
         .pImageMemoryBarriers = post.data(),
     });
-    // sotc: the frame without the HUD (Rasterizer::TakeHudless): FSR 3 interpolates the scene from
-    // it and keeps the real frame's HUD where the two differ, instead of moving the HUD with the
-    // scene (the health and stamina bars shook). Same conversion as the game frame.
+    // sotc: the frame without the HUD (Rasterizer::TakeHudless): FSR 3.1 interpolates only the
+    // scene, and PutHudBack lays the real frame's HUD over it, instead of moving the HUD with
+    // the scene (text and bars smeared, the stamina circle doubled). The SDK's own HUD-less
+    // composition (it adds the difference of the two frames, in 8x8 blocks of its motion) is
+    // not used. Same conversion as the game frame.
     sotc_fsrfg_hudless = {};
-    if (hudless_image) {
+    const bool hud_pass = hudless_image && hud_pipeline;
+    if (hud_pass) {
         const std::array hudless_pre{
             Barrier(hudless_image, vk::PipelineStageFlagBits2::eAllCommands,
                     vk::AccessFlagBits2::eMemoryWrite, vk::ImageLayout::eGeneral,
@@ -631,12 +655,10 @@ vk::Image Generate(vk::CommandBuffer cmdbuf, u32 frame_id, vk::Image frame_image
             .imageMemoryBarrierCount = static_cast<u32>(hudless_post.size()),
             .pImageMemoryBarriers = hudless_post.data(),
         });
-        sotc_fsrfg_hudless = FgImage(hudless_color.image, kColorFormat, width, height,
-                                     vk::ImageLayout::eGeneral, kImageUsage);
     }
 
-    const auto color_in = FgImage(color.image, kColorFormat, width, height,
-                                  vk::ImageLayout::eGeneral, kImageUsage);
+    const auto color_in = FgImage(hud_pass ? hudless_color.image : color.image, kColorFormat,
+                                  width, height, vk::ImageLayout::eGeneral, kImageUsage);
     FfxVkFsr3_3_1_6FrameGenerationPrepareInfo prepare{};
     prepare.commandBuffer = static_cast<VkCommandBuffer>(cmdbuf);
     prepare.color = color_in;
@@ -690,8 +712,8 @@ vk::Image Generate(vk::CommandBuffer cmdbuf, u32 frame_id, vk::Image frame_image
         dispatch.frameId = fsr_frame;
         dispatch.reset = prepare.reset;
         r = ffxVkFsr3_3_1_6FrameGenerationContextRecordDispatch(context, &dispatch);
-        if (r == FFX_VK_FSR3_3_1_6_FRAMEGEN_OK && hudless_image && hud_pipeline) {
-            PutHudBack(cmdbuf, width, height);
+        if (r == FFX_VK_FSR3_3_1_6_FRAMEGEN_OK && hud_pass) {
+            PutHudBack(cmdbuf, width, height, ui_view);
         }
     }
     if (r != FFX_VK_FSR3_3_1_6_FRAMEGEN_OK) {

@@ -148,6 +148,10 @@ public:
     /// out image at `address`, viewed as `format` (layout ShaderReadOnlyOptimal), when it was
     /// drawn since the last call; else a null view.
     vk::ImageView TakeHudless(VAddr address, vk::Format format);
+    /// sotc: after TakeHudless returned an image: the UI layer that composite blended (a copy,
+    /// layout ShaderReadOnlyOptimal, kept for the next few composites), its alpha composes the
+    /// HUD over generated frames; a null view when there is none.
+    vk::ImageView HudlessUi(VAddr address, u32& width, u32& height);
 
 private:
     void PrepareRenderState(const GraphicsPipeline* pipeline);
@@ -320,6 +324,15 @@ private:
         bool fresh{};
     };
     void DestroyHudless(HudlessImage& image);
+    /// sotc: copies of the composite's UI layer (HudlessUi), a ring: the present thread reads one
+    /// a frame or two after the composite.
+    struct HudlessUiCopy {
+        HudlessImage copy;
+        VAddr address{};
+    };
+    std::array<HudlessUiCopy, 4> hudless_ui{};
+    u32 hudless_ui_next{};
+    s32 hudless_ui_taken{-1}; ///< the copy of the last TakeHudless, -1 none
     /// sotc: SOTC_DLSS_PROBE (vk_rasterizer.cpp).
     void ProbeGbuffer(const AmdGpu::Regs& regs);
     void ProbeSceneLayout(const Shader::Info& stage);
