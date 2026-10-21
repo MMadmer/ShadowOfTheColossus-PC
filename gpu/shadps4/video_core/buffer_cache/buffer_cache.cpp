@@ -1913,7 +1913,7 @@ bool BufferCache::MaybeEvictCold(std::chrono::steady_clock::time_point now) {
     const u64 budget = instance.GetTotalMemoryBudget();
     const bool small_card = budget != 0 && budget < (3ull << 30);
     // sotc: the launcher always passes its setting (1536 by default), so the small-card limit
-    // only applies without it (bench). Applying it under the launcher too (1.1.1 test build)
+    // only applies without it (bench). Applying it under the launcher too (a 1.1.0 test build)
     // evicted blocks shaders read through pointers: their frame of zeros made shadows flicker on
     // a GTX 1050, and the card still ran out of memory at colossus 2.
     static const u64 limit = [&] {

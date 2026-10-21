@@ -1,6 +1,11 @@
 # Changelog
 
-## 1.1.1 — 2026-10-21 (fork MMadmer)
+## 1.1.0 — 2026-10-22 (fork MMadmer)
+Junta ao fork tudo da 0.58 até a 0.60.4 do projeto original e as pull requests abertas dele, com
+correções de issues ainda abertas, NVIDIA DLSS e otimizações. Obrigado a **Lucas-blip-png,
+Oussama268, DUDUYG, jownatan e AjncSystem**, cujos commits entram com a autoria de cada um.
+
+**Placas fracas, memória e outras correções**
 - **Sons faltando em CPUs de 4 threads** (i5-7300HQ e semelhantes): a thread do sistema de som do
   jogo, que inicia os efeitos (cascos de Agro, colossos), ficava atrás das threads de trabalho do
   jogo e das threads da GPU, e efeitos e às vezes a música se perdiam. As threads de som agora têm
@@ -28,11 +33,6 @@
   que o PkgTool realmente gravou.
 - **Travamentos:** quando nenhum quadro do jogo chega por 60 s, o registro (`user/last_run.log`)
   recebe as pilhas de todas as threads, para encontrar a causa.
-
-## 1.1.0 — 2026-10-21 (fork MMadmer)
-Junta ao fork tudo da 0.58 até a 0.60.4 do projeto original e as pull requests abertas dele, com
-correções de issues ainda abertas, NVIDIA DLSS e otimizações. Obrigado a **Lucas-blip-png,
-Oussama268, DUDUYG, jownatan e AjncSystem**, cujos commits entram com a autoria de cada um.
 
 **Projeto original e pull requests**
 - **0.58 a 0.60.4 do AjncSystem/ShadowOfTheColossus-PC** (thread de desenhos, tradução de shaders
