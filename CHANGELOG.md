@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.1.1 — 2026-10-21 (fork MMadmer)
+- **Sons faltando em CPUs de 4 threads** (i5-7300HQ e semelhantes): a thread do sistema de som do
+  jogo, que inicia os efeitos (cascos de Agro, colossos), ficava atrás das threads de trabalho do
+  jogo e das threads da GPU, e efeitos e às vezes a música se perdiam. As threads de som agora têm
+  prioridade sobre elas.
+- **Resolução de render 720p** cobria a cena de lixo gráfico em todas as placas, também no DLSS
+  Qualidade: larguras de render de 1153 a 1280 dão aos alvos de render um passo de linha que o port
+  não emula direito. O modo agora renderiza em 1296 × 729, com a mesma imagem.
+- **Travamentos:** quando nenhum quadro do jogo chega por 60 s, o registro (`user/last_run.log`)
+  recebe as pilhas de todas as threads, para encontrar a causa.
+
 ## 1.1.0 — 2026-10-21 (fork MMadmer)
 Junta ao fork tudo da 0.58 até a 0.60.4 do projeto original e as pull requests abertas dele, com
 correções de issues ainda abertas, NVIDIA DLSS e otimizações. Obrigado a **Lucas-blip-png,

@@ -42,7 +42,7 @@ CONFIG_FILE = CONFIG_DIR / 'launcher_settings.json'
 settings_in_use = CONFIG_FILE
 GAME_ID, GAME_VERSION = 'CUSA08809', '01.01'
 SYS_MODULES = ('libSceUlt.sprx', 'libSceNgs2.sprx')
-VERSION = '1.1.0'
+VERSION = '1.1.1'
 MAX_LOG_LINES = 6000
 NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 
