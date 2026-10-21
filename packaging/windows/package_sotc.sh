@@ -66,7 +66,6 @@ if [[ -d ${SHADER_PACK_DIR:-} ]]; then
     cp -r "$SHADER_PACK_DIR" "$dest/shaderpack"
 fi
 cp README.md "$dest/README.md"
-cp README_RU.md "$dest/README_RU.md"
 cat > "$dest/sotc.ini" <<'EOF'
 # Shadow of the Colossus PC - settings (see README.md)
 # Folder of your game dump (the one with eboot.bin):
@@ -89,6 +88,6 @@ mkdir -p dist/SotC-PC
 cp -r "$dest/bin" "$dest/scripts" "$dest/launcher" "$dest/_internal" dist/SotC-PC/
 [[ -d $dest/tools ]] && cp -r "$dest/tools" dist/SotC-PC/
 [[ -d $dest/shaderpack ]] && cp -r "$dest/shaderpack" dist/SotC-PC/
-cp "$dest/SotC.exe" "$dest/sotc.py" "$dest/SotC.bat" "$dest/README.md" "$dest/README_RU.md" "$dest/LICENSE" "$dest/CHANGELOG.md" dist/SotC-PC/
+cp "$dest/SotC.exe" "$dest/sotc.py" "$dest/SotC.bat" "$dest/README.md" "$dest/LICENSE" "$dest/CHANGELOG.md" dist/SotC-PC/
 [[ -f dist/SotC-PC/sotc.ini ]] || cp "$dest/sotc.ini" dist/SotC-PC/
 echo "dist/SotC-PC.zip ($(du -h dist/SotC-PC.zip | cut -f1)) and dist/SotC-PC/"
