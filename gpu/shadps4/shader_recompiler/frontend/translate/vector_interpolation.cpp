@@ -52,18 +52,8 @@ void Translator::EmitVectorInterpolation(const GcnInst& inst) {
 
 // VINTRP
 
-// sotc: whether attribute `attr` is interpolated by hand from its three vertex values. With
-// Profile::barycentric_via_gs only the attributes the GCN code also reads per vertex are; the
-// others keep the hardware interpolation.
-static bool ManualAttribute(const Profile& profile, const Info& info, u32 attr) {
-    if (!profile.needs_manual_interpolation) {
-        return false;
-    }
-    return !profile.barycentric_via_gs || ((info.fs_pervertex_mask >> attr) & 1) != 0;
-}
-
 void Translator::V_INTERP_P1_F32(const GcnInst& inst) {
-    if (!ManualAttribute(profile, info, inst.control.vintrp.attr)) {
+    if (!profile.needs_manual_interpolation) {
         return;
     }
     const u32 attr_index = inst.control.vintrp.attr;
@@ -91,7 +81,7 @@ void Translator::V_INTERP_P2_F32(const GcnInst& inst) {
         return;
     }
     ASSERT(!attr.is_flat);
-    if (!ManualAttribute(profile, info, attr_index)) {
+    if (!profile.needs_manual_interpolation) {
         interp = GetInterpolation(vgpr_to_interp[inst.src[0].code]);
         SetDst(inst.dst[0], ir.GetAttribute(attrib, inst.control.vintrp.chan));
         return;
@@ -112,12 +102,11 @@ void Translator::V_INTERP_MOV_F32(const GcnInst& inst) {
     auto& interp = info.fs_interpolation[attr_index];
     const u32 src_select = inst.src[0].code;
     ASSERT_MSG(src_select < 3, "Invalid V_INTERP_MOV_F32 selector {}", src_select);
-    const bool per_vertex =
-        profile.supports_amd_shader_explicit_vertex_parameter ||
-        (profile.supports_fragment_shader_barycentric &&
-         (!profile.barycentric_via_gs || ((info.fs_pervertex_mask >> attr_index) & 1) != 0));
-    ASSERT(attr.is_flat || src_select == 2 || per_vertex);
-    if (per_vertex) {
+    ASSERT(attr.is_flat || src_select == 2 ||
+           profile.supports_amd_shader_explicit_vertex_parameter ||
+           profile.supports_fragment_shader_barycentric);
+    if (profile.supports_amd_shader_explicit_vertex_parameter ||
+        profile.supports_fragment_shader_barycentric) {
         // VSRC 0=P10, 1=P20, 2=P0
         interp.primary = Qualifier::PerVertex;
         IR::F32 result = ir.GetAttribute(attrib, inst.control.vintrp.chan, (src_select + 1) % 3);
@@ -127,15 +116,7 @@ void Translator::V_INTERP_MOV_F32(const GcnInst& inst) {
         }
         SetDst(inst.dst[0], result);
     } else {
-        // sotc: without per-vertex inputs (NVIDIA before Turing: no fragment shader barycentrics)
-        // the qualifier is per attribute, while GCN reads P0 of single channels of interpolated
-        // attributes too (values the same on the three vertices). Making the whole attribute flat
-        // froze its other, interpolated channels (texture coordinates) for every triangle: flat
-        // colours everywhere on GTX 10 cards. Flat only when nothing interpolates the attribute;
-        // V_INTERP_P2 makes it smooth again whatever came first.
-        if (attr.is_flat || interp.primary == Qualifier::None) {
-            interp.primary = Qualifier::Flat;
-        }
+        interp.primary = Qualifier::Flat;
         SetDst(inst.dst[0], ir.GetAttribute(attrib, inst.control.vintrp.chan));
     }
 }

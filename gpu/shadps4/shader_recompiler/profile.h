@@ -52,9 +52,9 @@ struct Profile {
     bool needs_unorm_fixup{};
     bool needs_clip_distance_emulation{};
     bool supports_shader_stencil_export{};
-    /// sotc: per-vertex fragment inputs and barycentrics come from a geometry shader the
-    /// pipeline adds (GPUs without fragment shader barycentrics, e.g. NVIDIA Pascal); the
-    /// recompiler then reads only the attributes the GCN code reads per vertex that way.
+    /// sotc: supports_fragment_shader_barycentric emulated by an auxiliary geometry shader
+    /// (EmitBarycentricGeometryShader): per-vertex inputs and barycentrics become plain inputs.
+    /// Last, so the profiles stored in older caches still compare equal.
     bool barycentric_via_gs{};
 
     bool operator==(const Profile&) const = default;

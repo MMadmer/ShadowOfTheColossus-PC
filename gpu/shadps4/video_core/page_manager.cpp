@@ -610,8 +610,7 @@ public:
             // Notify rasterizer about the fault.
             const VAddr addr = msg.arg.pagefault.address;
             const auto ptid = msg.arg.pagefault.feat.ptid;
-            rasterizer->InvalidateMemory(addr, 1,
-                                         ptid == rasterizer->GetGpuCommandProcessorThreadId());
+            rasterizer->InvalidateMemory(addr, 1, rasterizer->IsGpuSideThreadId(ptid));
 
             // Some calls to InvalidateMemory never reach the UFFDIO_WRITEPROTECT ioctl in
             // ::Protect, therefore we use MODE_DONTWAKE and wake the thread with UFFDIO_WAKE here
@@ -858,6 +857,13 @@ struct SignalImpl : public PageManager::Impl {
         // (Liverpool::IsBackThreaded) is handled on the draw thread, after what is queued: that
         // work may produce the bytes this read wants, and a readback records commands, which only
         // the draw thread may do.
+        // sotc: a walker load through a null SRT pointer (address below 64 KiB, never mapped) is
+        // left to SrtWalkerSignalHandler (reads zero) without waiting for the draw thread: a
+        // pointer that stays null faults on every draw since the walker is no longer patched.
+        if (reinterpret_cast<VAddr>(fault_address) < 0x10000 && !Common::IsWriteError(context) &&
+            Shader::IsSrtWalkerCode(Common::GetRip(context))) {
+            return false;
+        }
         if (rasterizer->RunsGpuWorkElsewhere()) {
             bool handled = false;
             rasterizer->RunOnDrawThread(

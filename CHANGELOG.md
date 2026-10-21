@@ -1,5 +1,180 @@
 # Changelog
 
+## 0.60.4 — 2026-10-20
+- **Blocos ciano nas pedras e flores piscando** (com "Texturas em alta qualidade"): o ajuste da
+  0.60.3 que evita a queda trocava o nível de detalhe das texturas a cada um ou dois segundos nas
+  áreas grandes (4, 3, 2, 3, 2…), e cada troca fazia o jogo descartar ou recarregar texturas que
+  estavam sendo desenhadas. Agora ele só baixa o detalhe com menos de 8% de memória livre e só
+  volta acima de 16%. Testado do Novo Jogo+ até o 2º colosso: 3 trocas em vez de ~8, sem blocos
+  ciano, sem flores piscando e sem quedas.
+
+## 0.60.3 — 2026-10-20
+**O jogo é zerável do início ao fim.** Jogado do save antes do último colosso até a luta com o
+Malus, as cenas finais e os créditos, com "Texturas em alta qualidade", modo PS4 Pro e 60 FPS
+ligados. Obrigado a **Lucas-blip-png**.
+
+- **Queda com "Texturas em alta qualidade" em vistas amplas** (espada erguida contra o sol, área
+  do último colosso; `0x1a371`, #186): quando a memória de texturas do jogo começa a acabar, as
+  texturas vistas pedem um nível de detalhe a menos (dois quando está quase cheia) e o jogo libera
+  espaço antes de travar. Continua mais nítido que com a opção desligada (PR #191, Lucas-blip-png).
+- **Queda no carregamento depois dos créditos** (`0x49500`): a proteção da memória do jogo não
+  enxergava os reservatórios que o mundo cria, porque eles crescem em pedaços de 1 MB espalhados;
+  agora cada um é protegido onde estão os seus blocos livres (#146).
+- **+2,7% de FPS no templo:** leituras da GPU em janelas de 64 KB (PR #196, Lucas-blip-png).
+
+## 0.60.2 — 2026-10-20
+- **Ajuste rápido dentro do jogo:** no menu (Insert, F1 ou L3+R3), sem sair do jogo: 60 FPS,
+  geração de quadros (desligada / DLSS-G / FSR 3), texturas em alta qualidade, reaproveitar
+  sombras distantes e volume. Valem na hora e ficam salvos no lançador para a próxima vez. AF 16x,
+  modo PS4 Pro, resolução e uso de memória de vídeo continuam no lançador (precisam reiniciar).
+- **Mouse no menu:** com o menu aberto o mouse fica solto e visível para clicar; ao fechar, volta
+  a controlar a câmera.
+- **Tela de carregamento animada também na montagem dos shaders** ao abrir o jogo (antes a janela
+  ficava parada, às vezes por minutos depois de atualizar o driver), com fundo preto opaco e
+  animação no centro (círculo girando, título pulsando, "Carregando…").
+- Menu com título e Ajuste rápido no idioma do lançador.
+
+## 0.60.1 — 2026-10-20
+Obrigado a **nosekefik, Oussama268, plassardewen-cpu e lunar-me**.
+
+- **Menu dentro do jogo** (Insert, F1 ou L3+R3): FPS, placa e memória de vídeo, tela cheia,
+  resolução, escala e nitidez, câmera e mouse, efeitos (névoa, vinheta, oclusão, reflexos da
+  água). Era o menu do Bloodborne, escondido no port; agora é do SotC e vem ligado
+  (`BB_OVERLAY_MENU=0` desliga). Textos em inglês (PR #94, nosekefik).
+- **Sobras do Bloodborne removidas** (~11.700 linhas: lançador antigo, patches e mods do
+  Bloodborne, ícones, documentos), a partir da PR #60 do Oussama268. O executável do jogo
+  (`bb-probe.exe`) passa a ter o ícone do SotC.
+- A busca pelo jogo ignora a pasta `WpSystem` do Windows (PR #110, plassardewen-cpu).
+- Página do GitHub só em inglês.
+
+## 0.60 — 2026-10-20
+Obrigado a **Lucas-blip-png, Einar e KingJhoss**.
+
+**Correções**
+- **Texturas nas GTX 1060/1070/1080 (Pascal):** superfícies sem textura, cores chapadas ou quase
+  pretas (#57, #68, #102). A Pascal não tem o recurso de interpolação que o jogo usa; ele é
+  imitado com um geometry shader (PR #169, Lucas-blip-png).
+- **Jogo travando ou fechando na tela de título** em alguns PCs (núcleos da CPU com relógios
+  diferentes): o relógio do jogo passa a vir do Windows (PR #174, Einar).
+- **Não abria em PCs com pouca memória** (regressão da 0.59): se o Windows recusar os 9152 MB,
+  o jogo usa o tamanho do console e avisa no registro.
+- **FSR 3: quadrados pretos nos quadros gerados** em AMD RX 7000 (PR #177, KingJhoss).
+- **Botão JOGAR cortado** com escala do Windows acima de 100% (PR #171).
+- Correção no código herdado do shadPS4: mínimo/máximo atômico com decimais em placas sem
+  `VK_EXT_shader_atomic_float2` executava duas operações em vez de uma.
+
+**Novidades**
+- **Modo 60 FPS usando o modo Desempenho do próprio jogo** (o do PS4 Pro): o jogo passa a mirar
+  60 FPS, então o tempo dele acompanha. Deve corrigir física errada em 60 FPS (#100, #120); ainda
+  em teste nesses colossos (PR #183, Lucas-blip-png). `SOTC_MODES=af16` volta ao modo antigo.
+- **Cada cópia do port tem a própria pasta `user`** (saves, cache, registros e configurações do
+  lançador em `user\launcher_settings.json`). Antes todas usavam a pasta da primeira cópia. Na
+  primeira vez, a cópia nova herda as configurações e **copia** os saves e módulos de som.
+- **+6% de FPS no templo:** a proteção da memória do jogo não é mais refeita a cada quadro
+  (PR #168, Lucas-blip-png).
+- Geração de quadros sem a interface (barra de vida sem tremer), **experimental e desligada**:
+  `SOTC_FG_HUDLESS=1` (PR #154, Lucas-blip-png).
+- Jogando pelo `SotC.bat` o registro também vai para `user\last_run.log` (PR #175, Einar);
+  ferramentas de medição corrigidas (PR #181, Einar).
+
+**Conhecido:** "Texturas em alta qualidade" ainda pode fechar o jogo em vistas muito amplas
+(espada erguida contra o sol, área do último colosso; #186): desligue-a se acontecer. Personagens
+brancos em AMD GCN (RX 470–590, Vega, APUs): em investigação.
+
+## 0.59.1 — 2026-10-20
+Obrigado a **Lucas-blip-png e Oussama268**.
+
+- **Sombras distantes piscando** (#178, #157, #163; AMD e NVIDIA GTX 1080, RTX 40/50): a
+  reutilização de sombras (desde a 0.58) redesenhava as sombras distantes só a cada dois quadros e
+  o jogo não guarda a do quadro pulado. Agora vem desligada (PR #170, Lucas-blip-png). Medido no
+  demo inteiro: desligada 61,8 FPS de média / 37,2 de mínima, ligada 59,5 / 35,6, ou seja não
+  ganhava FPS. Nova opção **Sombras distantes** no lançador (Desligado / Ligado / Automático).
+- **AMD: listras nas sombras e na água** (fork do Oussama268, opt8): o acesso direto à memória
+  vem desligado por padrão em placas AMD (dá para ligar no lançador).
+- **Intel, correções parciais** (Oussama268): tamanhos de dispatch e layouts válidos, sem
+  inteiros de 64 bits quando a GPU não tem, tamanho de subgroup fixo.
+- **O registro mostra a placa de vídeo e o driver** (linha `GPU:`), para os relatos nas issues;
+  `SOTC_GPU_VENDOR=10de|1002|8086` escolhe a GPU em notebooks com duas (Oussama268).
+- Correções menores de revisão (Oussama268).
+
+## 0.59 — 2026-10-20
+Obrigado a **Oussama268, Lucas-blip-png e EdouardSence**.
+
+**Desempenho**
+- **Mais FPS e menos travadas** (fork do Oussama268, opt5–opt7): os desenhos são preparados numa
+  thread própria (#99 Lucas-blip-png), a memória direta é enviada aos poucos e os shaders e
+  pipelines de compute são traduzidos em threads auxiliares (o objeto espera alguns quadros em vez
+  de a tela travar). Demo da tela de título: média 63 → 65–67 FPS, mínima 30 → 34–37, ponte
+  30–32 → 37–40.
+
+**Estabilidade**
+- **Queda no final do jogo e ao carregar saves** (`0x1a371` / `0x49500`): a GPU às vezes devolvia
+  dados velhos para memória que o jogo já tinha liberado, corrompendo o alocador. A proteção do
+  Pink-shadPS4 cuidava de um só dos reservatórios de memória do jogo; agora cobre todos os do
+  mesmo tipo, inclusive os criados quando o mundo carrega (área do último colosso). O jogo também
+  recebe 9152 MB de memória direta em todos os modos (#146, #149). Causa achada com logs de
+  quedas reais; a passagem completa até os créditos ainda está em teste.
+- **Placas de 6 GB** fechando por falta de memória de vídeo: tenta o tamanho exato e a RAM do PC
+  antes de desistir (#137).
+- **Lançador em Windows chinês** quebrava com o "™" do título (#151).
+
+**Novidades**
+- **F11** alterna janela / tela cheia (#118, EdouardSence).
+- **Uso de memória de vídeo:** Econômico, Padrão, Alto e Máximo (antes o jogo limpava texturas a
+  partir de 60% da placa, o "limite de 6 GB" das placas de 8–16 GB) (#143).
+- **Volume:** 100 a 300%, sem estourar (#95).
+- **Atualização automática:** o lançador avisa quando sai versão nova e instala sozinho, mantendo
+  saves, cache de shaders e sotc.ini (#136, Oussama268). Vale a partir desta versão.
+- **Ultrawide com o modo PS4 Pro:** 21:9 e 32:9 ficavam com bordas pretas com o modo Pro ligado;
+  agora a tela larga tem prioridade (#142, #145).
+
+## 0.58.1 — 2026-10-19
+- **Texturas em alta qualidade** (ligada por padrão nos Ajustes rápidos): desde a 0.0.13 o port
+  nunca informava ao jogo quais texturas estavam em uso, e ele não carregava as versões de alta
+  resolução (folhas da árvore da abertura e pedras borradas). Desligada, volta ao comportamento
+  antigo, para placas com pouca memória de vídeo.
+- **Ícone da janela do jogo:** um desenho do port (o menino erguendo a espada), para não ficar igual
+  ao do lançador na barra de tarefas. Em Imagem e FPS: padrão, o ícone do jogo ou uma imagem sua.
+
+## 0.58 — 2026-10-19
+Versão da comunidade: junta as pull requests e forks de várias pessoas, revisados e testados juntos.
+Obrigado a **Lucas-blip-png, Gabriell-os, Oussama268, jownatan, xeodeo, nakaionyt/y7ngboy e tabnul**.
+
+**Estabilidade**
+- **Quedas por falta de memória de vídeo** (`EnsureResident: Assertion Failed`, placas AMD e de
+  4–6 GB): a memória dos buffers vem em blocos de 64 MB (antes milhares de alocações, acima do
+  limite dos drivers) e a memória parada é devolvida com o uso, conferindo os dados antes
+  (Gabriell-os #98, Oussama268 #59/#83/#103).
+- **Jogo congelando** ("GPU hook queue overflow"): a fila de avisos de memória cresce sob demanda.
+- **Queda depois do 1º e do 2º colosso no modo PS4 Pro** (`0x1a371`): o modo Pro recebe a
+  memória de um PS4 Pro (Lucas-blip-png #106).
+- Pacote de preenchimento na fila de compute que corrompia o pacote seguinte; arredondamento RTZ
+  desligado na NVIDIA (o driver travava); trava de regiões sem deadlock no Windows (jownatan #81).
+
+**Desempenho:** demo da tela de título 54–55 → **62 FPS de média**, mínima 26 → 31; memória de
+vídeo ~4,3 → ~2,7 GB (cortes no processador de comandos, pipelines compilados em segundo plano,
+caches lidos em paralelo, sombras distantes reaproveitadas).
+
+**AMD:** bloco preto no canto da tela nas RDNA3/RDNA4 (#43) e texturas BC5/BC6H (xeodeo);
+ramos uniformes de wave64 e envio periódico ligados na AMD (Gabriell-os #98). Ainda sem teste
+numa AMD aqui: conte nas issues.
+
+**Novidades**
+- **Widescreen / ultrawide:** 16:10, 21:9 e 32:9 com imagem mais larga, sem esticar (tabnul #54).
+- **FPS: 30 / 60 / ilimitado** no lançador.
+- **Ícones dos botões Xbox** no jogo (A B X Y, RB, LT/RT, Menu, View), desenhados para o port;
+  opção PlayStation / Xbox em Controles (mecanismo de troca de texturas do xeodeo).
+- **Geração de quadros (experimental):** FSR 3 em qualquer placa e DLSS-G nas RTX 40/50 (runtime
+  oficial da NVIDIA no pacote, com as licenças), com o jogo a 30 → 60 na tela (nakaionyt/y7ngboy).
+  Só faz diferença com o FPS em 30, e a barra de vida/stamina pode tremer.
+- Overlay de desempenho (F10), F7 liga/desliga o limite de 30, F8 troca a geração de quadros.
+- **Lançador em espanhol, chinês, coreano e russo.**
+- Janela com o ícone do jogo e, no título, a versão e o FPS.
+- **Lista de saves com a imagem de cada save**, como no PS4 / shadPS4.
+- **Tela de carregamento** com barra de porcentagem enquanto o cache de shaders é lido.
+- Idioma escolhido já na primeira tela do lançador; Modo PS4 Pro e Nitidez (RCAS) nos Ajustes rápidos.
+- O cache de shaders é refeito na primeira abertura.
+
 ## 1.0.1 — 2026-10-18 (fork MMadmer)
 - **Som do port por padrão:** o lançador não copia mais sozinho os módulos de som de um shadPS4
   instalado (`user/sys_modules`) nem os ativa: a biblioteca de som própria do port toca todos os

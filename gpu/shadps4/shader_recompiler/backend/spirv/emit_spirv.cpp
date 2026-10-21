@@ -369,7 +369,9 @@ void SetupCapabilities(const Info& info, const Profile& profile, const RuntimeIn
     ctx.AddCapability(spv::Capability::ImageQuery);
     ctx.AddCapability(spv::Capability::Int8);
     ctx.AddCapability(spv::Capability::Int16);
-    ctx.AddCapability(spv::Capability::Int64);
+    if (profile.support_int64 || info.uses_int64) { // sotc: Info::uses_int64
+        ctx.AddCapability(spv::Capability::Int64);
+    }
     ctx.AddCapability(spv::Capability::StorageBuffer8BitAccess);
     ctx.AddCapability(spv::Capability::StorageBuffer16BitAccess);
     if (info.uses_fp16) {
@@ -431,13 +433,11 @@ void SetupCapabilities(const Info& info, const Profile& profile, const RuntimeIn
     if (info.hw_stage == HwStage::Fragment) {
         if (profile.supports_amd_shader_explicit_vertex_parameter) {
             ctx.AddExtension("SPV_AMD_shader_explicit_vertex_parameter");
-        } else if (profile.barycentric_via_gs) {
-            // sotc: barycentrics are a plain input (geometry shader), sampled at the centroid or
-            // a sample with the GLSL interpolation functions.
-            ctx.AddCapability(spv::Capability::InterpolationFunction);
         } else if (profile.supports_fragment_shader_barycentric) {
-            ctx.AddExtension("SPV_KHR_fragment_shader_barycentric");
-            ctx.AddCapability(spv::Capability::FragmentBarycentricKHR);
+            if (!profile.barycentric_via_gs) { // sotc: plain inputs from the geometry shader
+                ctx.AddExtension("SPV_KHR_fragment_shader_barycentric");
+                ctx.AddCapability(spv::Capability::FragmentBarycentricKHR);
+            }
             ctx.AddCapability(spv::Capability::InterpolationFunction);
         }
         if (info.loads.Get(IR::Attribute::SampleIndex) ||

@@ -4,6 +4,7 @@
 #pragma once
 
 #include <chrono>
+#include <unordered_map>
 
 #include "common/recursive_lock.h"
 #include "common/shared_first_mutex.h"
@@ -63,6 +64,10 @@ public:
 
     /// sotc: the pipeline lookups of the draws and dispatches alone (command processor thread).
     const Pipeline* LookupGraphicsPipeline(u16 vertex_sgpr_offset, u16 instance_sgpr_offset);
+    /// sotc: the register-only test of FilterDraw: true when it will not record the draw. With
+    /// the draw thread the command processor then skips the pipeline lookup (a pipeline for
+    /// PrimitiveType::None would not even build).
+    bool IsDrawFilteredOut() const;
     const Pipeline* LookupComputePipeline();
     bool IsGpuSideThread() const;
     void PrepareGpuSideFault();
@@ -133,11 +138,21 @@ public:
     std::thread::id GetGpuCommandProcessorThread();
 #ifdef __linux__
     u32 GetGpuCommandProcessorThreadId();
+    bool IsGpuSideThreadId(u32 tid) const;
 #endif
+
+    /// sotc: frame generation without the HUD. The game composes its UI layer (an R8G8B8A8 sRGB
+    /// render target) over the fp16 scene in one draw into the video out image; while frame
+    /// generation (FSR 3 or DLSS-G) runs, that draw is repeated into an image of its own with a transparent UI
+    /// texture (SOTC_FG_HUDLESS=0 turns it off). Thread of PrepareFrame: that image for the video
+    /// out image at `address`, viewed as `format` (layout ShaderReadOnlyOptimal), when it was
+    /// drawn since the last call; else a null view.
+    vk::ImageView TakeHudless(VAddr address, vk::Format format);
 
 private:
     void PrepareRenderState(const GraphicsPipeline* pipeline);
     RenderState BeginRendering(const GraphicsPipeline* pipeline);
+    void RefreshImageLayouts();
     void Resolve();
     void DepthStencilCopy(bool is_depth, bool is_stencil);
     void EliminateFastClear();
@@ -150,6 +165,11 @@ private:
     void UpdateColorBlendingState(const GraphicsPipeline* pipeline) const;
 
     bool FilterDraw();
+
+    /// sotc: SOTC_SHADOW_REUSE: true when this draw's far sun shadow cascade is reused (moved
+    /// by whole texels) instead of drawn this frame (vk_shadow_scroll.h).
+    bool ReuseShadowCascade();
+    std::unique_ptr<class ShadowScroll> shadow_scroll;
 
     void BindBuffers(const Shader::Info& stage, Shader::Backend::Bindings& binding,
                      Shader::PushData& push_data);
@@ -209,6 +229,9 @@ private:
         std::array<u8, TargetKeySize> key;
     } target_memo;
     boost::container::static_vector<vk::DescriptorImageInfo, Shader::NUM_IMAGES> image_infos;
+    /// sotc: the image of each image_infos entry (null for samplers and empty slots). Ids, not
+    /// pointers: FindImage may grow the image slot vector and move every image.
+    std::array<VideoCore::ImageId, Shader::NUM_IMAGES> image_info_images{};
     boost::container::static_vector<vk::DescriptorBufferInfo, Shader::NUM_BUFFERS> buffer_infos;
     boost::container::static_vector<VideoCore::ImageId, Shader::NUM_IMAGES> bound_images;
     struct BoundBuffer {
@@ -283,6 +306,25 @@ private:
     bool TryReuseBindings(const Pipeline* pipeline);
     void FinishBindMemo(const Pipeline* pipeline, bool uses_dma);
     void NoBindMemo(u32 reason);
+    /// sotc: TakeHudless. BeginHudless starts the redraw of this draw (the final composite) into
+    /// its HUD-less image; false when this draw is not the composite.
+    bool BeginHudless(const GraphicsPipeline* pipeline, const RenderState& state);
+    struct HudlessImage {
+        vk::Image image;
+        vk::ImageView rt_view;   ///< in the composite's attachment format
+        vk::ImageView read_view; ///< in the format TakeHudless asked
+        vk::Format rt_format{}, read_format{};
+        struct VmaAllocation_T* allocation{};
+        u32 width{}, height{};
+        bool fresh{};
+    };
+    void DestroyHudless(HudlessImage& image);
+    std::unordered_map<VAddr, HudlessImage> hudless_images; ///< by video out address
+    HudlessImage hudless_clear;  ///< 1x1, all zero: the UI layer of the redraw
+    s32 hudless_ui_info{-1};     ///< this draw: image_infos index of the UI texture, -1 none
+    VAddr hudless_vo{};          ///< this draw: the video out image it renders to, 0 none
+    vk::Format hudless_vo_format{};
+    u32 hudless_vo_width{}, hudless_vo_height{};
 };
 
 } // namespace Vulkan

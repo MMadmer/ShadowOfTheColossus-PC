@@ -206,6 +206,9 @@ void Liverpool::BackLoop(std::stop_token stoken) {
     RaiseGpuThreadPriority();
     g_gpu_thread = 2;
     Shader::g_info_slot = 1;
+#ifdef __linux__
+    back_tid = gettid();
+#endif
     u64 tail = back_tail.load(std::memory_order_relaxed);
     while (!stoken.stop_requested()) {
         if (num_commands.load(std::memory_order_acquire)) {
@@ -508,7 +511,9 @@ void Liverpool::SubmitDraw(bool is_indexed, u32 index_offset) {
         return;
     }
     WaitBackWrites();
-    const auto* pipeline = rasterizer->LookupGraphicsPipeline(0, 0);
+    // sotc: no pipeline for a draw FilterDraw drops on the draw thread (review of #99).
+    const auto* pipeline =
+        rasterizer->IsDrawFilteredOut() ? nullptr : rasterizer->LookupGraphicsPipeline(0, 0);
     NoteCommandHistogram(pipeline, 0);
     BackOp& op = BackAlloc();
     op.kind = BackOp::Kind::Draw;
@@ -527,8 +532,10 @@ void Liverpool::SubmitDrawIndirect(bool is_indexed, VAddr address, u32 offset, u
         return;
     }
     WaitBackWrites();
-    const auto* pipeline =
-        rasterizer->LookupGraphicsPipeline(vertex_sgpr_offset, instance_sgpr_offset);
+    const auto* pipeline = rasterizer->IsDrawFilteredOut()
+                               ? nullptr
+                               : rasterizer->LookupGraphicsPipeline(vertex_sgpr_offset,
+                                                                    instance_sgpr_offset);
     NoteCommandHistogram(pipeline, 1);
     BackOp& op = BackAlloc();
     op.kind = BackOp::Kind::DrawIndirect;
@@ -1494,15 +1501,22 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                         runtime_memory_write_backing(base + 0x40 + half * sizeof(entries), entries,
                                                      sizeof(entries));
                     }
-                    static const bool lod_trace = std::getenv("SOTC_LOD_TRACE") != nullptr;
+                    // SOTC_LOD_TRACE=<packets> (any other value: 600) between trace lines.
+                    static const u64 lod_trace = [] {
+                        const char* v = std::getenv("SOTC_LOD_TRACE");
+                        const u64 n = v ? std::strtoull(v, nullptr, 0) : 0;
+                        return v ? (n > 1 ? n : 600) : 0;
+                    }();
                     static u64 packets = 0;
-                    if (lod_trace && packets++ % 600 == 0) {
+                    if (lod_trace && packets++ % lod_trace == 0) {
                         u32 used = 0;
                         for (const u64 e : entries) {
                             used += (e >> 56) != 0xf;
                         }
-                        LOG_WARNING(Render_Vulkan, "sotc GET_LOD_STATS {:#x}+{:#x}: {} banks sampled",
-                                    base, size, used);
+                        LOG_WARNING(Render_Vulkan,
+                                    "sotc GET_LOD_STATS {:#x}+{:#x}: {} banks sampled, page pool "
+                                    "{}% free",
+                                    base, size, used, SotcLod::PoolFreePercent());
                     }
                     }, false);
                 }
@@ -1513,7 +1527,10 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 if (cond_exec->command.Value() != 0) {
                     LOG_WARNING(Render, "IT_COND_EXEC used a reserved command");
                 }
-                WaitBackWrites();
+                // sotc: the predicate may be written by a queued fence (EOP/EOS/ReleaseMem write
+                // from the CPU side, not counted by WaitBackWrites) or by a dispatch not recorded
+                // yet (its output not protected yet): the draw thread must have run them. Rare.
+                DrainBack();
                 const auto skip = *cond_exec->Address() == false;
                 if (skip) {
                     SotcStats::Drop(4, reinterpret_cast<uintptr_t>(cond_exec->Address()),

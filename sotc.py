@@ -17,12 +17,20 @@ Settings (environment variables, or sotc.ini beside this script as NAME=value li
                       or shadPS4's addcont folder holding CUSA08809)
     SOTC_MODES        optional, comma-separated: af16 (16x anisotropic filtering),
                       fps60 (removes the 30 FPS cap; experimental, vblank at 120 Hz),
-                      res720/res810/res900/res960 (render below 1080p, the game scales up)
+                      fps60game (the game's own 60 FPS target, as the PS4 Pro Performance mode;
+                      with SOTC_FPS_CAP=off),
+                      res720/res810/res900/res960 (render below 1080p, the game scales up; a
+                      render size of another shape, SOTC_RENDER_RES, takes their place)
+    SOTC_RENDER_RES   optional: the game renders at WxH instead of 1920x1080 (e.g. 2560x1080 for
+                      21:9, a wider view); the output follows its aspect; PS4 mode only; at most 1080
+                      lines tall and 4.2 million pixels, larger sizes are scaled down
     SOTC_CVARS        engine settings, NAME=VALUE separated by spaces (e.g. r_motionBlurEnable=0)
     BB_GAMEPAD        the gamepad to use (its name or part of it), when several are connected
     key.<input>=Keys, pad.<input>=buttons   remap the controls (README.md, Controles)
 The image is prepared again only when the game, the modules or the scripts change.
-Extra arguments go to bb-probe.exe.
+Extra arguments go to bb-probe.exe. Run from a console, the session is also saved to
+<user>/last_run.log (the 4 before it as last_run.1.log ... last_run.4.log; a crash's log is
+copied to <user>/crashes).
 """
 import hashlib
 import os
@@ -65,6 +73,32 @@ def find_probe():
         if candidate.is_file():
             return candidate
     fail(f'{name} not found: build it with build.sh (MSYS2 CLANG64 on Windows) or use a packaged build.')
+
+
+# Above about 4.2 million rendered pixels the fine detail textures (ground, cloth) shimmer, flicker
+# and then disappear (2736x1536 is fine, 3008x1696 shimmers, 3840x2160 has none); cause unknown.
+# The game itself never renders more than 1080 lines in PS4 mode, so the render height stays at
+# most 1080 (3840x1080 for 32:9 is tested fine) and the pixel limit covers wider aspects.
+MAX_RENDER_HEIGHT = 1080
+MAX_RENDER_PIXELS = 4_200_000
+
+
+def cap_render(size):
+    """SOTC_RENDER_RES WxH, scaled down (same aspect, multiples of 8) to MAX_RENDER_HEIGHT lines
+    and MAX_RENDER_PIXELS."""
+    try:
+        w, h = map(int, size.split('x'))
+    except ValueError:
+        return size  # sotc_modes.py reports it
+    if w <= 0 or h <= 0:
+        return size  # sotc_modes.py reports it
+    scale = min(1.0, MAX_RENDER_HEIGHT / h, (MAX_RENDER_PIXELS / (w * h)) ** 0.5)
+    if scale == 1.0:
+        return size
+    capped = f'{int(w * scale) // 8 * 8}x{int(h * scale) // 8 * 8}'
+    print(f'sotc: render size {size} is above {MAX_RENDER_HEIGHT} lines or {MAX_RENDER_PIXELS:,} pixels '
+          f'(fine textures disappear), rendering at {capped}', file=sys.stderr)
+    return capped
 
 
 def run_script(name, *args):
@@ -171,10 +205,40 @@ def main():
     if cvars is None:
         # Without the launcher: the culling settings of Pink-shadPS4 (same image, fewer GPU waits).
         cvars = 'doIndexBufferCulling=0 doSunShadowIndexBufferCulling=0'
-    run_script('sotc_modes.py', source, '--out', out, '--modes', modes, '--cvars', cvars)
-    if 'fps60' in modes.lower():
-        # The game waits for vblanks: at 60 Hz an uncapped frame still rounds up to 30 FPS.
-        env.setdefault('BB_VBLANK_HZ', '120')
+    if env.get('SOTC_NOTE'):
+        print(f"sotc: {env['SOTC_NOTE']}", file=sys.stderr)
+    render = cap_render(env.get('SOTC_RENDER_RES', '').strip())
+    if render == '1920x1080':
+        # A 16:9 output above 1080p renders at 1080p as before: no patches, no extra memory.
+        render = ''
+    if render:
+        env['SOTC_RENDER_RES'] = render  # the GPU library reads it (bilinear 2D art above 1080p)
+    else:
+        env.pop('SOTC_RENDER_RES', None)
+    run_script('sotc_modes.py', source, '--out', out, '--modes', modes, '--cvars', cvars,
+               *(['--render', render] if render else []))
+    if render:
+        # The output keeps the render size's aspect (a 16:9 output would stretch a 21:9 image).
+        try:
+            rw, rh = map(int, render.split('x'))
+            ow, oh = map(int, env.get('SOTC_OUTPUT_RES', '').split('x'))
+            same_aspect = abs(ow * rh - oh * rw) <= oh * rw // 100
+        except ValueError:
+            same_aspect = False
+        if not same_aspect:
+            env['SOTC_OUTPUT_RES'] = render
+        # Larger render targets: the game's heaps take what direct memory there is (run.sh).
+        env.setdefault('BB_DMEM_MB', '9152')
+    # The game's direct memory allocator (a 64 KiB page bitmap over all of it) filled up and read
+    # past the bitmap (guest offset 0x1a371, read of -1): in PS4 Pro mode with 5696 MiB when a save
+    # loaded, and in PS4 mode with 5056 MiB on loading the last colossus' area (user logs, 19
+    # Oct; high quality textures keep more fine mips resident than on a PS4). Every mode gets the
+    # 9152 MiB the wide render sizes already used.
+    env.setdefault('BB_DMEM_MB', '9152')
+    # The game waits for vblanks: at 60 Hz an uncapped frame (fps60, or F7 in game) still rounds
+    # up to 30 FPS. With the cap, 120 Hz only shows a late frame sooner (and SOTC_FPS_LIMIT counts
+    # in 120 Hz vblanks).
+    env.setdefault('BB_VBLANK_HZ', '120')
 
     probe = find_probe()
     # Development builds run from the MSYS2 tree: its CLANG64 DLLs (SDL3, FFmpeg, ...).
@@ -197,7 +261,58 @@ def main():
     if env.get('SOTC_WRAP'):
         import json
         command = json.loads(env['SOTC_WRAP']) + command
-    return subprocess.run(command, stdin=subprocess.DEVNULL, creationflags=no_console()).returncode
+    # In a console the session also goes to user/last_run.log (as the launcher does; the launcher
+    # reads this script's output into its own log, so a pipe means it is not written here).
+    if not sys.stdout.isatty():
+        return subprocess.run(command, stdin=subprocess.DEVNULL, creationflags=no_console()).returncode
+    with open_session_log(user) as log:
+        game = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT)
+        try:
+            for line in game.stdout:
+                sys.stdout.buffer.write(line)
+                sys.stdout.buffer.flush()
+                log.write(line)
+        finally:
+            code = game.wait()
+    keep_crash_log(user, code)
+    return code
+
+
+LOGS_KEPT = 5        # last_run.log and last_run.1.log ... last_run.4.log
+CRASH_LOGS_KEPT = 20
+
+
+def open_session_log(user):
+    """A fresh user/last_run.log; the previous sessions' logs move to last_run.1.log (the one
+    before) ... last_run.4.log. Same files as the launcher (launcher/sotc_launcher_win.py)."""
+    for i in range(LOGS_KEPT - 1, 0, -1):
+        older = user / ('last_run.log' if i == 1 else f'last_run.{i - 1}.log')
+        if older.is_file():
+            try:
+                os.replace(older, user / f'last_run.{i}.log')
+            except OSError:
+                pass
+    return open(user / 'last_run.log', 'wb', buffering=0)
+
+
+def keep_crash_log(user, code):
+    """After a session that ended with an error code, copies its log to
+    user/crashes/<date>_<time>_<code>.log (the last 20, and the last 5 minidumps, are kept)."""
+    if code == 0:
+        return
+    import time
+    crashes = user / 'crashes'
+    try:
+        crashes.mkdir(parents=True, exist_ok=True)
+        stamp = time.strftime('%Y-%m-%d_%H-%M-%S')
+        shutil.copy2(user / 'last_run.log', crashes / f'{stamp}_{code & 0xffffffff:#x}.log')
+        for old in sorted(crashes.glob('*.log'))[:-CRASH_LOGS_KEPT]:
+            old.unlink()
+        for old in sorted(crashes.glob('*.dmp'))[:-5]:
+            old.unlink()
+    except OSError:
+        pass
 
 
 if __name__ == '__main__':

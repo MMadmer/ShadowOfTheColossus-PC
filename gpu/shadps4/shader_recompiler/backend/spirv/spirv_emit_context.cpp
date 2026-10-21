@@ -3,7 +3,7 @@
 
 #include "common/assert.h"
 #include "common/div_ceil.h"
-#include "shader_recompiler/backend/spirv/emit_spirv_bary_gs.h"
+#include "shader_recompiler/backend/spirv/emit_spirv_quad_rect.h"
 #include "shader_recompiler/backend/spirv/spirv_emit_context.h"
 #include "shader_recompiler/frontend/fetch_shader.h"
 #include "shader_recompiler/ir/attribute.h"
@@ -131,7 +131,11 @@ void EmitContext::DefineArithmeticTypes() {
     F32[1] = Name(TypeFloat(32), "f32_id");
     S32[1] = Name(TypeSInt(32), "i32_id");
     U32[1] = Name(TypeUInt(32), "u32_id");
-    U64 = Name(TypeUInt(64), "u64_id");
+    // sotc: no 64-bit integer type where the device lacks shaderInt64 and the shader does not
+    // need one (Info::uses_int64): declaring it requires the Int64 capability.
+    if (profile.support_int64 || info.uses_int64) {
+        U64 = Name(TypeUInt(64), "u64_id");
+    }
 
     for (u32 i = 2; i <= 4; i++) {
         if (info.uses_fp16) {
@@ -154,8 +158,10 @@ void EmitContext::DefineArithmeticTypes() {
     u32_one_value = ConstU32(1U);
     u32_zero_value = ConstU32(0U);
     f32_zero_value = ConstF32(0.0f);
-    u64_one_value = Constant(U64, 1ULL);
-    u64_zero_value = Constant(U64, 0ULL);
+    if (Sirit::ValidId(U64)) {
+        u64_one_value = Constant(U64, 1ULL);
+        u64_zero_value = Constant(U64, 0ULL);
+    }
 
     pi_x2 = ConstF32(2.0f * float{std::numbers::pi});
 
@@ -295,40 +301,6 @@ void EmitContext::DefineAmdPerVertexAttribs() {
     }
 }
 
-Id EmitContext::GsBarycentrics(Id pos) {
-    // b = M^-1 (x, y, w): the rows of M^-1 come per primitive in gsb_bm (emit_spirv_bary_gs.h),
-    // normalized to sum 1 against rounding.
-    const Id p{OpVectorShuffle(F32[3], pos, pos, 0U, 1U, 3U)};
-    const Id input_vec4{TypePointer(spv::StorageClass::Input, F32[4])};
-    std::array<Id, 3> b{};
-    for (u32 k = 0; k < 3; ++k) {
-        const Id row{OpLoad(F32[4], OpAccessChain(input_vec4, gsb_bm, ConstU32(k)))};
-        b[k] = OpDot(F32[1], OpVectorShuffle(F32[3], row, row, 0U, 1U, 2U), p);
-    }
-    const Id inv_sum{
-        OpFDiv(F32[1], ConstF32(1.f), OpFAdd(F32[1], OpFAdd(F32[1], b[0], b[1]), b[2]))};
-    return OpVectorTimesScalar(F32[3], OpCompositeConstruct(F32[3], b[0], b[1], b[2]), inv_sum);
-}
-
-void EmitContext::DefineGsBarycentrics() {
-    if (!Sirit::ValidId(gsb_pos)) {
-        return;
-    }
-    gsb_bary_value = GsBarycentrics(OpLoad(F32[4], gsb_pos));
-    // Screen-space barycentrics: b_k * w_k, normalized.
-    const Id input_vec4{TypePointer(spv::StorageClass::Input, F32[4])};
-    std::array<Id, 3> n{};
-    for (u32 k = 0; k < 3; ++k) {
-        const Id row{OpLoad(F32[4], OpAccessChain(input_vec4, gsb_bm, ConstU32(k)))};
-        n[k] = OpFMul(F32[1], OpCompositeExtract(F32[1], gsb_bary_value, k),
-                      OpCompositeExtract(F32[1], row, 3U));
-    }
-    const Id inv_sum{
-        OpFDiv(F32[1], ConstF32(1.f), OpFAdd(F32[1], OpFAdd(F32[1], n[0], n[1]), n[2]))};
-    gsb_bary_np_value =
-        OpVectorTimesScalar(F32[3], OpCompositeConstruct(F32[3], n[0], n[1], n[2]), inv_sum);
-}
-
 void EmitContext::DefineWorkgroupIndex() {
     const Id workgroup_id_val{OpLoad(U32[3], workgroup_id)};
     const Id workgroup_x{OpCompositeExtract(U32[1], workgroup_id_val, 0)};
@@ -389,6 +361,26 @@ void EmitContext::DefineInputs() {
         break;
     }
     case SwStage::Fragment: {
+        // sotc: Profile::barycentric_via_gs: the barycentrics and per-vertex inputs come from the
+        // auxiliary geometry shader as plain inputs (EmitBarycentricGeometryShader).
+        const auto gs_layout = MakeBarycentricGsLayout(runtime_info.hw.fs, info);
+        std::array<Id, 2> gs_bary{};
+        const auto define_bary = [&](bool nopersp) -> Id {
+            if (!profile.barycentric_via_gs) {
+                return DefineVariable(F32[3],
+                                      nopersp ? spv::BuiltIn::BaryCoordNoPerspKHR
+                                              : spv::BuiltIn::BaryCoordKHR,
+                                      spv::StorageClass::Input);
+            }
+            Id& id = gs_bary[nopersp ? 1 : 0];
+            if (!ValidId(id)) {
+                id = DefineInput(F32[3], nopersp ? gs_layout.NoPerspective() : gs_layout.Smooth());
+                if (nopersp) {
+                    Decorate(id, spv::Decoration::NoPerspective);
+                }
+            }
+            return id;
+        };
         if (info.loads.GetAny(IR::Attribute::FragCoord) ||
             (info.loads.GetAny(IR::Attribute::BaryCoordPullModel) &&
              !profile.supports_amd_shader_explicit_vertex_parameter)) {
@@ -414,112 +406,40 @@ void EmitContext::DefineInputs() {
             sample_mask_in = DefineVariable(TypeArray(U32[1], u32_one_value),
                                             spv::BuiltIn::SampleMask, spv::StorageClass::Input);
         }
-        // sotc: Profile::barycentric_via_gs: the inputs are packed from location 0 (a per-vertex
-        // attribute takes three locations), then the emulated clip distances and the two
-        // barycentric vectors. The pipeline's geometry shader writes them; it finds them by name
-        // (gsb_pv<param>, gsb_in<param>, cldist_attr0, gsb_bary, gsb_bary_np).
-        // Layout 2 (emit_spirv_bary_gs.h) when it fits below GsbPosLocation, else layout 1.
-        const bool via_gs = profile.barycentric_via_gs;
-        std::array<u32, IR::NumParams> gs_location{};
-        u32 gs_clip_location = 0;
-        if (via_gs) {
-            const bool clip_inputs = runtime_info.hw.fs.clip_distance_emulation;
-            const auto count = runtime_info.hw.fs.num_inputs - (clip_inputs ? 1 : 0);
-            const bool smooth_bary = info.loads.GetAny(IR::Attribute::BaryCoordSmooth) ||
-                                     info.loads.GetAny(IR::Attribute::BaryCoordPullModel) ||
-                                     info.loads.GetAny(IR::Attribute::BaryCoordSmoothCentroid) ||
-                                     info.loads.GetAny(IR::Attribute::BaryCoordSmoothSample);
-            const bool nopersp_bary = info.loads.GetAny(IR::Attribute::BaryCoordNoPersp) ||
-                                      info.loads.GetAny(IR::Attribute::BaryCoordNoPerspSample);
-            const u32 shift = clip_inputs ? 1 : 0;
-            u32 next = shift;
-            for (u32 i = 0; i < count; i++) {
-                const auto& input = runtime_info.hw.fs.inputs[i];
-                if (!input.IsDefault() && info.fs_interpolation[i].primary != Qualifier::PerVertex) {
-                    gs_location[i] = input.param_index + shift;
-                    next = std::max(next, gs_location[i] + 1);
-                }
-            }
-            bool fits = next <= GsbPosLocation;
-            for (u32 i = 0; i < count; i++) {
-                if (!runtime_info.hw.fs.inputs[i].IsDefault() &&
-                    info.fs_interpolation[i].primary == Qualifier::PerVertex) {
-                    gs_location[i] = next;
-                    next += 3;
-                }
-            }
-            const u32 bm_location = next;
-            next += smooth_bary || nopersp_bary ? 3 : 0;
-            fits &= next <= GsbPosLocation;
-            if (fits) {
-                if (smooth_bary || nopersp_bary) {
-                    gsb_pos = Name(DefineInput(F32[4], GsbPosLocation), "gsb_pos");
-                    gsb_bm = Name(DefineInput(TypeArray(F32[4], ConstU32(3U)), bm_location),
-                                  "gsb_bm");
-                    Decorate(gsb_bm, spv::Decoration::Flat);
-                }
-            } else {
-                // Layout 1: packed from location 0.
-                next = 0;
-                for (u32 i = 0; i < count; i++) {
-                    if (runtime_info.hw.fs.inputs[i].IsDefault()) {
-                        continue;
-                    }
-                    gs_location[i] = next;
-                    next += info.fs_interpolation[i].primary == Qualifier::PerVertex ? 3 : 1;
-                }
-                gs_clip_location = next;
-                next += clip_inputs ? 1 : 0;
-                if (smooth_bary) {
-                    bary_coord = Name(DefineInput(F32[3], next), "gsb_bary");
-                }
-                if (nopersp_bary) {
-                    bary_coord_nopersp = Name(DefineInput(F32[3], next + 1), "gsb_bary_np");
-                    Decorate(bary_coord_nopersp, spv::Decoration::NoPerspective);
-                    bary_coord_nopersp_sample = bary_coord_nopersp;
-                }
-            }
-            if (info.loads.GetAny(IR::Attribute::BaryCoordSmoothSample) && !ValidId(sample_index)) {
-                sample_index =
-                    DefineVariable(U32[1], spv::BuiltIn::SampleId, spv::StorageClass::Input);
-                Decorate(sample_index, spv::Decoration::Flat);
-            }
-        }
-        if (info.loads.GetAny(IR::Attribute::BaryCoordSmooth) && !via_gs) {
+        if (info.loads.GetAny(IR::Attribute::BaryCoordSmooth)) {
             if (profile.supports_amd_shader_explicit_vertex_parameter) {
                 bary_coord_smooth = DefineVariable(F32[2], spv::BuiltIn::BaryCoordSmoothAMD,
                                                    spv::StorageClass::Input);
             } else if (profile.supports_fragment_shader_barycentric && !ValidId(bary_coord)) {
                 bary_coord =
-                    DefineVariable(F32[3], spv::BuiltIn::BaryCoordKHR, spv::StorageClass::Input);
+                    define_bary(false);
             }
         }
-        if (info.loads.GetAny(IR::Attribute::BaryCoordPullModel) && !via_gs) {
+        if (info.loads.GetAny(IR::Attribute::BaryCoordPullModel)) {
             if (profile.supports_amd_shader_explicit_vertex_parameter) {
                 bary_coord_pull_model = DefineVariable(F32[3], spv::BuiltIn::BaryCoordPullModelAMD,
                                                        spv::StorageClass::Input);
             } else if (profile.supports_fragment_shader_barycentric && !ValidId(bary_coord)) {
                 bary_coord =
-                    DefineVariable(F32[3], spv::BuiltIn::BaryCoordKHR, spv::StorageClass::Input);
+                    define_bary(false);
             }
         }
-        if (info.loads.GetAny(IR::Attribute::BaryCoordSmoothCentroid) && !via_gs) {
+        if (info.loads.GetAny(IR::Attribute::BaryCoordSmoothCentroid)) {
             if (profile.supports_amd_shader_explicit_vertex_parameter) {
                 bary_coord_smooth_centroid = DefineVariable(
                     F32[2], spv::BuiltIn::BaryCoordSmoothCentroidAMD, spv::StorageClass::Input);
             } else if (profile.supports_fragment_shader_barycentric && !ValidId(bary_coord)) {
                 bary_coord =
-                    DefineVariable(F32[3], spv::BuiltIn::BaryCoordKHR, spv::StorageClass::Input);
+                    define_bary(false);
             }
         }
-        if (info.loads.GetAny(IR::Attribute::BaryCoordSmoothSample) && !via_gs) {
+        if (info.loads.GetAny(IR::Attribute::BaryCoordSmoothSample)) {
             if (profile.supports_amd_shader_explicit_vertex_parameter) {
                 bary_coord_smooth_sample = DefineVariable(
                     F32[2], spv::BuiltIn::BaryCoordSmoothSampleAMD, spv::StorageClass::Input);
             } else if (profile.supports_fragment_shader_barycentric) {
                 if (!ValidId(bary_coord)) {
-                    bary_coord = DefineVariable(F32[3], spv::BuiltIn::BaryCoordKHR,
-                                                spv::StorageClass::Input);
+                    bary_coord = define_bary(false);
                 }
                 // we would need sample_index to interpolate the bary_coord later
                 if (!ValidId(sample_index)) {
@@ -529,22 +449,20 @@ void EmitContext::DefineInputs() {
                 }
             }
         }
-        if (info.loads.GetAny(IR::Attribute::BaryCoordNoPersp) && !via_gs) {
+        if (info.loads.GetAny(IR::Attribute::BaryCoordNoPersp)) {
             if (profile.supports_amd_shader_explicit_vertex_parameter) {
                 bary_coord_nopersp = DefineVariable(F32[2], spv::BuiltIn::BaryCoordNoPerspAMD,
                                                     spv::StorageClass::Input);
             } else if (profile.supports_fragment_shader_barycentric) {
-                bary_coord_nopersp = DefineVariable(F32[3], spv::BuiltIn::BaryCoordNoPerspKHR,
-                                                    spv::StorageClass::Input);
+                bary_coord_nopersp = define_bary(true);
             }
         }
-        if (info.loads.GetAny(IR::Attribute::BaryCoordNoPerspSample) && !via_gs) {
+        if (info.loads.GetAny(IR::Attribute::BaryCoordNoPerspSample)) {
             if (profile.supports_amd_shader_explicit_vertex_parameter) {
                 bary_coord_nopersp_sample = DefineVariable(
                     F32[2], spv::BuiltIn::BaryCoordNoPerspSampleAMD, spv::StorageClass::Input);
             } else if (profile.supports_fragment_shader_barycentric) {
-                bary_coord_nopersp_sample = DefineVariable(
-                    F32[3], spv::BuiltIn::BaryCoordNoPerspKHR, spv::StorageClass::Input);
+                bary_coord_nopersp_sample = define_bary(true);
                 // Decorate(bary_coord_nopersp_sample, spv::Decoration::Sample);
             }
         }
@@ -559,28 +477,22 @@ void EmitContext::DefineInputs() {
                 continue;
             }
             const IR::Attribute param = IR::Attribute::Param0 + i;
-            const u32 num_components = info.loads.NumComponents(param);
             const auto [primary, auxiliary] = info.fs_interpolation[i];
+            // sotc: the geometry shader writes the three vertex values as vec4s.
+            const bool gs_per_vertex = primary == Qualifier::PerVertex && profile.barycentric_via_gs;
+            const u32 num_components = gs_per_vertex ? 4 : info.loads.NumComponents(param);
             const Id type = F32[num_components];
             const Id attr_id = [&] {
-                if (via_gs) {
-                    if (primary == Qualifier::PerVertex) {
-                        return Name(DefineInput(TypeArray(type, ConstU32(3U)), gs_location[i]),
-                                    fmt::format("gsb_pv{}", input.param_index));
-                    }
-                    return Name(DefineInput(type, gs_location[i]),
-                                fmt::format("gsb_in{}", input.param_index));
-                }
                 const auto bind_location = input.param_index + (has_clip_distance_inputs ? 1 : 0);
                 if (primary == Qualifier::PerVertex &&
                     profile.supports_fragment_shader_barycentric) {
-                    return Name(DefineInput(TypeArray(type, ConstU32(3U)), bind_location),
+                    return Name(DefineInput(TypeArray(type, ConstU32(3U)),
+                                            gs_per_vertex ? gs_layout.Location(i) : bind_location),
                                 fmt::format("fs_in_attr{}_p", i));
                 }
                 return Name(DefineInput(type, bind_location), fmt::format("fs_in_attr{}", i));
             }();
-            if (primary == Qualifier::PerVertex && via_gs) {
-                // The three vertex values, the same at every vertex of the primitive.
+            if (gs_per_vertex) {
                 Decorate(attr_id, spv::Decoration::Flat);
             } else if (primary == Qualifier::PerVertex) {
                 Decorate(attr_id, profile.supports_amd_shader_explicit_vertex_parameter
@@ -600,8 +512,7 @@ void EmitContext::DefineInputs() {
 
         if (has_clip_distance_inputs) {
             const auto type = F32[MaxEmulatedClipDistances];
-            const auto attr_id =
-                Name(DefineInput(type, via_gs ? gs_clip_location : 0), fmt::format("cldist_attr{}", 0));
+            const auto attr_id = Name(DefineInput(type, 0), fmt::format("cldist_attr{}", 0));
             input_params[num_inputs] = GetAttributeInfo(AmdGpu::NumberFormat::Float, attr_id,
                                                         MaxEmulatedClipDistances, false);
         }
@@ -772,19 +683,6 @@ void EmitContext::DefineOutputs() {
                 output_params[num_attrs] = GetAttributeInfo(
                     AmdGpu::NumberFormat::Float, clip_distances, MaxEmulatedClipDistances, true);
                 Name(clip_distances, fmt::format("cldist_attr{}", 0));
-            }
-            // sotc: barycentric_via_gs layout 2: a copy of the clip position for the fragment
-            // shader's barycentrics (passed through the geometry shader), unless a parameter
-            // already takes its location.
-            if (profile.barycentric_via_gs && hw_stage == HwStage::Vertex) {
-                bool free = true;
-                for (u32 i = 0; i < IR::NumParams; i++) {
-                    free &= !info.stores.GetAny(IR::Attribute::Param0 + i) ||
-                            i + (needs_clip_distance_emulation ? 1 : 0) != GsbPosLocation;
-                }
-                if (free) {
-                    gsb_pos = Name(DefineOutput(F32[4], GsbPosLocation), "gsb_pos");
-                }
             }
         }
         break;

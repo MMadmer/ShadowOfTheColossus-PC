@@ -130,9 +130,6 @@ Id EmitGetAttribute(EmitContext& ctx, IR::Attribute attr, u32 comp, u32 index) {
         return ctx.OpLoad(ctx.F32[1],
                           ctx.OpAccessChain(ctx.input_f32, ctx.tess_coord, ctx.ConstU32(1U)));
     case IR::Attribute::BaryCoordSmooth:
-        if (Sirit::ValidId(ctx.gsb_pos)) {
-            return ctx.OpCompositeExtract(ctx.F32[1], ctx.gsb_bary_value, comp);
-        }
         if (ctx.profile.supports_amd_shader_explicit_vertex_parameter) {
             return ctx.OpLoad(ctx.F32[1], ctx.OpAccessChain(ctx.input_f32, ctx.bary_coord_smooth,
                                                             ctx.ConstU32(comp)));
@@ -140,11 +137,6 @@ Id EmitGetAttribute(EmitContext& ctx, IR::Attribute attr, u32 comp, u32 index) {
             return ctx.OpCompositeExtract(ctx.F32[1], ctx.OpLoad(ctx.F32[3], ctx.bary_coord), comp);
         }
     case IR::Attribute::BaryCoordSmoothCentroid:
-        if (Sirit::ValidId(ctx.gsb_pos)) {
-            return ctx.OpCompositeExtract(
-                ctx.F32[1],
-                ctx.GsBarycentrics(ctx.OpInterpolateAtCentroid(ctx.F32[4], ctx.gsb_pos)), comp);
-        }
         if (ctx.profile.supports_amd_shader_explicit_vertex_parameter) {
             return ctx.OpLoad(ctx.F32[1],
                               ctx.OpAccessChain(ctx.input_f32, ctx.bary_coord_smooth_centroid,
@@ -154,13 +146,6 @@ Id EmitGetAttribute(EmitContext& ctx, IR::Attribute attr, u32 comp, u32 index) {
                 ctx.F32[1], ctx.OpInterpolateAtCentroid(ctx.F32[3], ctx.bary_coord), comp);
         }
     case IR::Attribute::BaryCoordSmoothSample:
-        if (Sirit::ValidId(ctx.gsb_pos)) {
-            return ctx.OpCompositeExtract(
-                ctx.F32[1],
-                ctx.GsBarycentrics(ctx.OpInterpolateAtSample(
-                    ctx.F32[4], ctx.gsb_pos, ctx.OpLoad(ctx.U32[1], ctx.sample_index))),
-                comp);
-        }
         if (ctx.profile.supports_amd_shader_explicit_vertex_parameter) {
             return ctx.OpLoad(
                 ctx.F32[1],
@@ -173,15 +158,9 @@ Id EmitGetAttribute(EmitContext& ctx, IR::Attribute attr, u32 comp, u32 index) {
                 comp);
         }
     case IR::Attribute::BaryCoordNoPersp:
-        if (Sirit::ValidId(ctx.gsb_pos)) {
-            return ctx.OpCompositeExtract(ctx.F32[1], ctx.gsb_bary_np_value, comp);
-        }
         return ctx.OpLoad(ctx.F32[1], ctx.OpAccessChain(ctx.input_f32, ctx.bary_coord_nopersp,
                                                         ctx.ConstU32(comp)));
     case IR::Attribute::BaryCoordNoPerspSample:
-        if (Sirit::ValidId(ctx.gsb_pos)) {
-            return ctx.OpCompositeExtract(ctx.F32[1], ctx.gsb_bary_np_value, comp);
-        }
         return ctx.OpLoad(
             ctx.F32[1],
             ctx.OpAccessChain(ctx.input_f32, ctx.bary_coord_nopersp_sample, ctx.ConstU32(comp)));
@@ -202,10 +181,8 @@ Id EmitGetAttribute(EmitContext& ctx, IR::Attribute attr, u32 comp, u32 index) {
         if (comp == 2) {
             return inv_w;
         }
-        const Id ij = ctx.OpCompositeExtract(
-            ctx.F32[1],
-            Sirit::ValidId(ctx.gsb_pos) ? ctx.gsb_bary_value : ctx.OpLoad(ctx.F32[3], ctx.bary_coord),
-            comp + 1);
+        const Id ij =
+            ctx.OpCompositeExtract(ctx.F32[1], ctx.OpLoad(ctx.F32[3], ctx.bary_coord), comp + 1);
         return ctx.OpFMul(ctx.F32[1], ij, inv_w);
     }
     default:

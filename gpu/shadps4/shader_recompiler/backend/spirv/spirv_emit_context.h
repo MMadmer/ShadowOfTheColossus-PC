@@ -47,10 +47,6 @@ public:
     void DefineBufferProperties();
     void DefineAmdPerVertexAttribs();
     void DefineWorkgroupIndex();
-    /// sotc: barycentric_via_gs layout 2: the barycentrics at the pixel center (prologue).
-    void DefineGsBarycentrics();
-    /// sotc: layout 2 perspective barycentrics of an interpolated gsb_pos value.
-    Id GsBarycentrics(Id pos);
 
     [[nodiscard]] Id DefineInput(Id type, std::optional<u32> location = std::nullopt,
                                  std::optional<spv::BuiltIn> builtin = std::nullopt) {
@@ -301,13 +297,6 @@ public:
     Id bary_coord_pull_model{};
     Id bary_coord_nopersp{};
     Id bary_coord_nopersp_sample{};
-    // sotc: barycentric_via_gs layout 2 (emit_spirv_bary_gs.h). gsb_pos: the clip position
-    // (fragment input, or the vertex shader's copy of it); gsb_bm: per-primitive inverse vertex
-    // matrix rows and vertex w; the values: barycentrics at the pixel center.
-    Id gsb_pos{};
-    Id gsb_bm{};
-    Id gsb_bary_value{};
-    Id gsb_bary_np_value{};
 
     struct TextureDefinition {
         const VectorIds* data_types;

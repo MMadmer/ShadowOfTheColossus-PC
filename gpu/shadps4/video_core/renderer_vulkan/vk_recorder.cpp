@@ -902,6 +902,9 @@ void CommandRecorder::Publish() {
 void CommandRecorder::PublishAll() {
     unpublished = 0;
     write_chunk->committed.store(write_pos, std::memory_order_release);
+    // sotc: pairs with the consumer's "sleeping, fence, re-check": without it the store and the
+    // sleeping-flag load could reorder and a wake be missed (2 ms on Windows, SleepTime).
+    std::atomic_thread_fence(std::memory_order_seq_cst);
     WakeIfSleeping();
 }
 
@@ -1020,15 +1023,21 @@ void CommandRecorder::ConsumerLoop(std::stop_token stoken) {
         return std::chrono::microseconds{
             v ? std::strtol(v, nullptr, 10) : (Common::UsableCpuCount() <= 4 ? 50 : 250)};
     }();
-#ifdef _WIN32
-    // sotc: Windows condition variables wait in whole milliseconds, so 500 us came out as 0:
-    // the wait returned at once and the thread spun at 100% of a core (half of a hyper-threaded
-    // core the command processor may share). The producer wakes a sleeping consumer for new
-    // work, so a longer timeout adds no latency.
-    constexpr auto SleepTime = std::chrono::milliseconds{2};
-#else
-    constexpr auto SleepTime = std::chrono::microseconds{500};
-#endif
+    // sotc: SOTC_REC_SLEEP_US sets the idle wait. On Windows the default 500 us rounds to 0 and the
+    // thread spins: 61.1 vs 57.7 FPS on the attract demo (i9-13900K + RTX 2060 SUPER) against a
+    // 2 ms sleep (PR #81, jownatan), which frees the core on laptops and APUs (set 2000 there).
+    // With 8 logical processors or fewer the default is that 2 ms sleep (PR #198, Lucas): the
+    // spinning recorder took a whole core the game needs. Attract demo on a Ryzen 7 5700X held to
+    // 4 logical processors: stuck loading while it spun, 77 FPS sleeping; at 8 and 16 even.
+    static const auto SleepTime = [] {
+        const char* v = std::getenv("SOTC_REC_SLEEP_US");
+        const u32 logical = Common::UsableCpuCount();
+        const auto sleep =
+            std::chrono::microseconds{v ? std::strtol(v, nullptr, 10) : (logical <= 8 ? 2000 : 500)};
+        LOG_INFO(Render_Vulkan, "GPU recorder: {} logical processors, spin {} us, idle wait {} us",
+                 logical, SpinTime.count(), sleep.count());
+        return sleep;
+    }();
 
     Chunk* chunk = first_chunk;
     Chunk* previous = nullptr;

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <array>
+#include <cstdio>
 #include <cstdlib>
 #include <boost/container/static_vector.hpp>
 #include <fmt/format.h>
@@ -14,6 +15,7 @@
 #include "imgui/renderer/imgui_core.h"
 #include "sdl_window.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
+#include "video_core/renderer_vulkan/vk_dlssg.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_platform.h"
 #include "video_core/sotc_stats.h"
@@ -118,6 +120,18 @@ Instance::Instance(Frontend::WindowSDL& window, s32 physical_device_index,
     ASSERT_MSG(num_physical_devices > 0, "No physical devices found");
     LOG_INFO(Render_Vulkan, "Found {} physical devices", num_physical_devices);
 
+    // sotc: SOTC_GPU_VENDOR=<PCI vendor id, hex> picks the first device of that vendor
+    // (8086 Intel, 10de NVIDIA, 1002 AMD); laptops enumerate their GPUs in no fixed order.
+    if (const char* vendor = std::getenv("SOTC_GPU_VENDOR"); vendor && physical_device_index < 0) {
+        const u32 id = static_cast<u32>(std::strtoul(vendor, nullptr, 16));
+        for (size_t i = 0; i < num_physical_devices; ++i) {
+            if (physical_devices[i].getProperties().vendorID == id) {
+                physical_device_index = static_cast<s32>(i);
+                break;
+            }
+        }
+    }
+
     if (physical_device_index < 0) {
         std::vector<
             std::tuple<size_t, vk::PhysicalDeviceProperties2, vk::PhysicalDeviceMemoryProperties>>
@@ -178,7 +192,30 @@ Instance::Instance(Frontend::WindowSDL& window, s32 physical_device_index,
     format_properties = GetFormatProperties(physical_device);
     properties = physical_device.getProperties();
     memory_properties = physical_device.getMemoryProperties();
+    // sotc: direct memory access (the launcher's "full water reflections") drew stripes over
+    // shadows and water on AMD (issues #57, #28; the players confirmed that turning it off fixes
+    // them): off there unless BB_DIRECT_MEMORY_ACCESS asks for it.
+    constexpr u32 VendorAmd = 0x1002;
+    if (properties.vendorID == VendorAmd) {
+        EmulatorSettings.SetDirectMemoryAccessDefault(false);
+    }
+    // sotc: without shaderInt64 (Intel Iris Xe) the shaders avoid 64-bit integers where they can,
+    // and direct memory access (64-bit page table lookups in every access) is off by default.
+    if (!physical_device.getFeatures().shaderInt64) {
+        EmulatorSettings.SetNoInt64(true);
+        EmulatorSettings.SetDirectMemoryAccessDefault(false);
+    }
     CollectDeviceParameters();
+    // sotc: in the session log, so that issue reports show the GPU and driver (after
+    // CollectDeviceParameters: the driver version decoding needs the driver id).
+    std::fprintf(stderr, "GPU sparse: binding %d, residency buffer %d, non-resident strict %d\n",
+                 int(physical_device.getFeatures().sparseBinding),
+                 int(physical_device.getFeatures().sparseResidencyBuffer),
+                 int(properties.sparseProperties.residencyNonResidentStrict));
+    std::fprintf(stderr, "GPU: %s (vendor %04x, driver %s, Vulkan %u.%u)\n",
+                 properties.deviceName.data(), properties.vendorID,
+                 GetDriverVersionName().c_str(), VK_VERSION_MAJOR(properties.apiVersion),
+                 VK_VERSION_MINOR(properties.apiVersion));
     ASSERT_MSG(properties.apiVersion >= TargetVulkanApiVersion,
                "Vulkan {}.{} is required, but only {}.{} is supported by device!",
                VK_VERSION_MAJOR(TargetVulkanApiVersion), VK_VERSION_MINOR(TargetVulkanApiVersion),
@@ -277,6 +314,10 @@ bool Instance::CreateDevice() {
     vk13_props = properties_chain.get<vk::PhysicalDeviceVulkan13Properties>();
     push_descriptor_props = properties_chain.get<vk::PhysicalDevicePushDescriptorPropertiesKHR>();
     LOG_INFO(Render_Vulkan, "Physical device subgroup size {}", vk11_props.subgroupSize);
+    // sotc: in the session log; the wave64 lowering depends on it.
+    std::fprintf(stderr, "GPU subgroups: size %u, min %u, max %u, required stages %#x\n",
+                 vk11_props.subgroupSize, vk13_props.minSubgroupSize, vk13_props.maxSubgroupSize,
+                 u32(vk13_props.requiredSubgroupSizeStages));
 
     if (available_extensions.empty()) {
         LOG_CRITICAL(Render_Vulkan, "No extensions supported by device.");
@@ -481,6 +522,9 @@ bool Instance::CreateDevice() {
                 .shaderImageGatherExtended = features.shaderImageGatherExtended,
                 .shaderStorageImageExtendedFormats = features.shaderStorageImageExtendedFormats,
                 .shaderStorageImageMultisample = features.shaderStorageImageMultisample,
+                // sotc: FSR 3 frame generation (vk_fsrfg.cpp) writes untyped storage images.
+                .shaderStorageImageReadWithoutFormat = features.shaderStorageImageReadWithoutFormat,
+                .shaderStorageImageWriteWithoutFormat = features.shaderStorageImageWriteWithoutFormat,
                 // Descriptor arrays of dynamic_tsharp_array_size (shader_recompiler/info.cpp)
                 .shaderSampledImageArrayDynamicIndexing =
                     features.shaderSampledImageArrayDynamicIndexing,
@@ -701,6 +745,7 @@ bool Instance::CreateDevice() {
     }
 
     CreateAllocator();
+    Dlssg::OnDeviceCreated(*this); // sotc: DLSS Frame Generation (SOTC_DLSSG=1)
     return true;
 }
 

@@ -7,18 +7,19 @@
 > the original native port. It focuses on optimizing the port as a whole: less CPU and GPU work
 > per frame, steadier frame times, less video memory, faster startup, and good performance on
 > modest hardware as well (4-core CPUs, 2 GB cards), together with conveniences such as `.pkg` dump unpacking (see
-> [CHANGELOG](CHANGELOG.md), 0.57-opt6 and later). It builds on upstream pull requests that are
-> still open there: #32 (Gabriell-os), #46 (Lucas-blip-png), #81 (jownatan) and #83
-> (Oussama268). Improvements are offered back to the original as pull requests. Report problems
-> with this fork's builds here, not in the original repository.
+> [CHANGELOG](CHANGELOG.md), 0.57-opt6 and later). It builds on the upstream pull requests #32
+> (Gabriell-os), #46 (Lucas-blip-png), #81 (jownatan) and #83 (Oussama268) and includes the
+> upstream releases up to 0.60.4. Improvements are offered back to the original as pull requests.
+> Report problems with this fork's builds here, not in the original repository.
 >
 > Данный проект — форк [MMadmer](https://github.com/MMadmer) оригинального нативного порта
 > [AjncSystem/ShadowOfTheColossus-PC](https://github.com/AjncSystem/ShadowOfTheColossus-PC),
 > посвящённый оптимизации порта в целом: снижению нагрузки на процессор и видеокарту, стабильному
 > времени кадра, экономии видеопамяти и ускорению запуска, в том числе для игры на слабых
-> компьютерах. Проект также включает ещё не принятые в оригинальный репозиторий пул-реквесты #32,
-> #46, #81 и #83 их авторов. Улучшения предлагаются оригинальному проекту в виде пул-реквестов.
-> О проблемах сборок этого форка следует сообщать в данном репозитории, а не в оригинальном.
+> компьютерах. Проект также включает пул-реквесты #32, #46, #81 и #83 их авторов и изменения
+> оригинального проекта до версии 0.60.4. Улучшения предлагаются оригинальному проекту в виде
+> пул-реквестов. О проблемах сборок этого форка следует сообщать в данном репозитории, а не в
+> оригинальном.
 
 > **Nenhum arquivo do jogo nem da Sony está incluído / No game or Sony files are included.**
 > É necessário um dump próprio do jogo. / A game dump owned by the user is required.
@@ -29,6 +30,9 @@
 
 ## Português
 
+**Estado: o jogo pode ser concluído do início ao fim** (v0.60.3: jogado do último colosso até o
+final e os créditos, com texturas em alta qualidade, modo PS4 Pro e 60 FPS ligados).
+
 Port nativo do **Shadow of the Colossus** de PS4 (Bluepoint, 2018; CUSA08809, versão EU 1.01)
 para **Windows 10/11**. O código x86-64 do próprio jogo roda direto na CPU do PC e a GPU do PS4
 é traduzida para Vulkan. Não é um emulador completo: é um carregador com as funções de sistema
@@ -38,6 +42,15 @@ de que o jogo precisa, no estilo do [bloodborne_pc](https://github.com/Supermedo
 
 | Versão | Melhorias e correções |
 |---|---|
+| **0.60.4** | **Sem blocos ciano nas pedras nem flores piscando** com texturas em alta qualidade (a proteção contra quedas da 0.60.3 trocava o nível de detalhe das texturas a cada um ou dois segundos; agora com histerese). |
+| **0.60.3** | **O jogo pode ser concluído do início ao fim** (jogado do último colosso até o final e os créditos): correção da queda com texturas em alta qualidade em vistas amplas (#186), correção da queda no carregamento depois dos créditos, +2,7% de FPS no templo. |
+| **0.60.2** | **Ajustes rápidos no menu dentro do jogo** (60 FPS, geração de quadros, texturas em alta qualidade, sombras distantes, volume: valem na hora e ficam salvos), **mouse no menu**, **tela de carregamento animada durante a montagem dos shaders** ao abrir o jogo. |
+| **0.60.1** | **Menu dentro do jogo** (Insert / F1 / L3+R3: FPS, placa e memória de vídeo, tela cheia, resolução, nitidez, câmera no mouse, efeitos), **sobras do Bloodborne removidas** (~11.700 linhas), o executável do jogo com o ícone do SotC. |
+| **0.60** | **Texturas nas GTX 10xx**, sem travamento na tela de título, **abre em PCs com pouca memória**, **60 FPS pelo modo Desempenho do próprio jogo** (física correta), **cada cópia com a própria pasta `user`**, +6% de FPS no templo, FSR 3 sem quadrados pretos nas RX 7000. |
+| **0.59.1** | **Sombras distantes sem piscar** (AMD e NVIDIA; opção nova no lançador), **listras da AMD** nas sombras e na água corrigidas, correções para Intel, o registro mostra a placa de vídeo e o driver. |
+| **0.59** | **Mais FPS** (fork do Oussama268: thread de desenho, shaders traduzidos em paralelo; ponte 30 → 37–40 FPS), **correção da queda no final do jogo e ao carregar saves**, **F11 para tela cheia**, opções de **uso de memória de vídeo** e **volume**, **atualização automática** do lançador, ultrawide com o modo PS4 Pro, correções para placas de 6 GB e para o Windows em chinês. |
+| **0.58.1** | **Texturas em alta qualidade** (folhas e pedras nítidas; desde a 0.0.13 o jogo não carregava as versões de alta resolução) e **ícone próprio da janela do jogo** (ou o do jogo, ou uma imagem à escolha). |
+| **0.58** | **Versão da comunidade** (Lucas-blip-png, Gabriell-os, Oussama268, jownatan, xeodeo, nakaionyt/y7ngboy, tabnul): **menos quedas** (falta de memória de vídeo, jogo congelando, queda depois de um colosso no modo PS4 Pro), **+15% de FPS** e menos memória de vídeo, correções para AMD (blocos pretos nas RDNA3/4), **widescreen 21:9/32:9**, **FPS 30/60/ilimitado**, **ícones dos botões Xbox**, geração de quadros FSR 3 / DLSS-G (experimental), lançador em espanhol, chinês, coreano e russo. |
 | **1.0.1** | **Todos os efeitos sonoros com a biblioteca de som do port** (o lançador não ativa mais sozinho os módulos de som de um shadPS4 instalado), modo da janela (janela, tela cheia em janela, tela cheia exclusiva), lançador em inglês, russo, chinês, japonês e português, libSceAudio3d e UserFx do NGS2. |
 | **1.0.0** | **Primeiro release do fork:** **controle Xbox completo** (ícones do Xbox, ou das teclas e do mouse, nítidos e desenhados por shader, também no esquema de Controles, troca na hora ao conectar ou usar outro dispositivo, vibração igual à do PS4), instalador e zip, compilação com um comando (`build.cmd`), som com a biblioteca própria do port, tudo da 0.57-opt6 e 0.57-opt7. |
 | **0.57-opt7** | **Menos CPU por quadro para i5/GTX 1050:** o processador de comandos não gira mais esperando (−20% do tempo dele no santuário), o thread de desenho reaproveita os render targets e não repete push descriptors iguais, o mixer de som gasta menos no reverb; o launcher escolhe 810p numa GTX 1050 e 900p numa 1050 Ti. |
@@ -56,8 +69,18 @@ Detalhes de cada versão no [CHANGELOG](CHANGELOG.md).
 
 ### Problemas conhecidos
 
-- Placas **AMD**: a 0.57 traz a correção das cores verdes/rosas ([#7](../../issues/7)), ainda sem
-  teste numa AMD. Se continuar, mande o seu `user/last_run.log` na issue.
+- As **texturas em alta qualidade** ainda podem fechar o jogo em vistas muito amplas (espada
+  erguida contra o sol, área do último colosso; #186). Se isso acontecer, desligue a opção.
+- Placas **AMD GCN** (RX 470–590, Vega, APUs com o driver antigo): personagens e Agro podem
+  ficar com um brilho branco (#152, #158, #187). Em investigação; as AMD mais novas (RDNA) não
+  são afetadas.
+- **60 FPS:** desde a 0.60 o próprio jogo mira 60 FPS (o modo Desempenho do PS4 Pro), o que deve
+  corrigir a física em 60 FPS (a parede do 2º colosso, colossos "voando"); ainda em teste nesses
+  trechos. `SOTC_MODES=af16` nas variáveis extras volta ao modo antigo.
+- **Geração de quadros** (experimental): as barras de vida e de stamina podem tremer
+  (`SOTC_FG_HUDLESS=1` tenta uma imagem sem a interface), e ela só faz diferença a 30 FPS.
+- Com 8 GB de memória de vídeo ou menos, escolha um nível menor em **Uso de memória de vídeo** se
+  a memória acabar.
 
 ### Download e uso
 
@@ -91,17 +114,24 @@ normalmente, a 30 FPS.
 ### O lançador
 
 - **Jogar:** confere a versão do jogo, o som, os saves e a placa de vídeo antes de abrir;
-  opções rápidas de saída, upscaler, 60 FPS, filtro 16x e tela cheia.
-- **Jogo e saves:** biblioteca de jogos, busca automática no PC, importação de saves do shadPS4.
-- **Imagem e FPS:** resolução de render 720p a 1080p (automática em placas fracas), saída 720p a
-  4K (FSR 1 + RCAS amplia),
-  modo PS4 Pro (o jogo oferece Cinematográfico/Desempenho no próprio menu), efeitos (vinheta,
-  névoa, SSAO) e opções de desempenho.
+  ajustes rápidos de render, saída, upscaler, nitidez, geração de quadros, FPS, filtro 16x,
+  texturas em alta qualidade, modo da janela e modo PS4 Pro.
+- **Jogo e saves:** biblioteca de jogos, busca automática no PC, desempacotamento de dumps `.pkg`,
+  importação de saves do shadPS4, volume de 100 a 300%.
+- **Imagem e FPS:** FPS 30 / 60 / ilimitado (no jogo, F7 liga e desliga o limite de 30), geração de
+  quadros FSR 3 / DLSS-G (experimental; F8 no jogo), resolução de render 720p a 1080p (automática
+  em placas fracas), saída 720p a 4K, também 16:10, 21:9 e 32:9 (FSR 1 + RCAS amplia), modo PS4 Pro
+  (o jogo oferece Cinematográfico/Desempenho no próprio menu), sombras distantes, uso de memória
+  de vídeo, efeitos (vinheta, névoa, SSAO), modo da janela (janela, tela cheia em janela, tela
+  cheia exclusiva), ícone da janela do jogo e opções de desempenho.
 - **Controles:** controle (DualShock 4, DualSense, Xbox) automático, com os ícones dos botões do
   dispositivo em uso (também as teclas e o mouse) e vibração; câmera no mouse;
   **troca de teclas** clicando na ação e apertando a tecla nova.
-- **Avançado:** cvars do motor Bluepoint, diagnóstico, atalho na área de trabalho (com o ícone
-  do seu jogo). O registro de cada sessão fica em `user/last_run.log`.
+- **Avançado:** idioma do lançador (inglês, espanhol, português, russo, chinês, japonês e coreano;
+  troca na hora), procura de atualizações, cvars do motor Bluepoint, diagnóstico, atalho na área
+  de trabalho (com o ícone do seu jogo). O registro de cada sessão fica em `user/last_run.log`.
+- **Menu dentro do jogo** (Insert, F1 ou L3+R3): FPS, geração de quadros, texturas em alta
+  qualidade, sombras distantes e volume valem na hora e ficam salvos no lançador.
 
 ### O que foi feito
 
@@ -114,7 +144,7 @@ normalmente, a 30 FPS.
 | Saves | Gravação, carregamento e exclusão pela lista de saves na tela. |
 | Som | Biblioteca de som própria do port (NGS2 e áudio 3D dos sons posicionais); com os módulos Ngs2/Ult do próprio console, a do console. |
 | Controles | Teclado e controle juntos, câmera no mouse, troca de teclas no lançador. |
-| Modos | 60 FPS (patch de illusion), filtro anisotrópico 16x, modo PS4 Pro, saída até 4K. |
+| Modos | 60 FPS (modo Desempenho do próprio jogo; patch de illusion), filtro anisotrópico 16x, modo PS4 Pro, saída até 4K e ultrawide, geração de quadros FSR 3 / DLSS-G. |
 | Desempenho | No demo da tela de título, em modo 60 FPS: média de **37–45 → ~67 FPS**, trecho mais pesado (ponte do cânion) **~17 → 29–34 FPS**. |
 
 ### Perguntas comuns
@@ -131,6 +161,9 @@ normalmente, a 30 FPS.
 
 ## English
 
+**Status: the game can be finished from start to end** (v0.60.3: played through the last
+colossus, the ending and the credits, with high quality textures, PS4 Pro mode and 60 FPS on).
+
 A native Windows port of the PS4 **Shadow of the Colossus** (Bluepoint, 2018; CUSA08809, EU 1.01)
 for **Windows 10/11**. The game's own x86-64 code runs directly on the PC's CPU and the PS4 GPU
 is translated to Vulkan. It is not a full emulator: it is a loader with the system functions the
@@ -140,6 +173,15 @@ game needs, in the style of [bloodborne_pc](https://github.com/Supermedo/bloodbo
 
 | Version | Improvements and fixes |
 |---|---|
+| **0.60.4** | **No more cyan blocks on stone or blinking flowers** with high quality textures (the 0.60.3 crash protection switched the texture detail every second or two; now with hysteresis). |
+| **0.60.3** | **The game can be finished from start to end** (played from the last colossus through the ending and credits): fix for the high quality textures crash in wide views (#186), fix for the crash on the load after the credits, +2.7% FPS at the Shrine. |
+| **0.60.2** | **Quick settings in the in-game menu** (60 FPS, frame generation, high quality textures, far shadows, volume: apply at once and are kept), **the mouse works in the menu**, **animated loading screen while the shaders are prepared** at start. |
+| **0.60.1** | **In-game menu** (Insert / F1 / L3+R3: FPS, GPU and VRAM, fullscreen, resolution, sharpening, mouse camera, effects), **Bloodborne leftovers removed** (~11,700 lines), the game exe has the SotC icon. |
+| **0.60** | **Textures on GTX 10xx**, no title-screen hang, **starts on low-memory PCs**, **60 FPS through the game's own Performance mode** (right physics), **each copy has its own `user` folder**, +6% FPS at the Shrine, FSR 3 without black tiles on RX 7000. |
+| **0.59.1** | **Far shadows no longer blink** (AMD and NVIDIA; new launcher option), **AMD stripes** on shadows and water fixed, Intel fixes, the log shows the GPU and driver. |
+| **0.59** | **More FPS** (Oussama268's fork: draw thread, shaders translated in parallel; bridge 30 → 37–40 FPS), **fix for the ending and save-load crash**, **F11 fullscreen**, **video memory use** and **volume** options, launcher **self-update**, ultrawide with PS4 Pro mode, fixes for 6 GB cards and Chinese Windows. |
+| **0.58.1** | **High quality textures** (sharp leaves and rocks; the game had not streamed its high resolution versions since 0.0.13) and the **game window's own icon** (or the game's, or a picture of the user's choice). |
+| **0.58** | **Community release** (Lucas-blip-png, Gabriell-os, Oussama268, jownatan, xeodeo, nakaionyt/y7ngboy, tabnul): **fewer crashes** (out of video memory, game freezing, post-colossus crash in PS4 Pro mode), **+15% FPS** and less video memory, AMD fixes (RDNA3/4 black tiles), **21:9/32:9 widescreen**, **FPS 30/60/unlimited**, **Xbox button icons**, FSR 3 / DLSS-G frame generation (experimental), launcher in Spanish, Chinese, Korean and Russian. |
 | **1.0.1** | **Every sound effect through the port's own sound library** (the launcher no longer enables an installed shadPS4's sound modules on its own), window mode (windowed, borderless fullscreen, exclusive fullscreen), launcher in English, Russian, Chinese, Japanese and Portuguese, libSceAudio3d and NGS2 UserFx. |
 | **1.0.0** | **First release of the fork:** **full Xbox controller support** (sharp shader-drawn Xbox, or key and mouse, button icons, the Controls diagram included, switching as soon as another device is connected or used, PS4-accurate rumble), installer and zip, one-command build (`build.cmd`), sound through the port's own library, everything from 0.57-opt6 and 0.57-opt7. |
 | **0.57-opt7** | **Less CPU per frame for i5/GTX 1050:** the command processor no longer spins while it waits (−20% of its time at the shrine), the draw thread keeps its render targets and drops repeated push descriptors, the sound mixer spends less on reverb; the launcher picks 810p on a GTX 1050 and 900p on a 1050 Ti. |
@@ -158,8 +200,16 @@ Full details in the [CHANGELOG](CHANGELOG.md) (in Portuguese).
 
 ### Known issues
 
-- **AMD** GPUs: 0.57 has the fix for the green/pink tint ([#7](../../issues/7)), not yet tested
-  on an AMD card. If it persists, attach your `user/last_run.log` to the issue.
+- **High quality textures** can still close the game in very wide views (sword raised against the
+  sun, the last colossus' area; #186). Turn the option off if it happens.
+- **AMD GCN** cards (RX 470–590, Vega, APUs on the legacy driver): characters and Agro may glow
+  white (#152, #158, #187). Under investigation; newer AMD cards (RDNA) are not affected.
+- **60 FPS:** since 0.60 the game targets 60 FPS itself (its PS4 Pro Performance mode), which
+  should fix the 60 FPS physics (the 2nd colossus' wall, colossi "flying"); still being tested
+  there. `SOTC_MODES=af16` in the extra variables goes back to the old mode.
+- **Frame generation** (experimental): the health/stamina bars may shake (`SOTC_FG_HUDLESS=1`
+  tries a HUD-less image), and it only matters at 30 FPS.
+- With 8 GB of video memory or less, pick a lower **Video memory use** level if the game runs out.
 
 ### Download and use
 
@@ -187,10 +237,17 @@ The patch modes (60 FPS, 16x filtering) only apply to EU 1.01; other versions ru
 
 ### Launcher features
 
-Game library and automatic search, `.pkg` unpacking, shadPS4 save import, 720p–1080p render
-resolution (automatic on weak cards), 720p–4K output (FSR 1 + RCAS), PS4 Pro mode, 60 FPS and 16x AF modes, controller support
-(DualShock 4, DualSense, Xbox; the game shows the buttons of the device in use, keys and mouse included) with rumble and mouse camera, key remapping, Bluepoint engine cvars, desktop
-shortcut and a session log in `user/last_run.log`.
+Game library and automatic search, `.pkg` unpacking, shadPS4 save import, FPS 30 / 60 / unlimited
+(F7 in game switches the 30 FPS cap), FSR 3 / DLSS-G frame generation (experimental; F8 in game),
+720p–1080p render resolution (automatic on weak cards), 720p–4K output, 16:10, 21:9 and 32:9
+included (FSR 1 + RCAS), PS4 Pro mode, high quality textures, 16x AF, far shadows, video memory
+use, 100–300% volume, window mode (windowed, borderless fullscreen, exclusive fullscreen), the game
+window's icon, controller support (DualShock 4, DualSense, Xbox; the game shows the buttons of the
+device in use, keys and mouse included) with rumble and mouse camera, key remapping, Bluepoint
+engine cvars, the launcher in English, Spanish, Portuguese, Russian, Chinese, Japanese and Korean
+(switching at once), update check, desktop shortcut and a session log in `user/last_run.log`.
+The in-game menu (Insert, F1 or L3+R3) changes FPS, frame generation, high quality textures, far
+shadows and volume while playing; they are kept for the next start.
 
 In 60 FPS mode the title-screen attract demo averages ~67 FPS on an RTX 2060 SUPER, with
 29–34 FPS in its heaviest section. Vulkan only (no DirectX). AMD and Intel can enable the
@@ -252,6 +309,10 @@ diagnóstico / diagnostic variables: [docs/sotc/README-SotC.md](docs/sotc/README
   constants, `V_ALIGNBIT`, `V_CVT_PK_U8_F32`), tabelas de texturas indexadas / dynamic T# tables
   (`dynamic_tsharp_array_size`), a abordagem das estatísticas de LOD / the LOD statistics
   approach e o acesso direto à memória para o SotC / and direct memory access for SotC.
+- Pull requests e forks da comunidade / community pull requests and forks: **Oussama268**,
+  **Lucas-blip-png**, **Gabriell-os**, **jownatan**, **xeodeo**, **nakaionyt / y7ngboy**,
+  **tabnul**, **EdouardSence**, **Einar**, **KingJhoss**, **nosekefik**, **raulbezerro-dev** e
+  todos que relatam problemas com registros / and everyone who reports issues with logs.
 - Patch de 60 FPS / 60 FPS patch: illusion (GoldHEN cheats).
 
 Licença / License: **GPL-2.0-or-later** ([LICENSE](LICENSE)), como o original / as the original.

@@ -6,11 +6,10 @@
 #include <atomic>
 #include <condition_variable>
 #include <deque>
-#include <functional>
 #include <mutex>
 #include <optional>
 #include <thread>
-#include <unordered_map>
+#include <unordered_set>
 #include <variant>
 #include <tsl/robin_map.h>
 #include "shader_recompiler/profile.h"
@@ -56,7 +55,6 @@ struct Program {
 
     Shader::Info info;
     ModuleList modules{};
-
     /// sotc: the permutation GetProgram found last time. The same user data, flat buffer,
     /// runtime info and start bindings make the same specialization: the lookup is skipped.
     struct LastLookup {
@@ -68,6 +66,11 @@ struct Program {
         Shader::Backend::Bindings end{};
         size_t perm_idx{};
     } last;
+    /// sotc: permutations being translated by a pipeline worker (SOTC_ASYNC_TRANSLATE).
+    std::vector<Shader::StageSpecialization> pending_specs;
+    /// sotc: a worker read other tables than the draw that asked (the game reused them before
+    /// the worker ran): this program's later permutations are translated in place.
+    bool translate_in_place{};
 
     Program() = default;
     Program(Shader::HwStage stage, Shader::SwStage l_stage, Shader::ShaderParams params)
@@ -98,9 +101,6 @@ public:
     void WarmUp();
     void Sync();
 
-    /// sotc: narrows an NVIDIA profile to the features shared by all GeForce cards from Pascal on.
-    static void ApplyPortableProfile(Shader::Profile& profile, vk::DriverId driver);
-
     bool LoadComputePipeline(Serialization::Archive& ar);
     bool LoadGraphicsPipeline(Serialization::Archive& ar);
     bool LoadPipelineStage(Serialization::Archive& ar, size_t stage);
@@ -110,8 +110,11 @@ public:
     const ComputePipeline* GetComputePipeline();
 
     using Result = std::tuple<const Shader::Info*, vk::ShaderModule, u64>;
+    /// sotc: async_ok: a stage that needs translating is queued for a pipeline worker instead
+    /// (SOTC_ASYNC_TRANSLATE); it returns a null Info and sets translation_pending meanwhile.
     Result GetProgram(Shader::HwStage hw_stage, Shader::SwStage sw_stage,
-                      const Shader::ShaderParams& params, Shader::Backend::Bindings& binding);
+                      const Shader::ShaderParams& params, Shader::Backend::Bindings& binding,
+                      bool async_ok = false);
 
     std::optional<vk::ShaderModule> ReplaceShader(vk::ShaderModule module,
                                                   std::span<const u32> spv_code);
@@ -136,9 +139,14 @@ private:
     std::optional<std::vector<u32>> GetShaderPatch(u64 hash, Shader::HwStage stage, size_t perm_idx,
                                                    std::string_view ext,
                                                    std::span<const u32> generated);
+    /// sotc: on a pipeline worker, worker_pools replaces the command processor's pools and the
+    /// SPIR-V is returned in spv_out instead of being stored (the permutation index is only
+    /// known when the command processor installs the module).
     vk::ShaderModule CompileModule(Shader::Info& info, Shader::RuntimeInfo& runtime_info,
                                    const std::span<const u32>& code, size_t perm_idx,
-                                   Shader::Backend::Bindings& binding);
+                                   Shader::Backend::Bindings& binding,
+                                   Shader::Pools* worker_pools = nullptr,
+                                   std::vector<u32>* spv_out = nullptr);
     const Shader::RuntimeInfo& BuildRuntimeInfo(Shader::HwStage stage, Shader::SwStage l_stage);
 
     [[nodiscard]] bool IsPipelineCacheDirty() const {
@@ -147,9 +155,12 @@ private:
 
     /// sotc: SOTC_ASYNC_SHADERS (default on): a new graphics pipeline is built on a worker
     /// thread, and the draws that need it are skipped until it is ready (GetGraphicsPipeline
-    /// returns nullptr meanwhile; its map entry stays null while pending). Compute pipelines are
-    /// still built synchronously (the game reads compute results back).
+    /// returns nullptr meanwhile; its map entry stays null while pending). Compute dispatches are
+    /// never skipped (the game reads compute results back): with SOTC_ASYNC_COMPUTE (default on)
+    /// a new compute pipeline is built by a worker ahead of the graphics jobs, and the recording
+    /// thread waits for it when it binds it (ComputePipeline::BindWhenReady).
     struct AsyncPipelineJob {
+        ComputePipeline* compute{}; ///< a compute job: only Build() is run
         GraphicsPipelineKey key;
         u64 hash{};
         std::array<const Shader::Info*, MaxShaderStages> infos{};
@@ -158,35 +169,48 @@ private:
         std::array<vk::ShaderModule, MaxShaderStages> modules{};
         GraphicsPipeline::SerializationSupport sdata{};
         std::unique_ptr<GraphicsPipeline> pipeline;
-        std::array<const Shader::Backend::SPIRV::ShaderIo*, MaxShaderStages> ios{};
+
+        /// sotc: SOTC_ASYNC_TRANSLATE (default on): a graphics shader stage seen for the first
+        /// time (or a new permutation of one) is translated by a worker, queued after the compute
+        /// jobs and ahead of the pipeline jobs; the draws that need it are skipped meanwhile, as
+        /// for a pipeline being built. The command processor installs the result.
+        struct Translate {
+            Shader::HwStage hw_stage{};
+            Shader::SwStage sw_stage{};
+            u64 hash{};
+            std::array<u32, Shader::ShaderParams::NumShaderUserData> user_data{};
+            std::span<const u32> code;
+            Shader::RuntimeInfo runtime_info{};
+            Shader::Backend::Bindings start{};
+            Program* program{}; ///< set for a new permutation of an existing program
+            size_t perm_idx{};  ///< provisional (patch file name only)
+            std::optional<Shader::StageSpecialization> spec;
+            std::unique_ptr<Program> new_program;
+            vk::ShaderModule module{};
+            std::vector<u32> spv;
+            bool stale{}; ///< the worker's specialization differs from spec (permutation)
+            bool failed{}; ///< translation asserted (tables reused by the game meanwhile)
+        };
+        std::unique_ptr<Translate> translate; ///< a translation job
     };
     bool AsyncPipelineEligible() const;
     void QueueAsyncPipeline(u64 hash);
+    void QueueAsyncTranslate(Shader::HwStage hw_stage, Shader::SwStage sw_stage,
+                             const Shader::ShaderParams& params, const Shader::RuntimeInfo& rt,
+                             const Shader::Backend::Bindings& start, Program* program,
+                             const Shader::StageSpecialization* spec, size_t perm_idx);
+    void RunAsyncTranslate(AsyncPipelineJob::Translate& job);
+    void TranslateOnWorker(AsyncPipelineJob::Translate& job, const Shader::ShaderParams& params,
+                           Shader::Backend::Bindings& binding, Shader::RuntimeInfo& runtime_info,
+                           Shader::Pools& worker_pools);
+    void InstallTranslation(AsyncPipelineJob::Translate& job);
     void CollectAsyncPipelines();
     void AsyncPipelineWorker(std::stop_token token);
-
-    /// sotc: a cached pipeline the warm-up builds on a worker thread (build), then puts into the
-    /// pipeline maps on the warm-up thread (install; a pipeline the driver refused is dropped).
-    struct PreloadJob {
-        std::function<void()> build;
-        std::function<bool()> install;
-    };
-    std::vector<PreloadJob>* preload_jobs{};
-
-    /// sotc: Profile::barycentric_via_gs: the interface of every shader module (its fragment
-    /// inputs say which geometry shader the pipeline needs). Entries are never removed.
-    void NoteModuleIo(vk::ShaderModule module, std::span<const u32> spirv);
-    std::array<const Shader::Backend::SPIRV::ShaderIo*, MaxShaderStages> ModuleIos(
-        const std::array<vk::ShaderModule, MaxShaderStages>& stage_modules);
-    std::mutex module_io_mutex;
-    std::unordered_map<VkShaderModule, Shader::Backend::SPIRV::ShaderIo> module_io;
 
     /// sotc: the driver's pipeline cache, kept with the shader cache (see LoadDriverCache).
     void LoadDriverCache();
     void SaveDriverCache();
     void DriverCacheSaver(std::stop_token token);
-    size_t driver_cache_saved_size{};
-    std::atomic<u32> new_since_driver_save{0};
 
 private:
     const Instance& instance;
@@ -222,9 +246,17 @@ private:
     std::mutex async_mutex;
     std::condition_variable_any async_cv;
     std::deque<std::unique_ptr<AsyncPipelineJob>> async_queue;
+    size_t async_compute_queued{}; ///< compute jobs at the head of async_queue, oldest first
+    size_t async_translate_queued{}; ///< translation jobs right after them, oldest first
+    std::unordered_set<u64> pending_programs; ///< new programs being translated (CP only)
+    std::unordered_set<u64> in_place_programs; ///< failed on a worker: translated here (CP only)
+    bool async_translate_ok{};  ///< this draw may queue its translations (CP only)
+    bool translation_pending{}; ///< a stage of this draw is being translated (CP only)
     std::vector<std::unique_ptr<AsyncPipelineJob>> async_done;
     std::atomic<u32> async_done_count{0};
     std::vector<std::jthread> async_workers;
+    size_t driver_cache_saved_size{};
+    std::atomic<u32> new_since_driver_save{0}; ///< pipelines built since the last save
     std::jthread driver_cache_saver;
 };
 
