@@ -1017,11 +1017,13 @@ void CommandRecorder::ConsumerLoop(std::stop_token stoken) {
     // every small update
     // sotc: SOTC_REC_SPIN_US overrides the spin (A/B: on a power-limited laptop the spinning
     // recorder took a whole core, ~2/3 of it waiting, next to the command processor it waits on).
+    // With 8 logical processors or fewer it does not spin (PR #198, Lucas): attract demo, Ryzen 7
+    // 5700X held to 2 cores / 4 threads 66.9 FPS against 64.3 spinning 250 us, 4 cores 81.8
+    // against 79.9, 4 cores / 8 threads even (82.1 both).
     static const auto SpinTime = [] {
         const char* v = std::getenv("SOTC_REC_SPIN_US");
-        // sotc: 50 us with four hardware threads or fewer (the spin takes a whole core there).
         return std::chrono::microseconds{
-            v ? std::strtol(v, nullptr, 10) : (Common::UsableCpuCount() <= 4 ? 50 : 250)};
+            v ? std::strtol(v, nullptr, 10) : (Common::UsableCpuCount() <= 8 ? 0 : 250)};
     }();
     // sotc: SOTC_REC_SLEEP_US sets the idle wait. On Windows the default 500 us rounds to 0 and the
     // thread spins: 61.1 vs 57.7 FPS on the attract demo (i9-13900K + RTX 2060 SUPER) against a
