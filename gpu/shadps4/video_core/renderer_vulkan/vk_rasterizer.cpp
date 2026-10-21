@@ -947,6 +947,86 @@ vk::ImageView Rasterizer::TakeHudless(VAddr address, vk::Format format) {
     return target.read_view;
 }
 
+// sotc: SOTC_DLSS_PROBE=1: where the scene is at a render size below the output (render
+// resolution modes), for the upscaler: every 300 flips, the G-buffer's depth and motion vector
+// images with the viewport that draws into them, every pass that samples those motion vectors
+// (shader hash, all its images), and the final composite (scene, UI and target sizes).
+static bool DlssProbe() {
+    static const bool on = std::getenv("SOTC_DLSS_PROBE") != nullptr;
+    return on;
+}
+
+void Rasterizer::ProbeGbuffer(const AmdGpu::Regs& regs) {
+    const u64 frame = SotcStats::flip_count.load(std::memory_order_relaxed);
+    const auto& cb4 = regs.color_buffers[4];
+    if (frame % 300 != 0 || probe_frame == frame || !cb4 || !cb_descs[4].first ||
+        cb4.GetDataFmt() != AmdGpu::DataFormat::Format16_16 ||
+        cb4.GetNumberFmt() != AmdGpu::NumberFormat::Float) {
+        return;
+    }
+    probe_frame = frame;
+    probe_mvec = cb_descs[4].first;
+    const auto& mvec = texture_cache.GetImage(probe_mvec);
+    const auto& vp = regs.viewports[0];
+    const auto& sc = regs.screen_scissor;
+    std::fprintf(stderr,
+                 "SOTC DLSS PROBE frame %llu gbuffer: mvec %ux%u depth %ux%u viewport scale %.1f "
+                 "%.1f offset %.1f %.1f scissor %d,%d-%d,%d\n",
+                 static_cast<unsigned long long>(frame), mvec.info.size.width,
+                 mvec.info.size.height,
+                 db_desc.first ? texture_cache.GetImage(db_desc.first).info.size.width : 0u,
+                 db_desc.first ? texture_cache.GetImage(db_desc.first).info.size.height : 0u,
+                 vp.xscale, vp.yscale, vp.xoffset, vp.yoffset, sc.top_left_x, sc.top_left_y,
+                 sc.bottom_right_x, sc.bottom_right_y);
+}
+
+void Rasterizer::ProbeSceneLayout(const Shader::Info& stage) {
+    if (!DlssProbe() || !probe_mvec ||
+        SotcStats::flip_count.load(std::memory_order_relaxed) != probe_frame) {
+        return;
+    }
+    // The motion vectors, or any fp16 colour image (the post chain after the TAA pass).
+    bool reads_mvec = false;
+    for (const auto& [id, desc] : image_bindings) {
+        reads_mvec |= id == probe_mvec ||
+                      (id && texture_cache.GetImage(id).info.pixel_format ==
+                                 vk::Format::eR16G16B16A16Sfloat);
+    }
+    bool composite = false;
+    for (const auto& [id, desc] : image_bindings) {
+        composite |= id && stage.sw_stage == Shader::SwStage::Fragment &&
+                     texture_cache.GetImage(id).info.pixel_format == vk::Format::eR8G8B8A8Srgb;
+    }
+    static u32 logged = 0;
+    if ((!reads_mvec && !composite) || logged > 1500) {
+        return;
+    }
+    ++logged;
+    std::string text;
+    for (const auto& [id, desc] : image_bindings) {
+        if (!id) {
+            text += " -";
+            continue;
+        }
+        const auto& image = texture_cache.GetImage(id);
+        text += fmt::format(" {}{}x{}:{}{}", id == probe_mvec ? "MVEC " : "",
+                            image.info.size.width, image.info.size.height,
+                            vk::to_string(image.info.pixel_format),
+                            desc.type == VideoCore::TextureCache::BindingType::Storage ? "(rw)"
+                                                                                      : "");
+    }
+    const auto& regs = liverpool->DrawRegs();
+    const auto& vp = regs.viewports[0];
+    std::fprintf(stderr,
+                 "SOTC DLSS PROBE %s %s %#llx images%s | cb0 %ux%u viewport %.1f %.1f %.1f %.1f\n",
+                 composite ? "COMPOSITE" : "MVEC-READER",
+                 stage.sw_stage == Shader::SwStage::Compute ? "cs" : "ps",
+                 static_cast<unsigned long long>(stage.pgm_hash), text.c_str(),
+                 stage.sw_stage == Shader::SwStage::Compute ? 0u : regs.color_buffers[0].Pitch(),
+                 stage.sw_stage == Shader::SwStage::Compute ? 0u : regs.color_buffers[0].Height(),
+                 vp.xscale, vp.yscale, vp.xoffset, vp.yoffset);
+}
+
 void Rasterizer::Draw(bool is_indexed, u32 index_offset, const Pipeline* resolved,
                       bool use_resolved) {
     RENDERER_TRACE;
@@ -977,6 +1057,9 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset, const Pipeline* resolve
     TraceShadowShaders(regs, pipeline);
 
     PrepareRenderState(pipeline);
+    if (DlssProbe()) {
+        ProbeGbuffer(regs);
+    }
     hudless_ui_info = -1; // sotc: TakeHudless, set by BindTextures and BeginRendering
     hudless_vo = 0;
     if (Dlssg::CapturingInputs()) { // sotc: camera and inputs of frame generation
@@ -2525,6 +2608,8 @@ void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
         }
     }
 
+    ProbeSceneLayout(stage);
+
     // sotc: TakeHudless: the final composite samples the UI layer (an sRGB render target) and the
     // fp16 scene, nothing else. Off unless SOTC_FG_HUDLESS=1: with FSR 3 the generated frames of
     // the title screen (faded logo) and of loading screens (the scene left behind the opaque UI
@@ -2571,8 +2656,11 @@ void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
         if (const char* v = std::getenv("SOTC_UI_LINEAR"); v && *v) {
             return *v != '0';
         }
+        // sotc: taller than 1080 lines only: a wide render size of 1080 lines (2560x1080) draws
+        // the 2D art 1:1, and bilinear there drew the HUD gauges as full or black bars (#202).
         const char* r = std::getenv("SOTC_RENDER_RES");
-        return r && *r && std::strcmp(r, "1920x1080") != 0;
+        int w = 0, h = 0;
+        return r && std::sscanf(r, "%dx%d", &w, &h) == 2 && h > 1080;
     }();
     const VideoCore::Image* ui_asset = nullptr;
     if (ui_linear && image_bindings.size() == 1 && image_bindings[0].first &&

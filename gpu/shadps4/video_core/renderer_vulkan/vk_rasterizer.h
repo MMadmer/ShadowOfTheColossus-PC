@@ -319,6 +319,11 @@ private:
         bool fresh{};
     };
     void DestroyHudless(HudlessImage& image);
+    /// sotc: SOTC_DLSS_PROBE (vk_rasterizer.cpp).
+    void ProbeGbuffer(const AmdGpu::Regs& regs);
+    void ProbeSceneLayout(const Shader::Info& stage);
+    u64 probe_frame{~0ull};
+    VideoCore::ImageId probe_mvec{};
     std::unordered_map<VAddr, HudlessImage> hudless_images; ///< by video out address
     HudlessImage hudless_clear;  ///< 1x1, all zero: the UI layer of the redraw
     s32 hudless_ui_info{-1};     ///< this draw: image_infos index of the UI texture, -1 none
