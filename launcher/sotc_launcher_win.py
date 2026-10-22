@@ -159,7 +159,7 @@ def windows_language():
 # Settings, passed to sotc.py as environment variables.
 
 APP_DEFAULTS = {'ui_language': '', 'game_dir': str(PORT_DIR.parent / GAME_ID), 'sys_modules': '',
-                'user_dir': '', 'af16': True, 'hq_textures': True, 'skip_intro': True, 'window_icon_file': '', 'fps60': False,
+                'user_dir': '', 'af16': True, 'hq_textures': True, 'skip_intro': False, 'window_icon_file': '', 'fps60': False,
                 'fps_mode': '30', 'window_mode': 'windowed',
                 'present_mode': 'Mailbox', 'language': '', 'player_name': '', 'show_fps': False,
                 'readbacks': '', 'extra_env': '', 'close_on_play': False, 'gamepad': '', 'pad_glyphs': '',
