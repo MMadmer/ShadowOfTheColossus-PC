@@ -2258,7 +2258,8 @@ class Launcher:
                 release, error = sotc_update.latest_release(), None
             except Exception as problem:  # offline or rate-limited: only a manual check says so
                 release, error = None, problem
-            if FROZEN and sotc_update.is_newer(release, VERSION):
+            declined = not manual and release and release['version'] == self.app.get('skip_version')
+            if FROZEN and sotc_update.is_newer(release, VERSION) and not declined:
                 # Only the changed files when the release has an update manifest (the whole zip
                 # otherwise): read by range from the release zip, compared with these files.
                 try:
@@ -2290,7 +2291,8 @@ class Launcher:
             new=release['version'], cur=VERSION, notes=notes)
         if FROZEN:
             size = plan['bytes'] if plan else release['size']
-            question += _('Tamanho do download: {:.1f} MB.\n\n', 'Download size: {:.1f} MB.\n\n').format(size / 2 ** 20)
+            question += _('Tamanho do download: {}.\n\n', 'Download size: {}.\n\n').format(
+                f'{size / 2 ** 20:.1f} MB' if size >= 1 << 20 else f'{max(size >> 10, 1)} KB')
         if not FROZEN:  # running from the sources: nothing to replace, show the release
             if self.messagebox.askyesno('Shadow of the Colossus', question + _('Abrir a página?', 'Open the page?')):
                 os.startfile(release['page'])
@@ -2311,7 +2313,9 @@ class Launcher:
         self.play_button.configure(state='disabled')
 
         def progress(done, total):
-            text = _('Baixando a atualização: {} de {} MB', 'Downloading the update: {} of {} MB').format(
+            text = _('Baixando a atualização: {} de {} KB', 'Downloading the update: {} of {} KB').format(
+                done >> 10, (total >> 10) or '?') if total and total < 1 << 20 else _(
+                'Baixando a atualização: {} de {} MB', 'Downloading the update: {} of {} MB').format(
                 done >> 20, (total >> 20) or '?')
             self.ui_calls.put(lambda: self.status.configure(text=text, fg=GOLD))
 

@@ -135,8 +135,9 @@ def read_manifest(text, version=None):
     for line in lines[2:]:
         sha, size, rel = line.split('\t')
         parts = Path(rel).parts
+        top = parts[0].rstrip('. ').casefold() if parts else ''
         if (len(sha) != 64 or not parts or rel.startswith(('/', '\\')) or ':' in rel or '..' in parts
-                or parts[0] in KEEP):
+                or top in KEEP or top.startswith(tuple(k + '~' for k in KEEP))):
             raise ValueError(f'unexpected manifest row: {line!r}')
         rows[rel] = (sha.lower(), int(size))
     return rows
@@ -189,7 +190,7 @@ def _central_directory(url, size):
             raise ValueError('damaged zip directory')
         name = directory[pos + 46:pos + 46 + name_len].decode('utf-8')
         pos += 46 + name_len + extra_len + comment_len
-        if flags & 1 or method not in (0, 8):
+        if flags & 1 or method not in (0, 8) or 0xFFFFFFFF in (csize, usize, offset):
             raise ValueError(f'unsupported zip record {name}')
         records[name] = {'method': method, 'crc': crc, 'csize': csize, 'usize': usize,
                          'offset': offset}
@@ -253,7 +254,8 @@ def plan_delta(release, port_dir):
     total = sum(end - start for start, end, _ in spans)
     if total >= size * DELTA_WORTH:
         return None
-    return {'url': url, 'spans': spans, 'bytes': total, 'files': len(files), 'manifest': manifest}
+    return {'source': release['url'], 'spans': spans, 'bytes': total, 'files': len(files),
+            'manifest': manifest}
 
 
 def download_delta(plan, update_dir, progress=None):
@@ -264,11 +266,17 @@ def download_delta(plan, update_dir, progress=None):
     root = new / TOP
     root.mkdir(parents=True)
     done = 0
+    # The storage link GitHub redirects the asset to is valid for minutes: a fresh one now and
+    # after every failed request.
+    url = None
     for start, end, items in plan['spans']:
         buffer, failures = bytearray(), 0
         while len(buffer) < end - start:
             try:
-                with _range(plan['url'], start + len(buffer), end) as response:
+                if not url:
+                    with _range(plan['source'], 0, 1) as response:
+                        url = response.geturl()
+                with _range(url, start + len(buffer), end) as response:
                     while chunk := response.read(1 << 20):
                         buffer += chunk
                         done += len(chunk)
@@ -277,6 +285,7 @@ def download_delta(plan, update_dir, progress=None):
                 if len(buffer) < end - start:
                     raise ConnectionError('connection closed early')
             except (OSError, ValueError):
+                url = None
                 failures += 1
                 if failures >= 5:
                     raise
@@ -352,17 +361,29 @@ def apply_update(new_root, port_dir, pid=0, restart=True):
         # Files of the installed version that the new one no longer has (both manifests known).
         gone = []
         if (new_root / MANIFEST).is_file() and (port_dir / MANIFEST).is_file():
-            new_rows = read_manifest((new_root / MANIFEST).read_text(encoding='utf-8'))
-            old_rows = read_manifest((port_dir / MANIFEST).read_text(encoding='utf-8'))
-            gone = [rel for rel in old_rows if rel not in new_rows and rel != 'sotc.ini']
+            try:
+                new_rows = {rel.casefold() for rel in
+                            read_manifest((new_root / MANIFEST).read_text(encoding='utf-8'))}
+                old_rows = read_manifest((port_dir / MANIFEST).read_text(encoding='utf-8'))
+                # Windows names ignore case: a renamed Foo.dll -> foo.dll is the same file.
+                gone = [rel for rel in old_rows
+                        if rel.casefold() not in new_rows and rel != 'sotc.ini' and (port_dir / rel).is_file()]
+            except (OSError, ValueError) as error:  # a newer manifest format: nothing removed
+                note(f'files of the old version kept: {error!r}')
         for rel in gone:
             dst = port_dir / rel
-            if dst.is_file():
-                saved = backup / rel
-                saved.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(dst, saved)
-                done.append((dst, saved))
-                dst.unlink()
+            saved = backup / rel
+            saved.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(dst, saved)
+            done.append((dst, saved))
+            for attempt in range(20):  # an antivirus scan may hold it for a moment
+                try:
+                    dst.unlink()
+                    break
+                except PermissionError:
+                    if attempt == 19:
+                        raise
+                    time.sleep(0.5)
         for src in sorted(p for p in new_root.rglob('*') if p.is_file()):
             rel = src.relative_to(new_root)
             if rel.parts[0] in KEEP or (rel == Path('sotc.ini') and (port_dir / rel).exists()):

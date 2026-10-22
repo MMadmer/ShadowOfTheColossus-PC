@@ -81,7 +81,8 @@ if find "$dest" -iname '*.sprx' -o -iname '*.prx' | grep -q .; then
 fi
 
 # The updater's file list (SHA-256 per file): an update downloads only the files that changed.
-version=$(sed -n "s/^VERSION = '\(.*\)'$/\1/p" launcher/sotc_launcher_win.py)
+version=$(sed -n "s/^VERSION = '\([0-9.]*\)'\r*$/\1/p" launcher/sotc_launcher_win.py)
+[[ -n $version ]] || { echo 'no VERSION in launcher/sotc_launcher_win.py' >&2; exit 1; }
 python packaging/windows/update_manifest.py "$dest" "$version"
 
 mkdir -p dist

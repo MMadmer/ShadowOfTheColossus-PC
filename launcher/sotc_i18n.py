@@ -654,12 +654,12 @@ TEXTS = {
         '16x 異方性フィルタリング',
         '16x 이방성 필터링',
     ),
-    'Tamanho do download: {:.1f} MB.\n\n': (
-        'Tamaño de la descarga: {:.1f} MB.\n\n',
-        'Размер загрузки: {:.1f} МБ.\n\n',
-        '下载大小：{:.1f} MB。\n\n',
-        'ダウンロードサイズ：{:.1f} MB。\n\n',
-        '다운로드 크기: {:.1f} MB.\n\n',
+    'Tamanho do download: {}.\n\n': (
+        'Tamaño de la descarga: {}.\n\n',
+        'Размер загрузки: {}.\n\n',
+        '下载大小：{}。\n\n',
+        'ダウンロードサイズ：{}。\n\n',
+        '다운로드 크기: {}.\n\n',
     ),
     'Pular as vinhetas de abertura': (
         'Omitir los logotipos iniciales',
@@ -1983,6 +1983,13 @@ TEXTS = {
         '请先关闭游戏再更新。',
         'アップデートの前にゲームを終了してください。',
         '업데이트하기 전에 게임을 종료하십시오.',
+    ),
+    'Baixando a atualização: {} de {} KB': (
+        'Descargando la actualización: {} de {} KB',
+        'Загрузка обновления: {} из {} КБ',
+        '正在下载更新：{} / {} KB',
+        'アップデートをダウンロード中：{} / {} KB',
+        '업데이트 다운로드 중: {} / {} KB',
     ),
     'Baixando a atualização: {} de {} MB': (
         'Descargando la actualización: {} de {} MB',

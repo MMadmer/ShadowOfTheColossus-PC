@@ -2169,7 +2169,7 @@ void BufferCache::SubmitPendingArenaBinds(Vulkan::SubmitInfo& info) {
 
     info.AddWait(signal_sema, signal_tick);
     // Queue access is serialized by submit_mutex, which the scheduler no longer holds here.
-    std::scoped_lock lk{Vulkan::Scheduler::submit_mutex};
+    std::unique_lock lk{Vulkan::Scheduler::submit_mutex};
     const auto bind_start = std::chrono::steady_clock::now();
     // sotc: SOTC_TEST_BIND_REFUSE=<n> (test knob): every n-th batch is refused twice, as a full card.
     static const u64 refuse_every = [] {
@@ -2196,21 +2196,44 @@ void BufferCache::SubmitPendingArenaBinds(Vulkan::SubmitInfo& info) {
         // sotc: the refused binds were already counted resident, so nothing bound them again and
         // shaders read zeros there for good: the game waited forever for data written there
         // (endless loading on a GTX 1050). The ranges this batch newly allocated are taken back
-        // (memory freed, BDA entries cleared so pointer reads fault them back in, guest data
-        // uploaded again at the next bind); the rest of the batch (unbinds, an arena
-        // migration's rebinds of memory already in use) is submitted again without them.
-        const auto fresh = [&](const vk::SparseMemoryBind& bind) {
-            return bind.memory && std::ranges::any_of(fresh_binds, [&](const FreshBind& f) {
-                       return f.memory == bind.memory &&
-                              (f.memory_block << block_shift) == bind.memoryOffset;
-                   });
-        };
+        // below; the rest of the batch (unbinds, an arena migration's rebinds of memory already
+        // in use, which may span fresh blocks too) is submitted again with the fresh memory cut
+        // out of it.
         std::vector<vk::SparseBufferMemoryBindInfo> retry_infos;
         std::vector<std::vector<vk::SparseMemoryBind>> retry(pending_binds.size());
         for (size_t i = 0; i < pending_binds.size(); ++i) {
             for (const vk::SparseMemoryBind& bind : pending_binds[i].binds) {
-                if (!fresh(bind)) {
-                    retry[i].push_back(bind);
+                // Pieces of the bind's memory range that no fresh allocation covers.
+                boost::container::small_vector<std::pair<u64, u64>, 4> pieces{
+                    {bind.memoryOffset, bind.memoryOffset + bind.size}};
+                for (const FreshBind& f : fresh_binds) {
+                    if (!bind.memory || f.memory != bind.memory) {
+                        continue;
+                    }
+                    const u64 lo = f.memory_block << block_shift;
+                    const u64 hi = (f.memory_block + f.blocks) << block_shift;
+                    decltype(pieces) cut;
+                    for (const auto& [a, b] : pieces) {
+                        if (b <= lo || hi <= a) {
+                            cut.emplace_back(a, b);
+                            continue;
+                        }
+                        if (a < lo) {
+                            cut.emplace_back(a, lo);
+                        }
+                        if (hi < b) {
+                            cut.emplace_back(hi, b);
+                        }
+                    }
+                    pieces = cut;
+                }
+                for (const auto& [a, b] : pieces) {
+                    retry[i].push_back(vk::SparseMemoryBind{
+                        .resourceOffset = bind.resourceOffset + (a - bind.memoryOffset),
+                        .size = b - a,
+                        .memory = bind.memory,
+                        .memoryOffset = bind.memory ? a : 0,
+                    });
                 }
             }
             if (!retry[i].empty()) {
@@ -2219,14 +2242,6 @@ void BufferCache::SubmitPendingArenaBinds(Vulkan::SubmitInfo& info) {
                                        .pBinds = retry[i].data()});
             }
         }
-        for (const FreshBind& f : fresh_binds) {
-            resident_ranges.Subtract(f.first, f.first + f.blocks);
-            runtime.FillBuffer(bda_pagetable_buffer.get(), f.first * sizeof(vk::DeviceAddress),
-                               f.blocks * sizeof(vk::DeviceAddress), 0u);
-            FreeArenaBlocks(f.memory, f.memory_block, f.blocks);
-            memory_tracker->MarkRegionAsCpuModified(f.first << block_shift, f.blocks << block_shift);
-        }
-        ++resident_version; // the resident cache and DMA runs knew these ranges
         if (!retry_infos.empty()) {
             const vk::BindSparseInfo retry_info = {
                 .pNext = &timeline_si,
@@ -2248,7 +2263,20 @@ void BufferCache::SubmitPendingArenaBinds(Vulkan::SubmitInfo& info) {
                          vk::to_string(submit_result), pending_binds.size(), vk::to_string(signal_result));
         }
     }
+    // The taken back ranges record GPU work (the BDA fill): never under submit_mutex, which the
+    // recording thread waits for.
+    lk.unlock();
     if (any_refused) {
+        // Memory freed, BDA entries cleared so pointer reads fault the blocks back in, guest data
+        // uploaded again at the next bind.
+        for (const FreshBind& f : fresh_binds) {
+            resident_ranges.Subtract(f.first, f.first + f.blocks);
+            runtime.FillBuffer(bda_pagetable_buffer.get(), f.first * sizeof(vk::DeviceAddress),
+                               f.blocks * sizeof(vk::DeviceAddress), 0u);
+            FreeArenaBlocks(f.memory, f.memory_block, f.blocks);
+            memory_tracker->MarkRegionAsCpuModified(f.first << block_shift, f.blocks << block_shift);
+        }
+        ++resident_version; // the resident cache and DMA runs knew these ranges
         evict_forced.store(true, std::memory_order_relaxed);
         SotcStats::bind_refused.fetch_add(1, std::memory_order_relaxed);
     }
