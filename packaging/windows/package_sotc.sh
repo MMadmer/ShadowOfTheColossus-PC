@@ -80,6 +80,10 @@ if find "$dest" -iname '*.sprx' -o -iname '*.prx' | grep -q .; then
     echo 'refusing to package firmware modules' >&2; exit 1
 fi
 
+# The updater's file list (SHA-256 per file): an update downloads only the files that changed.
+version=$(sed -n "s/^VERSION = '\(.*\)'$/\1/p" launcher/sotc_launcher_win.py)
+python packaging/windows/update_manifest.py "$dest" "$version"
+
 mkdir -p dist
 rm -rf dist/SotC-PC.zip
 python -c 'import shutil, sys; shutil.make_archive("dist/SotC-PC", "zip", "out/stage", "SotC-PC")'

@@ -1499,6 +1499,7 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
             .memory = device_memory,
             .memoryOffset = memory_block << block_shift,
         });
+        fresh_binds.push_back({range.start, range.end - range.start, device_memory, memory_block});
 
         for (u32 block = 0; block < bind.size; block += block_size) {
             *(bda_addrs++) = arena->BufferDeviceAddress() + bind.resourceOffset + block;
@@ -1756,6 +1757,8 @@ std::pair<vk::DeviceMemory, u64> BufferCache::AllocateArenaBlocks(u64 blocks) {
     // sotc: the range stays unbound (shaders read zeros there) and a bind after the pause asks
     // again, instead of closing the game.
     arena_oom_until = std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
+    evict_forced.store(true, std::memory_order_relaxed);
+    SotcStats::arena_oom.fetch_add(1, std::memory_order_relaxed);
     static u32 reported = 0;
     if (reported++ < 8) {
         LOG_CRITICAL(Render, "Out of video and system memory for buffers ({} KB left unbound); "
@@ -1932,7 +1935,8 @@ bool BufferCache::MaybeEvictCold(std::chrono::steady_clock::time_point now) {
         return static_cast<u16>(std::clamp<unsigned long>(
             v ? std::strtoul(v, nullptr, 10) : small_card ? 8ul : 30ul, 2ul, 30000ul));
     }();
-    if (now < next_evict_check) {
+    const bool forced = evict_forced.exchange(false, std::memory_order_relaxed);
+    if (!forced && now < next_evict_check) {
         return false;
     }
     next_evict_check = now + std::chrono::seconds(2);
@@ -1948,7 +1952,19 @@ bool BufferCache::MaybeEvictCold(std::chrono::steady_clock::time_point now) {
         SotcStats::arena_hot_bytes.store(hot_blocks << block_shift, std::memory_order_relaxed);
     }
     const u64 resident = ArenaUsedBytes();
-    if (limit == 0 || resident <= limit) {
+    if (!forced && (limit == 0 || resident <= limit)) {
+        return false;
+    }
+    // sotc: out of memory, up to a quarter of the arena goes back (cold blocks only), one step
+    // per check over the next checks: a bigger step's readback buffer would be taken from system
+    // memory, which ran out too.
+    if (forced && forced_floor == 0) {
+        forced_floor = resident / 4 * 3;
+    }
+    const u64 floor = forced ? forced_floor : limit / 8 * 7;
+    const u64 step_now = step;
+    if (forced && resident <= floor) {
+        forced_floor = 0;
         return false;
     }
     const SotcStats::ScopedTimer evict_timer{SotcStats::arena_evict_ns};
@@ -1978,7 +1994,7 @@ bool BufferCache::MaybeEvictCold(std::chrono::steady_clock::time_point now) {
                              std::shared_lock gpu_modified_lock{gpu_modified_mutex};
                              return gpu_modified_ranges.Intersects(addr, size);
                          }() ||
-                         evict_retry.contains(range.start) || size > step;
+                         evict_retry.contains(range.start) || size > step_now;
         candidate.bytes = size;
         candidate.ranges.push_back(range);
         if (!candidate.keep) {
@@ -1987,6 +2003,7 @@ bool BufferCache::MaybeEvictCold(std::chrono::steady_clock::time_point now) {
     }
     if (order.empty()) {
         next_evict_check = now + std::chrono::seconds(10); // all of it in use: look again later
+        forced_floor = 0;
         return false;
     }
     std::ranges::sort(order, std::greater{});
@@ -2004,7 +2021,7 @@ bool BufferCache::MaybeEvictCold(std::chrono::steady_clock::time_point now) {
     std::vector<Chosen> chosen;
     u64 total = 0;
     for (const auto& [age, key] : order) {
-        if (total >= step || resident - total <= limit / 8 * 7) {
+        if (total >= step_now || resident - total <= floor) {
             break;
         }
         Chosen& pick = chosen.emplace_back(Chosen{key, {}});
@@ -2094,6 +2111,14 @@ bool BufferCache::MaybeEvictCold(std::chrono::steady_clock::time_point now) {
         scheduler.Flush();
     }
     SotcStats::arena_evict_runs.fetch_add(1, std::memory_order_relaxed);
+    if (forced) {
+        // The next step at the next check, until the forced floor or nothing cold is left.
+        if (!released.empty() && ArenaUsedBytes() > forced_floor) {
+            evict_forced.store(true, std::memory_order_relaxed);
+        } else {
+            forced_floor = 0;
+        }
+    }
     return true;
 }
 
@@ -2158,22 +2183,74 @@ void BufferCache::SubmitPendingArenaBinds(Vulkan::SubmitInfo& info) {
     ASSERT_MSG(submit_result != vk::Result::eErrorDeviceLost, "Device lost during submit");
     // sotc: out of video and system memory (GTX 1050 at colossus 2) the driver refused the bind;
     // the semaphore the next submit waits for was then never signalled and the game froze for
-    // good. Once more after the earlier binds are done, else the semaphore is signalled from the
-    // host (the ranges stay unbound: shaders read zeros there).
+    // good. Once more after the earlier binds are done; a refused batch is taken back below and
+    // the semaphore signalled from the host when nothing else can.
     if (submit_result != vk::Result::eSuccess) {
         memory_semaphore.Wait(signal_tick - 1);
         submit_result = refuse ? vk::Result::eErrorOutOfDeviceMemory
                                : instance.GetGraphicsQueue().bindSparse(sparse_info);
         ASSERT_MSG(submit_result != vk::Result::eErrorDeviceLost, "Device lost during submit");
     }
+    const bool any_refused = submit_result != vk::Result::eSuccess;
+    if (submit_result != vk::Result::eSuccess) {
+        // sotc: the refused binds were already counted resident, so nothing bound them again and
+        // shaders read zeros there for good: the game waited forever for data written there
+        // (endless loading on a GTX 1050). The ranges this batch newly allocated are taken back
+        // (memory freed, BDA entries cleared so pointer reads fault them back in, guest data
+        // uploaded again at the next bind); the rest of the batch (unbinds, an arena
+        // migration's rebinds of memory already in use) is submitted again without them.
+        const auto fresh = [&](const vk::SparseMemoryBind& bind) {
+            return bind.memory && std::ranges::any_of(fresh_binds, [&](const FreshBind& f) {
+                       return f.memory == bind.memory &&
+                              (f.memory_block << block_shift) == bind.memoryOffset;
+                   });
+        };
+        std::vector<vk::SparseBufferMemoryBindInfo> retry_infos;
+        std::vector<std::vector<vk::SparseMemoryBind>> retry(pending_binds.size());
+        for (size_t i = 0; i < pending_binds.size(); ++i) {
+            for (const vk::SparseMemoryBind& bind : pending_binds[i].binds) {
+                if (!fresh(bind)) {
+                    retry[i].push_back(bind);
+                }
+            }
+            if (!retry[i].empty()) {
+                retry_infos.push_back({.buffer = pending_binds[i].arena->Handle(),
+                                       .bindCount = static_cast<u32>(retry[i].size()),
+                                       .pBinds = retry[i].data()});
+            }
+        }
+        for (const FreshBind& f : fresh_binds) {
+            resident_ranges.Subtract(f.first, f.first + f.blocks);
+            runtime.FillBuffer(bda_pagetable_buffer.get(), f.first * sizeof(vk::DeviceAddress),
+                               f.blocks * sizeof(vk::DeviceAddress), 0u);
+            FreeArenaBlocks(f.memory, f.memory_block, f.blocks);
+            memory_tracker->MarkRegionAsCpuModified(f.first << block_shift, f.blocks << block_shift);
+        }
+        ++resident_version; // the resident cache and DMA runs knew these ranges
+        if (!retry_infos.empty()) {
+            const vk::BindSparseInfo retry_info = {
+                .pNext = &timeline_si,
+                .bufferBindCount = static_cast<u32>(retry_infos.size()),
+                .pBufferBinds = retry_infos.data(),
+                .signalSemaphoreCount = 1u,
+                .pSignalSemaphores = &signal_sema,
+            };
+            submit_result = instance.GetGraphicsQueue().bindSparse(retry_info);
+            ASSERT_MSG(submit_result != vk::Result::eErrorDeviceLost, "Device lost during submit");
+        }
+    }
     if (submit_result != vk::Result::eSuccess) {
         const vk::SemaphoreSignalInfo signal_info = {.semaphore = signal_sema, .value = signal_tick};
         const auto signal_result = instance.GetDevice().signalSemaphore(signal_info);
         static u32 reported = 0;
         if (reported++ < 8) {
-            LOG_CRITICAL(Render, "Sparse bind refused ({}), {} arenas left unbound; signal {}",
+            LOG_CRITICAL(Render, "Sparse bind refused ({}), {} arenas bound again later; signal {}",
                          vk::to_string(submit_result), pending_binds.size(), vk::to_string(signal_result));
         }
+    }
+    if (any_refused) {
+        evict_forced.store(true, std::memory_order_relaxed);
+        SotcStats::bind_refused.fetch_add(1, std::memory_order_relaxed);
     }
     // sotc: a bind of many ranges (an arena migration rebinds all of them) can take long.
     if (const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -2189,6 +2266,7 @@ void BufferCache::SubmitPendingArenaBinds(Vulkan::SubmitInfo& info) {
     }
 
     pending_binds.clear();
+    fresh_binds.clear();
 }
 
 } // namespace VideoCore

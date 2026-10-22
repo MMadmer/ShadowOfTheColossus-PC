@@ -403,6 +403,18 @@ private:
     }
     std::chrono::steady_clock::time_point epoch_start{};
     std::chrono::steady_clock::time_point next_evict_check{};
+    /// sotc: memory ran out (an allocation or a sparse bind failed): the next MaybeEvictCold
+    /// gives cold blocks back whatever the limit, so the range left unbound can be bound again.
+    std::atomic<bool> evict_forced{false};
+    u64 forced_floor{}; ///< resident bytes the forced eviction goes down to (0: none running)
+    /// sotc: ranges EnsureResident allocated for the pending binds (taken back when refused).
+    struct FreshBind {
+        u64 first;
+        u64 blocks;
+        vk::DeviceMemory memory;
+        u64 memory_block;
+    };
+    std::vector<FreshBind> fresh_binds;
 
     u32 arena_memory_type_index{};
     std::optional<u32> arena_fallback_memory_type_index;

@@ -654,6 +654,20 @@ TEXTS = {
         '16x 異方性フィルタリング',
         '16x 이방성 필터링',
     ),
+    'Tamanho do download: {:.1f} MB.\n\n': (
+        'Tamaño de la descarga: {:.1f} MB.\n\n',
+        'Размер загрузки: {:.1f} МБ.\n\n',
+        '下载大小：{:.1f} MB。\n\n',
+        'ダウンロードサイズ：{:.1f} MB。\n\n',
+        '다운로드 크기: {:.1f} MB.\n\n',
+    ),
+    'Pular as vinhetas de abertura': (
+        'Omitir los logotipos iniciales',
+        'Пропускать заставки при запуске',
+        '跳过开场标志画面',
+        '起動時のロゴを省略',
+        '시작 로고 건너뛰기',
+    ),
     'Texturas em alta qualidade': (
         'Texturas de alta calidad',
         'Текстуры высокого качества',

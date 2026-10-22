@@ -1711,6 +1711,10 @@ void TextureCache::GarbageCollectImages() {
         if (tiled && download) {
             // This is a workaround for now. We can't handle non-linear image downloads.
             SotcStats::gc_kept_tiled.fetch_add(1, std::memory_order_relaxed);
+            // sotc: to the back of the LRU. Left in front, these images took every pass's
+            // deletions, and on a 2 GB card nothing was ever freed ("GC freed 0"): images grew
+            // until video and system memory ran out (GTX 1050, endless loading).
+            lru_cache.Touch(image.lru_id, gc_tick);
             return false;
         }
         if (download && !pressured) {
@@ -2094,6 +2098,21 @@ void TextureCache::RunGarbageCollector() {
     Census();
     GarbageCollectImages();
     GarbageCollectSamplers();
+    // sotc: video memory in every log, once a minute (players' logs had none of it: a GTX 1050
+    // ran out of memory without a trace of how). Totals since the start.
+    static auto next_line = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+    if (const auto now = std::chrono::steady_clock::now(); now >= next_line) {
+        next_line = now + std::chrono::seconds(60);
+        const auto mib = [](const std::atomic<u64>& v) { return v.load(std::memory_order_relaxed) >> 20; };
+        const auto num = [](const std::atomic<u64>& v) { return v.load(std::memory_order_relaxed); };
+        std::fprintf(stderr,
+                     "SOTC VRAM %llu/%llu MiB: arenas %llu MiB, images %llu MiB in %llu; GC freed "
+                     "%llu, emergency %llu, buffers unbound %llu, binds refused %llu\n",
+                     mib(SotcStats::vram_used), mib(SotcStats::vram_budget), mib(SotcStats::arena_bytes),
+                     mib(SotcStats::image_bytes), num(SotcStats::image_count), num(SotcStats::gc_freed),
+                     num(SotcStats::vram_emergency), num(SotcStats::arena_oom),
+                     num(SotcStats::bind_refused));
+    }
 }
 
 void TextureCache::TouchImage(const Image& image) {

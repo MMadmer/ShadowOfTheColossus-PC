@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.1.1 — 2026-10-22 (fork MMadmer)
+- **Carregamento sem fim em placas de 2 GB** (GTX 1050), no início com as texturas em alta
+  qualidade desligadas e no meio do jogo no mundo aberto:
+  - o coletor do cache de texturas não liberava nada em placas pequenas: imagens escritas pela GPU,
+    que ele não pode liberar, ficavam na frente da fila e gastavam cada passada ("GC freed 0"); a
+    memória de vídeo chegava a 3,4 GB numa placa de 2 GB. Elas agora vão para o fim da fila;
+  - uma ligação de memória recusada pelo driver ficava contada como feita, e os shaders liam zeros
+    ali para sempre: o jogo esperava dados que nunca chegavam. Ela agora é desfeita e refeita no
+    próximo uso, e blocos frios dos buffers são devolvidos para abrir espaço;
+  - com as texturas em alta qualidade, a memória de vídeo acima do orçamento (150%/190%) também
+    faz as texturas pedirem mips mais grossos, não só o pool de páginas do jogo.
+- O registro (`user/last_run.log`) recebe a cada minuto a memória de vídeo, as imagens, o coletor e
+  as falhas de memória.
+- **Lançador:** opção *Pular as vinhetas de abertura* (`+nointro` do próprio motor, ligada por
+  padrão) e barra de rolagem na página principal (os ajustes rápidos eram cortados em telas
+  pequenas).
+
 ## 1.1.0 — 2026-10-22 (fork MMadmer)
 Junta ao fork tudo da 0.58 até a 0.60.4 do projeto original e as pull requests abertas dele, com
 correções de issues ainda abertas, NVIDIA DLSS e otimizações. Obrigado a **Lucas-blip-png,

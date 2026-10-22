@@ -43,7 +43,7 @@ CONFIG_FILE = CONFIG_DIR / 'launcher_settings.json'
 settings_in_use = CONFIG_FILE
 GAME_ID, GAME_VERSION = 'CUSA08809', '01.01'
 SYS_MODULES = ('libSceUlt.sprx', 'libSceNgs2.sprx')
-VERSION = '1.1.0'
+VERSION = '1.1.1'
 MAX_LOG_LINES = 6000
 NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 
@@ -159,7 +159,7 @@ def windows_language():
 # Settings, passed to sotc.py as environment variables.
 
 APP_DEFAULTS = {'ui_language': '', 'game_dir': str(PORT_DIR.parent / GAME_ID), 'sys_modules': '',
-                'user_dir': '', 'af16': True, 'hq_textures': True, 'window_icon_file': '', 'fps60': False,
+                'user_dir': '', 'af16': True, 'hq_textures': True, 'skip_intro': True, 'window_icon_file': '', 'fps60': False,
                 'fps_mode': '30', 'window_mode': 'windowed',
                 'present_mode': 'Mailbox', 'language': '', 'player_name': '', 'show_fps': False,
                 'readbacks': '', 'extra_env': '', 'close_on_play': False, 'gamepad': '', 'pad_glyphs': '',
@@ -712,6 +712,8 @@ def game_environment(s):
         # From Pink-shadPS4: no GPU index-buffer culling (always both), same image, far fewer
         # GPU results the CPU has to wait for.
         cvars += ['doIndexBufferCulling=0', 'doSunShadowIndexBufferCulling=0']
+    if s.get('skip_intro'):
+        cvars.append('nointro')  # the engine's own switch: no logo and legal screens at start
     cvars += str(s.get('engine_cvars', '')).split()
     env['SOTC_CVARS'] = ' '.join(cvars)
     env['SOTC_RECORD_THREAD'] = '1' if s.get('perf_record_thread', True) else '0'
@@ -1143,10 +1145,22 @@ class Launcher:
         tk, ttk = self.tk, self.ttk
         page = tk.Frame(self.content, bg=PANEL)
         self.pages['play'] = page
-        self.banner = tk.Canvas(page, height=self.px(290), bg=BG, highlightthickness=0, bd=0)
+        # Scrolls like the other pages: on a small or scaled screen the quick settings on the
+        # right were cut off.
+        canvas = tk.Canvas(page, bg=PANEL, highlightthickness=0, bd=0)
+        bar = ttk.Scrollbar(page, orient='vertical', command=canvas.yview)
+        inner = tk.Frame(canvas, bg=PANEL)
+        window = canvas.create_window(0, 0, window=inner, anchor='nw')
+        inner.bind('<Configure>', lambda _e: canvas.configure(scrollregion=canvas.bbox('all')))
+        canvas.bind('<Configure>', lambda e: canvas.itemconfigure(window, width=e.width))
+        canvas.configure(yscrollcommand=bar.set)
+        bar.pack(side='right', fill='y')
+        canvas.pack(side='left', fill='both', expand=True)
+        page.scroll = lambda units: canvas.yview_scroll(units, 'units') if inner.winfo_height() > canvas.winfo_height() else None
+        self.banner = tk.Canvas(inner, height=self.px(290), bg=BG, highlightthickness=0, bd=0)
         self.banner.pack(fill='x')
         self.banner.bind('<Configure>', lambda _e: self.draw_banner())
-        body = ttk.Frame(page, padding=(28, 12, 28, 8))
+        body = ttk.Frame(inner, padding=(28, 12, 28, 8))
         body.pack(fill='both', expand=True)
         body.columnconfigure(0, weight=3)
         body.columnconfigure(1, weight=2)
@@ -1172,6 +1186,7 @@ class Launcher:
         self.check(quick, 'hq_textures', _('Texturas em alta qualidade', 'High quality textures'))
         self.row(quick, _('Modo de exibição', 'Display mode'), self.choice(quick, 'window_mode', WINDOW_MODES, 24))
         self.check(quick, 'neo', _('Modo PS4 Pro', 'PS4 Pro mode'))
+        self.check(quick, 'skip_intro', _('Pular as vinhetas de abertura', 'Skip the opening logos'))
         for key in ('af16', 'hq_textures', 'fps_mode', 'window_mode', 'neo', 'output_res', 'render_res', 'upscaler',
                     'sharpness', 'framegen'):
             self.vars[key].trace_add('write', lambda *_a: self.refresh_status())
@@ -2238,14 +2253,22 @@ class Launcher:
             self.status.configure(text=_('Procurando atualização…', 'Checking for updates…'), fg=MUTED)
 
         def work():
+            plan = None
             try:
                 release, error = sotc_update.latest_release(), None
             except Exception as problem:  # offline or rate-limited: only a manual check says so
                 release, error = None, problem
-            self.ui_calls.put(lambda: self.offer_update(release, error, manual))
+            if FROZEN and sotc_update.is_newer(release, VERSION):
+                # Only the changed files when the release has an update manifest (the whole zip
+                # otherwise): read by range from the release zip, compared with these files.
+                try:
+                    plan = sotc_update.plan_delta(release, PORT_DIR)
+                except Exception:
+                    plan = None
+            self.ui_calls.put(lambda: self.offer_update(release, error, manual, plan))
         threading.Thread(target=work, daemon=True).start()
 
-    def offer_update(self, release, error, manual):
+    def offer_update(self, release, error, manual, plan=None):
         self.updating = False
         if manual:
             self.refresh_status()
@@ -2265,6 +2288,9 @@ class Launcher:
         question = _('Nova versão disponível: v{new} (versão atual: v{cur}).\n\n{notes}\n\n',
                      'A new version is available: v{new} (current version: v{cur}).\n\n{notes}\n\n').format(
             new=release['version'], cur=VERSION, notes=notes)
+        if FROZEN:
+            size = plan['bytes'] if plan else release['size']
+            question += _('Tamanho do download: {:.1f} MB.\n\n', 'Download size: {:.1f} MB.\n\n').format(size / 2 ** 20)
         if not FROZEN:  # running from the sources: nothing to replace, show the release
             if self.messagebox.askyesno('Shadow of the Colossus', question + _('Abrir a página?', 'Open the page?')):
                 os.startfile(release['page'])
@@ -2272,11 +2298,11 @@ class Launcher:
         if self.messagebox.askyesno('Shadow of the Colossus', question + _(
                 'Baixar e instalar agora? Os saves e as configurações serão mantidos.',
                 'Download and install now? Your saves and settings will be kept.')):
-            self.install_update(release)
+            self.install_update(release, plan)
         else:
             self.app['skip_version'] = release['version']  # no question at startup for this one again
 
-    def install_update(self, release):
+    def install_update(self, release, plan=None):
         if self.process:
             self.messagebox.showinfo('Shadow of the Colossus', _('Feche o jogo antes de atualizar.',
                                                                  'Close the game before updating.'))
@@ -2291,7 +2317,7 @@ class Launcher:
 
         def work():
             try:
-                new_root, error = sotc_update.download(release, PORT_DIR / 'update', progress), None
+                new_root, error = sotc_update.download(release, PORT_DIR / 'update', progress, plan), None
             except Exception as problem:
                 new_root, error = None, problem
             self.ui_calls.put(lambda: self.finish_update(new_root, error))
@@ -2389,8 +2415,14 @@ def main():
         if not sotc_update.is_newer(release, VERSION):
             print(f'up to date (v{VERSION}, latest {release and release["version"]})')
             sys.exit(0)
-        print(f'updating v{VERSION} -> v{release["version"]}')
-        new_root = sotc_update.download(release, PORT_DIR / 'update')
+        try:
+            plan = sotc_update.plan_delta(release, PORT_DIR)
+        except Exception as problem:
+            print(f'no delta ({problem}): the whole release')
+            plan = None
+        size = plan['bytes'] if plan else release['size']
+        print(f'updating v{VERSION} -> v{release["version"]}, {size / 2 ** 20:.1f} MB')
+        new_root = sotc_update.download(release, PORT_DIR / 'update', plan=plan)
         if FROZEN:
             sotc_update.start_applier(new_root, PORT_DIR)
         sys.exit(0)

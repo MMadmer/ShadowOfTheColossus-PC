@@ -26,6 +26,7 @@
 #include <iterator>
 #include "common/types.h"
 #include "video_core/sotc_live.h"
+#include "video_core/sotc_stats.h"
 
 extern "C" const unsigned char* runtime_memory_backing_pointer(uintptr_t address);
 
@@ -107,7 +108,7 @@ inline void Collect(u64 (&entries)[256]) {
         const char* v = std::getenv("SOTC_LOD_POOL_LOW");
         return v ? std::atoi(v) : 8;
     }();
-    static u64 coarser = 0;
+    static u64 coarser = 0, coarser_pool = 0, coarser_vram = 0;
     static u32 reports = 0;
     if (linger_now && pool_low > 0 && reports++ % 30 == 0) {
         const int free = PoolFreePercent();
@@ -117,23 +118,48 @@ inline void Collect(u64 (&entries)[256]) {
         // showed cyan, speckled blocks on carved stone. Coarser below pool_low (two levels below
         // pool_low * 3 / 8), finer again only above twice pool_low (one level back above
         // pool_low * 3 / 4).
-        u64 want = coarser;
+        u64 want = coarser_pool;
         if (free >= 0) {
             if (free < pool_low * 3 / 8) {
                 want = 2;
             } else if (free < pool_low) {
-                want = std::max<u64>(coarser, 1);
-            } else if (coarser == 2 && free > pool_low * 3 / 4) {
+                want = std::max<u64>(coarser_pool, 1);
+            } else if (coarser_pool == 2 && free > pool_low * 3 / 4) {
                 want = 1;
             }
-            if (want == 1 && coarser == 1 && free > pool_low * 2) {
+            if (want == 1 && coarser_pool == 1 && free > pool_low * 2) {
                 want = 0;
             }
         }
+        coarser_pool = want;
+        // sotc: video memory past the card's budget (the driver pages it to system memory): a
+        // 2 GB card at 3.4 GB ran out of video and system memory. One mip coarser past 150% of
+        // the budget, two past 190%; back only below 130% / 160%.
+        const u64 used = SotcStats::vram_used.load(std::memory_order_relaxed);
+        const u64 budget = SotcStats::vram_budget.load(std::memory_order_relaxed);
+        if (budget) {
+            const u64 percent = used * 100 / budget;
+            u64 vram = coarser_vram;
+            if (percent >= 190) {
+                vram = 2;
+            } else if (vram == 2 && percent < 160) {
+                vram = 1;
+            } else if (vram == 0 && percent >= 150) {
+                vram = 1;
+            }
+            if (vram == 1 && percent < 130) {
+                vram = 0;
+            }
+            coarser_vram = vram;
+        }
+        want = std::max(coarser_pool, coarser_vram);
         if (want != coarser) {
             coarser = want;
-            std::fprintf(stderr, "SOTC LOD: game page pool %d%% free, sampled textures ask for mip %u\n",
-                         free, static_cast<unsigned>(level + coarser));
+            std::fprintf(stderr,
+                         "SOTC LOD: game page pool %d%% free, video memory %llu%% of the budget, "
+                         "sampled textures ask for mip %u\n",
+                         free, static_cast<unsigned long long>(budget ? used * 100 / budget : 0),
+                         static_cast<unsigned>(level + coarser));
         }
     }
     const u64 mip = std::min<u64>(level + coarser, 14);
