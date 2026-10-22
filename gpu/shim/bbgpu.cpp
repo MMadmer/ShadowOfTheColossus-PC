@@ -692,6 +692,10 @@ extern "C" int bbgpu_overlay_captures_input(void) {
     return BbOverlay::CapturesInput() ? 1 : 0;
 }
 
+extern "C" void bbgpu_set_intro_cover(int on) {
+    BbOverlay::SetIntroCover(on != 0);
+}
+
 extern "C" unsigned bbgpu_frame_commands(void) {
     return SotcStats::intro_frame_cmds.load(std::memory_order_relaxed);
 }

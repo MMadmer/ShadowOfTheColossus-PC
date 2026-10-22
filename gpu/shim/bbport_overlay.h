@@ -56,5 +56,6 @@ void SetSaveListIcons(std::vector<std::string> paths);
 /// sotc: true while the game has not shown a frame for a second (boot, long loads): the overlay
 /// draws a loading screen and the video out thread keeps presenting. Any thread.
 bool LoadingShown();
+void SetIntroCover(bool on);
 
 } // namespace BbOverlay

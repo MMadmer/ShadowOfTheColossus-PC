@@ -49,6 +49,8 @@ int bbgpu_mouse_take(float *dx, float *dy, unsigned *buttons);
 int bbgpu_overlay_captures_input(void);
 /* sotc: draws and dispatches of the last frame (only with SOTC_SKIP_MOVIE set). */
 unsigned bbgpu_frame_commands(void);
+/* sotc: the port's loading screen over the game (1) or not (0). */
+void bbgpu_set_intro_cover(int on);
 /* Number of symbols registered by the vendored libraries (diagnostics). */
 unsigned bbgpu_symbol_count(void);
 /* sotc: where the engine keeps the pointer to its TargetFramesPerSeconds value (fps60game mode):

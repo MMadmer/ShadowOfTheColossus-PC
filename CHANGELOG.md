@@ -5,8 +5,8 @@
   (`skipSplash=1` do motor: os logotipos do início) ou *Vinhetas e vídeo de abertura*. Na 1.1.1 a
   opção usava `+nointro`, que pulava também a tela título e o perfil: um jogo novo começava direto
   e o menu só oferecia *Novo jogo* (os saves não eram tocados). O motor não tem opção só para o
-  vídeo de abertura: o port o pula como o jogador, segurando ✕ por 3 s quando ele começa (com um
-  perfil existente, antes de qualquer botão do jogador, uma vez). A tela "Pressione qualquer botão"
+  vídeo de abertura: com um perfil existente, a tela de carregamento do port cobre o jogo e o som
+  fica mudo até a tela título, e o vídeo é pulado por baixo dela. A tela "Pressione qualquer botão"
   e o menu com *Continuar* ficam.
 
 ## 1.1.1 — 2026-10-22 (fork MMadmer)

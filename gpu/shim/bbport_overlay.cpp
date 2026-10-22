@@ -1420,7 +1420,14 @@ bool HandleEvent(const SDL_Event& event) {
     }
 }
 
+// sotc: the port's loading screen over the game while the pad skips the opening movie
+// (runtime_pad.c skip_movie): the movie is neither seen nor heard.
+static std::atomic<bool> intro_cover{false};
+
 bool LoadingShown() {
+    if (intro_cover.load(std::memory_order_relaxed)) {
+        return true;
+    }
     // sotc: a second without a game flip. Read from the presenter and the video out threads: the
     // races only move the moment by a frame.
     static std::atomic<u64> seen{~u64{0}};
@@ -1432,6 +1439,10 @@ bool LoadingShown() {
         return false;
     }
     return now - since.load(std::memory_order_relaxed) >= 1000;
+}
+
+void SetIntroCover(bool on) {
+    intro_cover.store(on, std::memory_order_relaxed);
 }
 
 bool Visible() {

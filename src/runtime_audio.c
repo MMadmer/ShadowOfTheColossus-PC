@@ -161,7 +161,12 @@ static ABI int32_t audio_close(int32_t handle) {
 /* SOTC_VOLUME: master volume in percent (default 100, 25-400; #95, the game is quiet). Above
  * 100 the peaks go through a soft limiter instead of clipping hard. */
 static volatile float master_volume_value=-1.0f;
+/* sotc: silence while the pad skips the opening movie (runtime_pad.c skip_movie). */
+static volatile int audio_muted;
+void runtime_audio_set_muted(int muted);
+void runtime_audio_set_muted(int muted) { audio_muted=muted; }
 static float master_volume(void) {
+    if (audio_muted) return 0.0f;
     float v=master_volume_value;
     if (v<0.0f) {
         const char *e=getenv("SOTC_VOLUME");

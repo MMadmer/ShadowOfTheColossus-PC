@@ -615,35 +615,58 @@ static void touch_ids(PadData *d) {
     d->touch_held_time=d->touch_count ? (uint32_t)(d->timestamp-since) : 0;
 }
 /* sotc: SOTC_SKIP_MOVIE=1 (launcher: Skip intro, logos and movie). The engine has no switch for
- * the opening movie alone (+nointro also skips the title and the profile: a new game started at
- * once), so it is skipped as a player does, by holding cross for 3 s. Only with a profile (the
- * first start asks for the language and settings before the movie), only once the game draws a
- * 3D scene (the movie: 1,200+ draws and dispatches a frame; logos, loading and the title screen:
- * under 500), never after the player pressed anything, and once. A button held while the game
- * starts would make it pick +nointro itself, so nothing is held before. */
+ * the opening movie alone (+nointro also skips the title screen and the profile: a new game
+ * started at once), and it is not started by code that can be left out (the boot state machine,
+ * 0x8c4a10). So the port's loading screen covers the game and its sound is off from the start
+ * until the title screen, and the movie is skipped under it as a player does, by holding cross.
+ * Only with a profile (the first start asks for the language and settings before the movie),
+ * the movie found by the game drawing a 3D scene (1,200+ draws and dispatches a frame; loading
+ * and the title screen: under 500), the title by the count falling again. A button the player
+ * presses ends it all; a button held while the game starts would make it pick +nointro, so
+ * nothing is held before the movie. */
+enum { SKIP_WATCH, SKIP_HOLD, SKIP_TITLE, SKIP_DONE };
+void runtime_audio_set_muted(int muted);
 static void skip_movie(PadData *d) {
-    static int state=-1; /* 0 watching, 1 holding cross, 2 done */
-    static uint64_t since, busy_since, hold_until;
+    static int state=-1;
+    static uint64_t since, busy_since, calm_since, hold_start;
+    const uint64_t now=now_us();
     if (state<0) {
         const char *v=getenv("SOTC_SKIP_MOVIE");
         char profile[700]; struct stat st;
         snprintf(profile,sizeof(profile),"%s/savedata/1/CUSA08809/SAVEDATA0ShadowProfile0",runtime_file_user_dir());
-        state=v && *v=='1' && stat(profile,&st)==0 ? 0 : 2;
-        since=now_us();
-        if (!state) puts("Runtime: the opening movie will be skipped (Skip intro)");
+        state=v && *v=='1' && stat(profile,&st)==0 ? SKIP_WATCH : SKIP_DONE;
+        since=now;
+        if (state==SKIP_DONE) return;
+        puts("Runtime: the opening movie will be skipped (Skip intro)");
+        bbgpu_set_intro_cover(1);
+        runtime_audio_set_muted(1);
     }
-    if (state==2) return;
-    const uint64_t now=now_us();
-    if (!state) {
-        if (d->buttons || now-since>180000000ull) { state=2; return; } /* the player took over */
-        if (bbgpu_frame_commands()<=900) { busy_since=0; return; }
-        if (!busy_since) busy_since=now;
-        if (now-busy_since<300000) return;
-        state=1; hold_until=now+3000000;
-        puts("Runtime: opening movie started: holding cross to skip it");
+    if (state==SKIP_DONE) return;
+    const unsigned commands=bbgpu_frame_commands();
+    int done=now-since>180000000ull;  /* never stuck behind the loading screen */
+    if (state==SKIP_WATCH) {
+        done|=d->buttons!=0;          /* the player took over */
+        busy_since=commands>900 ? (busy_since ? busy_since : now) : 0;
+        if (busy_since && now-busy_since>=200000) {
+            state=SKIP_HOLD; hold_start=now; calm_since=0;
+            puts("Runtime: opening movie started: skipped under the loading screen");
+        }
+    } else {
+        /* The title screen: the scene count low for half a second, the movie held for at least
+         * half a second (it does not end on its own that fast). Cross is let go after 5 s. */
+        calm_since=commands<700 ? (calm_since ? calm_since : now) : 0;
+        if (now-hold_start>=500000 && calm_since && now-calm_since>=500000) done=1;
+        if (state==SKIP_HOLD && now-hold_start>=5000000) state=SKIP_TITLE;
+        if (now-hold_start>=15000000) done=1;
     }
-    if (now>=hold_until) { state=2; return; }
-    d->buttons|=BTN_CROSS;
+    if (done) {
+        state=SKIP_DONE;
+        bbgpu_set_intro_cover(0);
+        runtime_audio_set_muted(0);
+        puts("Runtime: title screen: loading screen and sound back");
+        return;
+    }
+    if (state==SKIP_HOLD) d->buttons|=BTN_CROSS;
 }
 static void sample(PadData *d) {
     sample_host(d);
