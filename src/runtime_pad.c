@@ -614,9 +614,41 @@ static void touch_ids(PadData *d) {
     else if (!since) since=d->timestamp;
     d->touch_held_time=d->touch_count ? (uint32_t)(d->timestamp-since) : 0;
 }
+/* sotc: SOTC_SKIP_MOVIE=1 (launcher: Skip intro, logos and movie). The engine has no switch for
+ * the opening movie alone (+nointro also skips the title and the profile: a new game started at
+ * once), so it is skipped as a player does, by holding cross for 3 s. Only with a profile (the
+ * first start asks for the language and settings before the movie), only once the game draws a
+ * 3D scene (the movie: 1,200+ draws and dispatches a frame; logos, loading and the title screen:
+ * under 500), never after the player pressed anything, and once. A button held while the game
+ * starts would make it pick +nointro itself, so nothing is held before. */
+static void skip_movie(PadData *d) {
+    static int state=-1; /* 0 watching, 1 holding cross, 2 done */
+    static uint64_t since, busy_since, hold_until;
+    if (state<0) {
+        const char *v=getenv("SOTC_SKIP_MOVIE");
+        char profile[700]; struct stat st;
+        snprintf(profile,sizeof(profile),"%s/savedata/1/CUSA08809/SAVEDATA0ShadowProfile0",runtime_file_user_dir());
+        state=v && *v=='1' && stat(profile,&st)==0 ? 0 : 2;
+        since=now_us();
+        if (!state) puts("Runtime: the opening movie will be skipped (Skip intro)");
+    }
+    if (state==2) return;
+    const uint64_t now=now_us();
+    if (!state) {
+        if (d->buttons || now-since>180000000ull) { state=2; return; } /* the player took over */
+        if (bbgpu_frame_commands()<=900) { busy_since=0; return; }
+        if (!busy_since) busy_since=now;
+        if (now-busy_since<300000) return;
+        state=1; hold_until=now+3000000;
+        puts("Runtime: opening movie started: holding cross to skip it");
+    }
+    if (now>=hold_until) { state=2; return; }
+    d->buttons|=BTN_CROSS;
+}
 static void sample(PadData *d) {
     sample_host(d);
     if (bbgpu_overlay_captures_input()) return;
+    skip_movie(d);
     record_sample(d);
     read_inject();
     replay_sample(d);

@@ -47,6 +47,8 @@ int bbgpu_text_input_poll(char *out_utf8, uint64_t size);
 int bbgpu_mouse_take(float *dx, float *dy, unsigned *buttons);
 /* 1 while the in-game settings menu is open: the game's pad input is held neutral. */
 int bbgpu_overlay_captures_input(void);
+/* sotc: draws and dispatches of the last frame (only with SOTC_SKIP_MOVIE set). */
+unsigned bbgpu_frame_commands(void);
 /* Number of symbols registered by the vendored libraries (diagnostics). */
 unsigned bbgpu_symbol_count(void);
 /* sotc: where the engine keeps the pointer to its TargetFramesPerSeconds value (fps60game mode):

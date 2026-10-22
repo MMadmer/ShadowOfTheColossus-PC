@@ -692,6 +692,10 @@ extern "C" int bbgpu_overlay_captures_input(void) {
     return BbOverlay::CapturesInput() ? 1 : 0;
 }
 
+extern "C" unsigned bbgpu_frame_commands(void) {
+    return SotcStats::intro_frame_cmds.load(std::memory_order_relaxed);
+}
+
 // sotc: the game's save/load slot list (sceSaveDataDialog LIST, runtime_services.c).
 extern "C" int bbgpu_save_list_open(const char* title, const char* const* items, int count,
                                      int focus, int first_deletable) {

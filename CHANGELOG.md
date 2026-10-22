@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.2 — 2026-10-22 (fork MMadmer)
+- **Pular a introdução** (*Пропуск интро*) virou uma escolha: *Desligado* (padrão), *Só as vinhetas*
+  (`skipSplash=1` do motor: os logotipos do início) ou *Vinhetas e vídeo de abertura*. Na 1.1.1 a
+  opção usava `+nointro`, que pulava também a tela título e o perfil: um jogo novo começava direto
+  e o menu só oferecia *Novo jogo* (os saves não eram tocados). O motor não tem opção só para o
+  vídeo de abertura: o port o pula como o jogador, segurando ✕ por 3 s quando ele começa (com um
+  perfil existente, antes de qualquer botão do jogador, uma vez). A tela "Pressione qualquer botão"
+  e o menu com *Continuar* ficam.
+
 ## 1.1.1 — 2026-10-22 (fork MMadmer)
 - **Carregamento sem fim em placas de 2 GB** (GTX 1050), no início com as texturas em alta
   qualidade desligadas e no meio do jogo no mundo aberto:

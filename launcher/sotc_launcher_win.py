@@ -43,7 +43,7 @@ CONFIG_FILE = CONFIG_DIR / 'launcher_settings.json'
 settings_in_use = CONFIG_FILE
 GAME_ID, GAME_VERSION = 'CUSA08809', '01.01'
 SYS_MODULES = ('libSceUlt.sprx', 'libSceNgs2.sprx')
-VERSION = '1.1.1'
+VERSION = '1.1.2'
 MAX_LOG_LINES = 6000
 NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 
@@ -159,7 +159,7 @@ def windows_language():
 # Settings, passed to sotc.py as environment variables.
 
 APP_DEFAULTS = {'ui_language': '', 'game_dir': str(PORT_DIR.parent / GAME_ID), 'sys_modules': '',
-                'user_dir': '', 'af16': True, 'hq_textures': True, 'skip_intro': False, 'window_icon_file': '', 'fps60': False,
+                'user_dir': '', 'af16': True, 'hq_textures': True, 'skip_intro': 'off', 'window_icon_file': '', 'fps60': False,
                 'fps_mode': '30', 'window_mode': 'windowed',
                 'present_mode': 'Mailbox', 'language': '', 'player_name': '', 'show_fps': False,
                 'readbacks': '', 'extra_env': '', 'close_on_play': False, 'gamepad': '', 'pad_glyphs': '',
@@ -213,6 +213,10 @@ VRAM_USE = [('low', ('Baixo (4–6 GB)', 'Low (4–6 GB)')),
             ('normal', ('Padrão', 'Default')),
             ('high', ('Alto (8–12 GB)', 'High (8–12 GB)')),
             ('max', ('Máximo (16 GB ou mais)', 'Maximum (16 GB or more)'))]
+# Skip intro at start (game_environment): the logos only, or the logos and the opening movie.
+SKIP_INTRO = [('off', ('Desligado', 'Off')),
+              ('logos', ('Só as vinhetas', 'Logos only')),
+              ('all', ('Vinhetas e vídeo de abertura', 'Logos and opening movie'))]
 # Far sun shadows drawn on alternate frames (SOTC_SHADOW_REUSE): more FPS, but they may blink (#178).
 # Automatic: on with NVIDIA, off on AMD/Intel.
 SHADOW_REUSE = [('0', ('Desligado', 'Off')),
@@ -577,6 +581,10 @@ def migrate_settings(s):
     if 'fullscreen' in s:
         if s.pop('fullscreen') and s.get('window_mode', 'windowed') == 'windowed':
             s['window_mode'] = 'borderless'
+    # 1.1.1's Skip intro box (the engine's +nointro: it also skipped the title and the profile)
+    # becomes the selector, off.
+    if isinstance(s.get('skip_intro'), bool):
+        s['skip_intro'] = 'off'
     if s.pop('button_icons', None) == 'xbox' and not s.get('pad_glyphs'):
         s['pad_glyphs'] = 'xbox'
     # Older launchers copied shadPS4's sound modules into user/sys_modules on their own; that copy
@@ -712,8 +720,13 @@ def game_environment(s):
         # From Pink-shadPS4: no GPU index-buffer culling (always both), same image, far fewer
         # GPU results the CPU has to wait for.
         cvars += ['doIndexBufferCulling=0', 'doSunShadowIndexBufferCulling=0']
-    if s.get('skip_intro'):
-        cvars.append('nointro')  # the engine's own switch: no logo and legal screens at start
+    # Skip intro: the logos by the engine's own switch; the opening movie by the port holding cross
+    # while it plays (runtime_pad.c). The title screen and the profile stay ("+nointro" skipped
+    # them too: a new game started at once).
+    if s.get('skip_intro') in ('logos', 'all'):
+        cvars.append('skipSplash=1')
+    if s.get('skip_intro') == 'all':
+        env['SOTC_SKIP_MOVIE'] = '1'
     cvars += str(s.get('engine_cvars', '')).split()
     env['SOTC_CVARS'] = ' '.join(cvars)
     env['SOTC_RECORD_THREAD'] = '1' if s.get('perf_record_thread', True) else '0'
@@ -1186,7 +1199,7 @@ class Launcher:
         self.check(quick, 'hq_textures', _('Texturas em alta qualidade', 'High quality textures'))
         self.row(quick, _('Modo de exibição', 'Display mode'), self.choice(quick, 'window_mode', WINDOW_MODES, 24))
         self.check(quick, 'neo', _('Modo PS4 Pro', 'PS4 Pro mode'))
-        self.check(quick, 'skip_intro', _('Pular as vinhetas de abertura', 'Skip intro'))
+        self.row(quick, _('Pular as vinhetas de abertura', 'Skip intro'), self.choice(quick, 'skip_intro', SKIP_INTRO, 24))
         for key in ('af16', 'hq_textures', 'fps_mode', 'window_mode', 'neo', 'output_res', 'render_res', 'upscaler',
                     'sharpness', 'framegen'):
             self.vars[key].trace_add('write', lambda *_a: self.refresh_status())

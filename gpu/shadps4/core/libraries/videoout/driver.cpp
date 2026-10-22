@@ -342,6 +342,10 @@ void VideoOutDriver::Flip(const Request& req) {
         presenter->Present(frame);
     });
     SotcStats::flip_count.fetch_add(1, std::memory_order_relaxed);
+    if (SotcStats::kIntroWatch) {
+        SotcStats::intro_frame_cmds.store(SotcStats::intro_cmds.exchange(0, std::memory_order_relaxed),
+                                          std::memory_order_relaxed);
+    }
 
     // sotc: SOTC_FPS=1 prints the flip rate every five seconds.
     const bool fps_log = SotcStats::kFpsLog; // sotc: the switch the counters use (sotc_stats.h)

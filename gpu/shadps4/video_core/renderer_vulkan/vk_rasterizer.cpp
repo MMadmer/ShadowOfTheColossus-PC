@@ -1844,6 +1844,10 @@ void Rasterizer::FlushPeriodic() {
         SotcStats::commands.store(SotcStats::commands.load(std::memory_order_relaxed) + 1,
                                   std::memory_order_relaxed);
     }
+    if (SotcStats::kIntroWatch) {
+        SotcStats::intro_cmds.store(SotcStats::intro_cmds.load(std::memory_order_relaxed) + 1,
+                                    std::memory_order_relaxed);
+    }
     static const bool early = [] {
         const char* v = std::getenv("SOTC_RB_EARLY");
         return !v || v[0] != '0';

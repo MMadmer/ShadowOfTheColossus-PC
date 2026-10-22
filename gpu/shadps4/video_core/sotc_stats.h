@@ -51,6 +51,10 @@ inline std::atomic<uint64_t> fault_writes{0};       ///< guest write faults on t
 inline std::atomic<uint64_t> fault_walker{0};       ///< SRT walker loads emulated after a fault
 inline std::atomic<uint64_t> fault_gpu_reads{0};    ///< other read faults on the command processor
 inline std::atomic<uint64_t> commands{0}; ///< draws and dispatches recorded (monotonic, CP only)
+/// sotc: SOTC_SKIP_MOVIE (the launcher's Skip intro: logos and movie): draws and dispatches of the
+/// last frame, for the pad to see the opening movie start (runtime_pad.c skip_movie).
+inline const bool kIntroWatch = std::getenv("SOTC_SKIP_MOVIE") != nullptr;
+inline std::atomic<uint32_t> intro_cmds{0}, intro_frame_cmds{0};
 /// Command processor waits for the draw thread (Liverpool::IsBackThreaded).
 inline std::atomic<uint64_t> cp_waits{0};
 /// Busy time of the two command processor threads (SOTC_FPS): the draw thread minus the time it

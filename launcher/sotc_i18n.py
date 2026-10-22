@@ -661,6 +661,20 @@ TEXTS = {
         'ダウンロードサイズ：{}。\n\n',
         '다운로드 크기: {}.\n\n',
     ),
+    'Só as vinhetas': (
+        'Solo los logotipos',
+        'Только заставки',
+        '仅片头标志',
+        'ロゴのみ',
+        '로고만',
+    ),
+    'Vinhetas e vídeo de abertura': (
+        'Logotipos y vídeo de apertura',
+        'Заставки и ролик',
+        '片头标志和开场影片',
+        'ロゴとオープニングムービー',
+        '로고와 오프닝 영상',
+    ),
     'Pular as vinhetas de abertura': (
         'Omitir los logotipos iniciales',
         'Пропуск интро',
