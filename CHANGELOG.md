@@ -13,7 +13,7 @@
     faz as texturas pedirem mips mais grossos, não só o pool de páginas do jogo.
 - O registro (`user/last_run.log`) recebe a cada minuto a memória de vídeo, as imagens, o coletor e
   as falhas de memória.
-- **Lançador:** opção *Pular as vinhetas de abertura* (`+nointro` do próprio motor, ligada por
+- **Lançador:** opção *Pular as vinhetas de abertura* (*Пропуск интро*) (`+nointro` do próprio motor, ligada por
   padrão) e barra de rolagem na página principal (os ajustes rápidos eram cortados em telas
   pequenas).
 

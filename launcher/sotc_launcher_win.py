@@ -1186,7 +1186,7 @@ class Launcher:
         self.check(quick, 'hq_textures', _('Texturas em alta qualidade', 'High quality textures'))
         self.row(quick, _('Modo de exibição', 'Display mode'), self.choice(quick, 'window_mode', WINDOW_MODES, 24))
         self.check(quick, 'neo', _('Modo PS4 Pro', 'PS4 Pro mode'))
-        self.check(quick, 'skip_intro', _('Pular as vinhetas de abertura', 'Skip the opening logos'))
+        self.check(quick, 'skip_intro', _('Pular as vinhetas de abertura', 'Skip intro'))
         for key in ('af16', 'hq_textures', 'fps_mode', 'window_mode', 'neo', 'output_res', 'render_res', 'upscaler',
                     'sharpness', 'framegen'):
             self.vars[key].trace_add('write', lambda *_a: self.refresh_status())

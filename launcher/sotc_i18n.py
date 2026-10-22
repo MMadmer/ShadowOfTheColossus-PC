@@ -663,7 +663,7 @@ TEXTS = {
     ),
     'Pular as vinhetas de abertura': (
         'Omitir los logotipos iniciales',
-        'Пропускать заставки при запуске',
+        'Пропуск интро',
         '跳过开场标志画面',
         '起動時のロゴを省略',
         '시작 로고 건너뛰기',
