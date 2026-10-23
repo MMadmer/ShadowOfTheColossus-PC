@@ -455,7 +455,7 @@ static DWORD WINAPI prefetch_thread(void *unused) {
 /* sotc: hang watchdog (SOTC_WATCHDOG=0 turns it off). Now and then the game stops presenting for
  * good: no flip, PS4SyncEvent waits growing, the player has to close it (user, 20 Oct). It could
  * not be caught on purpose (8 attract runs without one), so after 15 s without a game frame the
- * thread stacks go to the log once per stall, like BB_STACKS_TRIGGER. */
+ * thread stacks go to the log, like BB_STACKS_TRIGGER, and once more at 45 s. */
 static DWORD WINAPI hang_watchdog(void *unused) {
     (void)unused;
     uint64_t last=0;
@@ -464,10 +464,12 @@ static DWORD WINAPI hang_watchdog(void *unused) {
         Sleep(1000);
         const uint64_t flips=bbgpu_flip_count();
         if (flips!=last || flips<100) { last=flips; still=0; dumped=0; continue; }
-        if (++still>=15 && !dumped) {
-            dumped=1;
-            sotc_event("ERROR",SOTC_T("Jogo parado: nenhum quadro há %d s (pilhas das threads no log da sessão)",
-                                      "Game stalled: no frame for %d s (thread stacks in the session log)"),still);
+        /* A second dump 30 s later tells a thread that keeps running (a loop, a fault taken
+         * again and again on one load) from one that waits. */
+        if ((++still>=15 && !dumped) || (still==45 && dumped==1)) {
+            if (!dumped++)
+                sotc_event("ERROR",SOTC_T("Jogo parado: nenhum quadro há %d s (pilhas das threads no log da sessão)",
+                                          "Game stalled: no frame for %d s (thread stacks in the session log)"),still);
             fprintf(stderr,"SOTC WATCHDOG: no game frame for %d s (flips %llu); thread stacks:\n",still,(unsigned long long)flips);
             dump_thread_stacks();
         }

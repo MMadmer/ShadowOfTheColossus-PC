@@ -197,7 +197,8 @@ private:
 
     void EnsureResident(const Buffer* arena, u64 first_block, u64 last_block);
 
-    void DownloadMemory(const Buffer* arena, VAddr device_addr, u64 size);
+    /// Returns the bytes copied back (0: nothing GPU-written was bound there).
+    u64 DownloadMemory(const Buffer* arena, VAddr device_addr, u64 size);
 
     /// sotc: the range [first, second) of the arena that a readback of [device_addr, +size)
     /// downloads and unmarks as GPU-modified: 512 KiB around it, smaller with SOTC_RB_NARROW.
@@ -253,6 +254,8 @@ private:
     /// sotc: marks bytes a guest write fault asked for CPU-modified, unless pages of them
     /// still hold GPU data (see the definition).
     void MarkWrittenByGuest(VAddr addr, u64 size);
+    /// sotc: clears the GPU-modified state of a read fault's pages that nothing bound backs.
+    void DropUnbackedGpuPages(VAddr addr, u64 size);
     void FinishAsyncReadback(AsyncReadback& readback);
     AsyncReadback* FindInflightReadback(VAddr addr, u64 size);
     /// sotc: an asynchronous readback in flight one of whose windows holds [addr, addr + size).

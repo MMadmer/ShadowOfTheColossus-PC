@@ -232,10 +232,12 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool as
         Core::MemoryManager::NoteHostWrite(device_addr, size, 6, window_start);
         fault_addr = device_addr;
         fault_size = size;
-        DownloadMemory(arena, window_start, window_end - window_start);
+        const u64 downloaded = DownloadMemory(arena, window_start, window_end - window_start);
         fault_size = 0;
         if (is_write) {
             MarkWrittenByGuest(device_addr, size);
+        } else if (downloaded == 0) {
+            DropUnbackedGpuPages(device_addr, size);
         }
     };
     if (assume_locks) {
@@ -262,6 +264,30 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool as
     scheduler.WaitSubmitted(readback.tick, false);
     scheduler.GetWorkSemaphore()->Wait(readback.tick);
     liverpool->SendCommand<true>([this, &readback] { FinishAsyncReadback(readback); });
+}
+
+void BufferCache::DropUnbackedGpuPages(VAddr addr, u64 size) {
+    // sotc: a guest read fault whose readback found nothing to copy: the page's GPU-modified bit
+    // is backed by no bound GPU-written byte (taken out of the set, or its blocks no longer
+    // resident). Left set, the page stays read-protected and the load faults again forever: on a
+    // 4-thread bench run a job worker sat on the first load of a job and the game waited for it
+    // (no frame from the title on, 23 Oct). Nothing can be read back there: the guest reads its
+    // own memory. MarkWrittenByGuest does the same for write faults.
+    // A readback in flight over these pages brings their bytes and unprotects them itself.
+    const VAddr lo = Common::AlignDown(addr, VAddr{4096});
+    const VAddr hi = Common::AlignUp(addr + size, VAddr{4096});
+    if (!memory_tracker->IsRegionGpuModified(lo, hi - lo) || FindInflightReadback(lo, hi - lo)) {
+        return;
+    }
+    {
+        std::unique_lock gpu_modified_lock{gpu_modified_mutex};
+        SubtractGpuModified(lo, hi - lo);
+    }
+    memory_tracker->UnmarkRegionAsGpuModified(lo, hi - lo, false);
+    if (SotcStats::read_fault_stale_gpu.fetch_add(1, std::memory_order_relaxed) < 8) {
+        std::fprintf(stderr, "SOTC read fault over a stale GPU page at %#llx: unprotected\n",
+                     static_cast<unsigned long long>(addr));
+    }
 }
 
 void BufferCache::MarkWrittenByGuest(VAddr addr, u64 size) {
@@ -325,6 +351,8 @@ void BufferCache::BeginAsyncReadback(AsyncReadback& readback) {
         }
         if (readback.is_write) {
             MarkWrittenByGuest(readback.device_addr, readback.size);
+        } else {
+            DropUnbackedGpuPages(readback.device_addr, readback.size);
         }
         return;
     }
@@ -419,7 +447,10 @@ void BufferCache::FinishAsyncReadback(AsyncReadback& readback) {
         // guest may have written since): the data may be stale. The ranges never left the
         // GPU-modified set; read the window back the usual way.
         staging_pool.FreeDeferred(download);
-        DownloadMemory(readback.arena, readback.window_start, readback.window_size);
+        if (DownloadMemory(readback.arena, readback.window_start, readback.window_size) == 0 &&
+            !readback.is_write) {
+            DropUnbackedGpuPages(readback.device_addr, readback.size);
+        }
     } else {
         download.buffer->Invalidate(download.offset, download.size);
         // sotc: the ranges leave the GPU-modified set only once the backing holds their data:
@@ -433,14 +464,14 @@ void BufferCache::FinishAsyncReadback(AsyncReadback& readback) {
     }
 }
 
-void BufferCache::DownloadMemory(const Buffer* arena, VAddr device_addr, u64 size) {
+u64 BufferCache::DownloadMemory(const Buffer* arena, VAddr device_addr, u64 size) {
     SotcStats::readbacks.fetch_add(1, std::memory_order_relaxed);
     const SotcStats::ScopedTimer readback_timer{SotcStats::readback_ns};
     const SotcStats::FrameTimer frame_timer{SotcStats::FrameReadback};
     boost::container::small_vector<ReadbackItem, 16> pending;
     const u64 total_size_bytes = GatherDownloads(arena, device_addr, size, pending);
     if (total_size_bytes == 0) {
-        return;
+        return 0;
     }
     const auto download = staging_pool.Request(total_size_bytes, VideoCore::MemoryType::HostCached);
     // Was the data written by work already submitted, or by the command buffer being built?
@@ -2111,15 +2142,17 @@ bool BufferCache::FinishEviction(std::chrono::steady_clock::time_point now, u16 
                                  bool wait) {
     // sotc: the unbind's sparse batch does not wait for earlier submits, so it goes only once
     // every command buffer submitted so far (the read-back's included) is done. The GPU catches
-    // up within a frame or two at the benchmark scenes; after 5 s, or with `wait`, Finish() it.
+    // up within a frame or two at the benchmark scenes; after 5 s, or with `wait`, it is waited
+    // for. The draws recorded since the last submit would still run after the unbind and before
+    // the BDA page table fill below (pointer reads of unbound memory, no fault): Finish() submits
+    // and waits for them too, only that much work once the GPU has caught up.
     PendingEviction& pending = *pending_eviction;
     const bool forced = pending.forced;
-    if (!scheduler.IsFree(pending.tick) || !scheduler.IsFree(scheduler.CurrentTick() - 1)) {
-        if (!wait && now < pending.deadline) {
-            return false;
-        }
-        scheduler.Finish();
+    if (!wait && now < pending.deadline &&
+        (!scheduler.IsFree(pending.tick) || !scheduler.IsFree(scheduler.CurrentTick() - 1))) {
+        return false;
     }
+    scheduler.Finish();
     const SotcStats::ScopedTimer evict_timer{SotcStats::arena_evict_ns};
     const auto& download = pending.download;
     download.buffer->Invalidate(download.offset, download.size);
