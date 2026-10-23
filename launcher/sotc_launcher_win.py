@@ -44,7 +44,7 @@ CONFIG_FILE = CONFIG_DIR / 'launcher_settings.json'
 settings_in_use = CONFIG_FILE
 GAME_ID, GAME_VERSION = 'CUSA08809', '01.01'
 SYS_MODULES = ('libSceUlt.sprx', 'libSceNgs2.sprx')
-VERSION = '1.1.2'
+VERSION = '1.1.3'
 MAX_LOG_LINES = 6000
 NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 
@@ -691,8 +691,6 @@ def migrate_settings(s):
             s['window_mode'] = 'borderless'
     # 1.1.1's Skip intro box (the engine's +nointro: it also skipped the title and the profile)
     # becomes the selector, off.
-    if 'textures' not in s:  # before the levels: the "high quality textures" box
-        s['textures'] = 'high' if s.pop('hq_textures', True) else 'off'
     if isinstance(s.get('skip_intro'), bool):
         s['skip_intro'] = 'off'
     if s.pop('button_icons', None) == 'xbox' and not s.get('pad_glyphs'):
@@ -732,6 +730,9 @@ def load_settings():
     settings = {**APP_DEFAULTS, **saved}
     if 'fps_mode' not in saved:  # before the choice: the "uncapped FPS" box
         settings['fps_mode'] = '60' if saved.get('fps60') else '30'
+    if 'textures' not in saved:  # before the levels: the "high quality textures" box
+        settings['textures'] = 'high' if saved.get('hq_textures', True) else 'off'
+    settings.pop('hq_textures', None)
     if 'framegen' not in saved:
         extra = str(settings.get('extra_env', '')).split()
         if 'SOTC_DLSSG=1' in extra:
