@@ -197,8 +197,7 @@ private:
 
     void EnsureResident(const Buffer* arena, u64 first_block, u64 last_block);
 
-    /// Returns the bytes copied back (0: nothing GPU-written was bound there).
-    u64 DownloadMemory(const Buffer* arena, VAddr device_addr, u64 size);
+    void DownloadMemory(const Buffer* arena, VAddr device_addr, u64 size);
 
     /// sotc: the range [first, second) of the arena that a readback of [device_addr, +size)
     /// downloads and unmarks as GPU-modified: 512 KiB around it, smaller with SOTC_RB_NARROW.
@@ -254,7 +253,10 @@ private:
     /// sotc: marks bytes a guest write fault asked for CPU-modified, unless pages of them
     /// still hold GPU data (see the definition).
     void MarkWrittenByGuest(VAddr addr, u64 size);
-    /// sotc: clears the GPU-modified state of a read fault's pages that nothing bound backs.
+    /// sotc: the end of a guest fault's readback: stale GPU-modified pages unprotected, a write
+    /// marked (MarkWrittenByGuest).
+    void FinishGuestFault(VAddr addr, u64 size, bool is_write);
+    /// sotc: clears the GPU-modified state of a fault's pages that nothing bound backs.
     void DropUnbackedGpuPages(VAddr addr, u64 size);
     void FinishAsyncReadback(AsyncReadback& readback);
     AsyncReadback* FindInflightReadback(VAddr addr, u64 size);
@@ -302,6 +304,9 @@ private:
     std::array<const Buffer*, NUM_ARENA_PAGES> address_space{};
     std::deque<Buffer> arenas;
     std::vector<ArenaBinds> pending_binds;
+    /// sotc: binds the driver refused three times (no fresh memory in them): submitted again
+    /// first, in a batch of their own, at the next SubmitPendingArenaBinds.
+    std::vector<ArenaBinds> retained_binds;
     Vulkan::Semaphore memory_semaphore;
 
     struct Backing : public Interval {

@@ -232,13 +232,9 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool as
         Core::MemoryManager::NoteHostWrite(device_addr, size, 6, window_start);
         fault_addr = device_addr;
         fault_size = size;
-        const u64 downloaded = DownloadMemory(arena, window_start, window_end - window_start);
+        DownloadMemory(arena, window_start, window_end - window_start);
         fault_size = 0;
-        if (is_write) {
-            MarkWrittenByGuest(device_addr, size);
-        } else if (downloaded == 0) {
-            DropUnbackedGpuPages(device_addr, size);
-        }
+        FinishGuestFault(device_addr, size, is_write);
     };
     if (assume_locks) {
         flush_request();
@@ -266,13 +262,20 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool as
     liverpool->SendCommand<true>([this, &readback] { FinishAsyncReadback(readback); });
 }
 
+void BufferCache::FinishGuestFault(VAddr addr, u64 size, bool is_write) {
+    DropUnbackedGpuPages(addr, size);
+    if (is_write) {
+        MarkWrittenByGuest(addr, size);
+    }
+}
+
 void BufferCache::DropUnbackedGpuPages(VAddr addr, u64 size) {
-    // sotc: a guest read fault whose readback found nothing to copy: the page's GPU-modified bit
-    // is backed by no bound GPU-written byte (taken out of the set, or its blocks no longer
-    // resident). Left set, the page stays read-protected and the load faults again forever: on a
-    // 4-thread bench run a job worker sat on the first load of a job and the game waited for it
-    // (no frame from the title on, 23 Oct). Nothing can be read back there: the guest reads its
-    // own memory. MarkWrittenByGuest does the same for write faults.
+    // sotc: a guest fault's readback is done and its pages are still GPU-modified: their bit is
+    // backed by no bound GPU-written byte (a range with nothing bound leaves the set, its page
+    // bit stays; a GPU write recorded since would have made the readback read again). Left set,
+    // the page stays protected and the access faults again forever: on a 4-thread bench run a
+    // job worker sat on the first load of a job and the game waited for it (no frame from the
+    // title on, 23 Oct). Nothing can be read back there: the guest uses its own memory.
     // A readback in flight over these pages brings their bytes and unprotects them itself.
     const VAddr lo = Common::AlignDown(addr, VAddr{4096});
     const VAddr hi = Common::AlignUp(addr + size, VAddr{4096});
@@ -285,7 +288,7 @@ void BufferCache::DropUnbackedGpuPages(VAddr addr, u64 size) {
     }
     memory_tracker->UnmarkRegionAsGpuModified(lo, hi - lo, false);
     if (SotcStats::read_fault_stale_gpu.fetch_add(1, std::memory_order_relaxed) < 8) {
-        std::fprintf(stderr, "SOTC read fault over a stale GPU page at %#llx: unprotected\n",
+        std::fprintf(stderr, "SOTC fault over a stale GPU page at %#llx: unprotected\n",
                      static_cast<unsigned long long>(addr));
     }
 }
@@ -349,11 +352,7 @@ void BufferCache::BeginAsyncReadback(AsyncReadback& readback) {
             readback.dependent = true;
             return;
         }
-        if (readback.is_write) {
-            MarkWrittenByGuest(readback.device_addr, readback.size);
-        } else {
-            DropUnbackedGpuPages(readback.device_addr, readback.size);
-        }
+        FinishGuestFault(readback.device_addr, readback.size, readback.is_write);
         return;
     }
     // Held until FinishAsyncReadback: the pool must not hand it out again before.
@@ -422,15 +421,11 @@ void BufferCache::FinishAsyncReadback(AsyncReadback& readback) {
         while (AsyncReadback* other = FindInflightReadback(readback.device_addr, readback.size)) {
             FinishAsyncReadback(*other);
         }
-        if (readback.is_write) {
-            MarkWrittenByGuest(readback.device_addr, readback.size);
-        }
+        FinishGuestFault(readback.device_addr, readback.size, readback.is_write);
         return;
     }
     if (readback.finished) {
-        if (readback.is_write) {
-            MarkWrittenByGuest(readback.device_addr, readback.size);
-        }
+        FinishGuestFault(readback.device_addr, readback.size, readback.is_write);
         return;
     }
     readback.finished = true;
@@ -447,10 +442,7 @@ void BufferCache::FinishAsyncReadback(AsyncReadback& readback) {
         // guest may have written since): the data may be stale. The ranges never left the
         // GPU-modified set; read the window back the usual way.
         staging_pool.FreeDeferred(download);
-        if (DownloadMemory(readback.arena, readback.window_start, readback.window_size) == 0 &&
-            !readback.is_write) {
-            DropUnbackedGpuPages(readback.device_addr, readback.size);
-        }
+        DownloadMemory(readback.arena, readback.window_start, readback.window_size);
     } else {
         download.buffer->Invalidate(download.offset, download.size);
         // sotc: the ranges leave the GPU-modified set only once the backing holds their data:
@@ -459,19 +451,17 @@ void BufferCache::FinishAsyncReadback(AsyncReadback& readback) {
         SubtractDownloaded(readback.pending);
         staging_pool.FreeDeferred(download);
     }
-    if (readback.is_write) {
-        MarkWrittenByGuest(readback.device_addr, readback.size);
-    }
+    FinishGuestFault(readback.device_addr, readback.size, readback.is_write);
 }
 
-u64 BufferCache::DownloadMemory(const Buffer* arena, VAddr device_addr, u64 size) {
+void BufferCache::DownloadMemory(const Buffer* arena, VAddr device_addr, u64 size) {
     SotcStats::readbacks.fetch_add(1, std::memory_order_relaxed);
     const SotcStats::ScopedTimer readback_timer{SotcStats::readback_ns};
     const SotcStats::FrameTimer frame_timer{SotcStats::FrameReadback};
     boost::container::small_vector<ReadbackItem, 16> pending;
     const u64 total_size_bytes = GatherDownloads(arena, device_addr, size, pending);
     if (total_size_bytes == 0) {
-        return 0;
+        return;
     }
     const auto download = staging_pool.Request(total_size_bytes, VideoCore::MemoryType::HostCached);
     // Was the data written by work already submitted, or by the command buffer being built?
@@ -553,7 +543,6 @@ u64 BufferCache::DownloadMemory(const Buffer* arena, VAddr device_addr, u64 size
     // processor thread downloads memory.
     ApplyDownloads(pending, download.mapped, download.offset);
     SubtractDownloaded(pending); // sotc: after the backing holds the data (see FinishAsyncReadback)
-    return total_size_bytes;
 }
 
 void BufferCache::SubtractDownloaded(std::span<const ReadbackItem> items) {
@@ -2258,6 +2247,43 @@ void BufferCache::NoteFaultRebind(VAddr addr, u64 size) {
 void BufferCache::SubmitPendingArenaBinds(Vulkan::SubmitInfo& info) {
     // sotc: binds stamp blocks with use_epoch; keep it current even when no eviction check runs.
     AdvanceUseEpoch(std::chrono::steady_clock::now());
+    // sotc: binds the driver refused three times last time (retained_binds) go first, alone; the
+    // batch below waits for them, so a retained unbind never lands after a new bind of its range.
+    u64 retained_tick = 0;
+    if (!retained_binds.empty()) {
+        std::vector<vk::SparseBufferMemoryBindInfo> retained_infos;
+        for (const auto& binds : retained_binds) {
+            retained_infos.push_back({.buffer = binds.arena->Handle(),
+                                      .bindCount = static_cast<u32>(binds.binds.size()),
+                                      .pBinds = binds.binds.data()});
+        }
+        retained_tick = memory_semaphore.NextTick();
+        const auto sema = memory_semaphore.Handle();
+        const vk::TimelineSemaphoreSubmitInfo retained_si = {
+            .signalSemaphoreValueCount = 1u,
+            .pSignalSemaphoreValues = &retained_tick,
+        };
+        const vk::BindSparseInfo retained_info = {
+            .pNext = &retained_si,
+            .bufferBindCount = static_cast<u32>(retained_infos.size()),
+            .pBufferBinds = retained_infos.data(),
+            .signalSemaphoreCount = 1u,
+            .pSignalSemaphores = &sema,
+        };
+        std::scoped_lock lk{Vulkan::Scheduler::submit_mutex};
+        const auto result = instance.GetGraphicsQueue().bindSparse(retained_info);
+        ASSERT_MSG(result != vk::Result::eErrorDeviceLost, "Device lost during submit");
+        if (result == vk::Result::eSuccess) {
+            LOG_WARNING(Render, "Sparse binds refused before are bound now ({} arenas)",
+                        retained_binds.size());
+            retained_binds.clear();
+        } else {
+            // Still refused: kept for the next submit, the semaphore signalled from the host.
+            const vk::SemaphoreSignalInfo signal_info = {.semaphore = sema, .value = retained_tick};
+            (void)instance.GetDevice().signalSemaphore(signal_info);
+        }
+        info.AddWait(sema, retained_tick);
+    }
     if (pending_binds.empty()) {
         return;
     }
@@ -2277,12 +2303,16 @@ void BufferCache::SubmitPendingArenaBinds(Vulkan::SubmitInfo& info) {
     const auto signal_sema = memory_semaphore.Handle();
 
     const vk::TimelineSemaphoreSubmitInfo timeline_si = {
+        .waitSemaphoreValueCount = retained_tick ? 1u : 0u,
+        .pWaitSemaphoreValues = &retained_tick,
         .signalSemaphoreValueCount = 1u,
         .pSignalSemaphoreValues = &signal_tick,
     };
 
     const vk::BindSparseInfo sparse_info = {
         .pNext = &timeline_si,
+        .waitSemaphoreCount = retained_tick ? 1u : 0u,
+        .pWaitSemaphores = &signal_sema,
         .bufferBindCount = static_cast<u32>(buffer_binds.size()),
         .pBufferBinds = buffer_binds.data(),
         .signalSemaphoreCount = 1u,
@@ -2293,10 +2323,15 @@ void BufferCache::SubmitPendingArenaBinds(Vulkan::SubmitInfo& info) {
     // Queue access is serialized by submit_mutex, which the scheduler no longer holds here.
     std::unique_lock lk{Vulkan::Scheduler::submit_mutex};
     const auto bind_start = std::chrono::steady_clock::now();
-    // sotc: SOTC_TEST_BIND_REFUSE=<n> (test knob): every n-th batch is refused twice, as a full card.
+    // sotc: SOTC_TEST_BIND_REFUSE=<n> (test knob): every n-th batch is refused twice, as a full card;
+    // with SOTC_TEST_BIND_REFUSE_RETRY=1 its retry without the fresh memory too (retained_binds).
     static const u64 refuse_every = [] {
         const char* v = std::getenv("SOTC_TEST_BIND_REFUSE");
         return v ? std::strtoull(v, nullptr, 10) : 0ull;
+    }();
+    static const bool refuse_retry = [] {
+        const char* v = std::getenv("SOTC_TEST_BIND_REFUSE_RETRY");
+        return v && v[0] == '1';
     }();
     static u64 batches = 0;
     const bool refuse = refuse_every && ++batches % refuse_every == 0;
@@ -2314,6 +2349,7 @@ void BufferCache::SubmitPendingArenaBinds(Vulkan::SubmitInfo& info) {
         ASSERT_MSG(submit_result != vk::Result::eErrorDeviceLost, "Device lost during submit");
     }
     const bool any_refused = submit_result != vk::Result::eSuccess;
+    std::vector<std::vector<vk::SparseMemoryBind>> retry;
     if (submit_result != vk::Result::eSuccess) {
         // sotc: the refused binds were already counted resident, so nothing bound them again and
         // shaders read zeros there for good: the game waited forever for data written there
@@ -2322,7 +2358,7 @@ void BufferCache::SubmitPendingArenaBinds(Vulkan::SubmitInfo& info) {
         // in use, which may span fresh blocks too) is submitted again with the fresh memory cut
         // out of it.
         std::vector<vk::SparseBufferMemoryBindInfo> retry_infos;
-        std::vector<std::vector<vk::SparseMemoryBind>> retry(pending_binds.size());
+        retry.resize(pending_binds.size());
         for (size_t i = 0; i < pending_binds.size(); ++i) {
             for (const vk::SparseMemoryBind& bind : pending_binds[i].binds) {
                 // Pieces of the bind's memory range that no fresh allocation covers.
@@ -2372,17 +2408,27 @@ void BufferCache::SubmitPendingArenaBinds(Vulkan::SubmitInfo& info) {
                 .signalSemaphoreCount = 1u,
                 .pSignalSemaphores = &signal_sema,
             };
-            submit_result = instance.GetGraphicsQueue().bindSparse(retry_info);
+            submit_result = refuse && refuse_retry
+                                ? vk::Result::eErrorOutOfDeviceMemory
+                                : instance.GetGraphicsQueue().bindSparse(retry_info);
             ASSERT_MSG(submit_result != vk::Result::eErrorDeviceLost, "Device lost during submit");
         }
     }
     if (submit_result != vk::Result::eSuccess) {
         const vk::SemaphoreSignalInfo signal_info = {.semaphore = signal_sema, .value = signal_tick};
         const auto signal_result = instance.GetDevice().signalSemaphore(signal_info);
+        // sotc: the binds without fresh memory (an arena migration's rebinds, unbinds) were still
+        // counted bound and their blocks given back: kept, they go again at the next submit.
+        for (size_t i = 0; i < retry.size(); ++i) {
+            if (!retry[i].empty()) {
+                auto& kept = retained_binds.emplace_back(ArenaBinds{pending_binds[i].arena, {}});
+                kept.binds.assign(retry[i].begin(), retry[i].end());
+            }
+        }
         static u32 reported = 0;
         if (reported++ < 8) {
-            LOG_CRITICAL(Render, "Sparse bind refused ({}), {} arenas bound again later; signal {}",
-                         vk::to_string(submit_result), pending_binds.size(), vk::to_string(signal_result));
+            LOG_CRITICAL(Render, "Sparse bind refused ({}), {} arenas kept for the next submit; signal {}",
+                         vk::to_string(submit_result), retained_binds.size(), vk::to_string(signal_result));
         }
     }
     // The taken back ranges record GPU work (the BDA fill): never under submit_mutex, which the

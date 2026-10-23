@@ -126,7 +126,7 @@ inline std::atomic<uint64_t> vram_emergency{0}; ///< emergency texture collectio
 inline std::atomic<uint64_t> arena_oom{0}, bind_refused{0};
 inline std::atomic<uint64_t> write_fault_gpu_pending{0}; ///< write-fault readbacks left protected
 inline std::atomic<uint64_t> write_fault_stale_gpu{0};   ///< ... that cleared a stale GPU page bit
-inline std::atomic<uint64_t> read_fault_stale_gpu{0};    ///< read faults that cleared one
+inline std::atomic<uint64_t> read_fault_stale_gpu{0};    ///< faults whose readback cleared one
 inline std::atomic<uint64_t> arena_hot_bytes{0}; ///< ... bound in the last ~4 s (working set)
 inline std::atomic<uint64_t> vram_over_emulated{0}; ///< peak usage past SOTC_VRAM_LIMIT_MB
 inline std::atomic<uint64_t> arena_evicted{0};  ///< arena bytes given back by MaybeEvictCold
