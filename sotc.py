@@ -299,7 +299,10 @@ def main():
         env['SOTC_RENDER_RES'] = render  # the GPU library reads it (bilinear 2D art above 1080p)
     else:
         env.pop('SOTC_RENDER_RES', None)
-    fov = env.get('SOTC_FOV', '').strip()
+    fov = env.get('SOTC_FOV', '').strip().rstrip('%')
+    if fov and not (fov.isdigit() and 80 <= int(fov) <= 150):
+        print(f'sotc: SOTC_FOV={fov} ignored (a percentage from 80 to 150)', file=sys.stderr)
+        fov = ''
     run_script('sotc_modes.py', source, '--out', out, '--modes', modes, '--cvars', cvars,
                *(['--render', render] if render else []), *(['--fov', fov] if fov else []))
     if render:

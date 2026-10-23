@@ -383,19 +383,19 @@ bool Instance::CreateDevice() {
     depth_clip_control = add_extension(VK_EXT_DEPTH_CLIP_CONTROL_EXTENSION_NAME);
     depth_clip_enable = add_extension(VK_EXT_DEPTH_CLIP_ENABLE_EXTENSION_NAME);
     // sotc: Intel's Windows driver drew blue/pink garbage with dynamic vertex input on an HD 630
-    // (#20); gow3_pc, also shadPS4-based, fixed the same picture by leaving it off there. Off on
-    // Intel's integrated GPUs under that driver but the Arc ones (Arc draws fine with it, and its
-    // background pipeline compiles need it); SOTC_VERTEX_INPUT_DYNAMIC=0/1 decides elsewhere too.
-    // Without it the vertex input goes into the pipelines, as on drivers that do not offer it.
+    // (#20, driver 31.0.101.2141); gow3_pc, also shadPS4-based, fixed the same picture by leaving
+    // it off there. Off with Intel's legacy driver for 6th-11th gen graphics (builds below
+    // 101.3000; Iris Xe, Arc and Core Ultra run the newer one and keep it, which their background
+    // pipeline compiles need); SOTC_VERTEX_INPUT_DYNAMIC=0/1 decides elsewhere too. Without it the
+    // vertex input goes into the pipelines, as on drivers that do not offer it.
     static const int vertex_input_env = [] {
         const char* v = std::getenv("SOTC_VERTEX_INPUT_DYNAMIC");
         return v && *v ? std::atoi(v) : -1;
     }();
-    const bool vertex_input_allowed =
-        vertex_input_env >= 0 ? vertex_input_env != 0
-                              : driver_id != vk::DriverId::eIntelProprietaryWindows ||
-                                    properties.deviceType != vk::PhysicalDeviceType::eIntegratedGpu ||
-                                    std::string_view{properties.deviceName.data()}.contains("Arc");
+    const u32 intel_build = properties.driverVersion >> 14, intel_minor = properties.driverVersion & 0x3fff;
+    const bool intel_legacy = driver_id == vk::DriverId::eIntelProprietaryWindows &&
+                              (intel_build < 101 || (intel_build == 101 && intel_minor < 3000));
+    const bool vertex_input_allowed = vertex_input_env >= 0 ? vertex_input_env != 0 : !intel_legacy;
     vertex_input_dynamic_state =
         vertex_input_allowed && add_extension(VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME);
     SotcStats::vertex_input_static.store(!vertex_input_dynamic_state, std::memory_order_relaxed);
