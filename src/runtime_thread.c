@@ -310,13 +310,23 @@ static void *host_start(void *p) {
      * normal there, liverpool.cpp) and effects went missing while the streamed music played.
      * With 4 CPU threads or fewer the sound threads are above the GPU threads; they mostly
      * sleep. */
+    /* On 4 CPU threads or fewer the four BPE job workers also go below normal and the file
+     * threads (SceFios*, Resource Loading) above it, so a busy worker does not hold back the
+     * game's update and render threads or the streaming they wait for (AjncSystem #267; the
+     * GoW3 port's fix for the same CPUs). SOTC_JOB_PRIORITY=0 leaves them at normal. */
     {
+        DWORD_PTR process_mask=0, system_mask=0;
+        const int small_cpu=GetProcessAffinityMask(GetCurrentProcess(),&process_mask,&system_mask) &&
+                            __builtin_popcountll((unsigned long long)process_mask)<=4;
+        const char *jobs=getenv("SOTC_JOB_PRIORITY");
         const int sound=t->attr.prio<400 || (strstr(t->name,"Sound") || strstr(t->name,"sndx"));
-        if (sound) {
-            DWORD_PTR process_mask=0, system_mask=0;
-            const int small_cpu=GetProcessAffinityMask(GetCurrentProcess(),&process_mask,&system_mask) &&
-                                __builtin_popcountll((unsigned long long)process_mask)<=4;
+        if (sound)
             SetThreadPriority(GetCurrentThread(),small_cpu ? THREAD_PRIORITY_HIGHEST : THREAD_PRIORITY_ABOVE_NORMAL);
+        else if (small_cpu && !(jobs && jobs[0]=='0')) {
+            if (!strncmp(t->name,"BPE JobWorker",13))
+                SetThreadPriority(GetCurrentThread(),THREAD_PRIORITY_BELOW_NORMAL);
+            else if (!strncmp(t->name,"SceFios",7) || !strcmp(t->name,"Resource Loading"))
+                SetThreadPriority(GetCurrentThread(),THREAD_PRIORITY_ABOVE_NORMAL);
         }
     }
 #endif
