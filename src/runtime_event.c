@@ -27,6 +27,12 @@ int sotc_event_pt(void) {
     return pt;
 }
 
+const char *bbgpu_ui_text(const char *pt, const char *en) __attribute__((weak));
+const char *sotc_event_text(const char *pt, const char *en) {
+    if (bbgpu_ui_text) return bbgpu_ui_text(pt, en);
+    return sotc_event_pt() ? pt : en;
+}
+
 void sotc_event(const char *category, const char *format, ...) {
     char message[1024];
     va_list args;

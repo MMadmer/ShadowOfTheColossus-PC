@@ -17,9 +17,16 @@ void sotc_event(const char *category, const char *format, ...)
     ;
 /* 1 when the launcher's language is Portuguese (SOTC_UI_LANG=pt...). */
 int sotc_event_pt(void);
+/* pt or en in the launcher's language; the other languages come from the GPU library's table
+ * (bbgpu_ui_text) when it is linked. */
+const char *sotc_event_text(const char *pt, const char *en)
+#if defined(__GNUC__) || defined(__clang__)
+    __attribute__((format_arg(2)))
+#endif
+    ;
 
 #ifdef __cplusplus
 }
 #endif
 
-#define SOTC_T(pt, en) (sotc_event_pt() ? (pt) : (en))
+#define SOTC_T(pt, en) sotc_event_text((pt), (en))

@@ -30,6 +30,8 @@ uint64_t bbgpu_flip_count(void);
 void bbgpu_request_texture_flush(void);
 /* sotc: 1 once the boot's shader cache preload is over. */
 int bbgpu_warmup_finished(void);
+/* sotc: a text in the launcher's language (SOTC_UI_LANG), from the in-game menu's table. */
+const char *bbgpu_ui_text(const char *pt, const char *en);
 /* sotc: guest fiber stacks; the page tracker keeps them accessible while registered. */
 void bbgpu_register_guest_stack(uintptr_t address, uint64_t size);
 void bbgpu_register_guest_stack_end(uintptr_t address, uint64_t size);

@@ -9,6 +9,7 @@
 #include "bbport_toggles.h"
 #include "video_core/sotc_fps_cap.h"
 #include "video_core/sotc_stats.h"
+#include "video_core/sotc_ui_lang.h"
 #include <algorithm>
 #include <atomic>
 #include <condition_variable>
@@ -240,6 +241,10 @@ u64 PS4_SYSV_ABI sceKernelGetProcessTimeCounterFrequency() { return 1'000'000'00
 extern "C" int runtime_sotc_neo(void);
 extern "C" int bbgpu_warmup_finished(void) {
     return SotcStats::warmup_finished.load(std::memory_order_relaxed) ? 1 : 0;
+}
+
+extern "C" const char* bbgpu_ui_text(const char* pt, const char* en) {
+    return SotcUi::T(pt, en);
 }
 
 extern "C" void bbgpu_request_texture_flush(void) {
