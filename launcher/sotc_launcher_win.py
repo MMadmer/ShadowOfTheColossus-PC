@@ -160,7 +160,7 @@ def windows_language():
 # Settings, passed to sotc.py as environment variables.
 
 APP_DEFAULTS = {'ui_language': '', 'game_dir': str(PORT_DIR.parent / GAME_ID), 'sys_modules': '',
-                'user_dir': '', 'af16': True, 'textures': 'high', 'skip_intro': 'off', 'window_icon_file': '', 'fps60': False,
+                'user_dir': '', 'af16': True, 'textures': 'high', 'skip_intro': 'off', 'hdr': False, 'window_icon_file': '', 'fps60': False,
                 'fps_mode': '30', 'window_mode': 'windowed',
                 'present_mode': 'Mailbox', 'language': '', 'player_name': '', 'show_fps': False,
                 'readbacks': '', 'extra_env': '', 'close_on_play': False, 'gamepad': '', 'pad_glyphs': '',
@@ -346,11 +346,13 @@ def weak_gpu_render_res(gpu_line):
 # mode, as RENDER_RES) and DLSS rebuilds the 1080p display image; the game checks the support again
 # at start (Streamline) and shows the plain image without it.
 DLSS_MODES = [('off', ('Desligado', 'Off')),
+              ('dlaa', ('DLAA (1920 × 1080, nativo)', 'DLAA (1920 × 1080, native)')),
               ('quality', ('DLSS Qualidade (1296 × 729)', 'DLSS Quality (1296 × 729)')),
               ('balanced', ('DLSS Equilibrado (1120 × 630)', 'DLSS Balanced (1120 × 630)')),
               ('performance', ('DLSS Desempenho (960 × 540)', 'DLSS Performance (960 × 540)')),
               ('ultra', ('DLSS Ultra Desempenho (640 × 360)', 'DLSS Ultra Performance (640 × 360)'))]
-DLSS_RENDER = {'quality': 'res720', 'balanced': 'res630', 'performance': 'res540', 'ultra': 'res360'}
+# DLAA (#34): DLSS anti-aliasing at the native 1080p, no render resolution patch.
+DLSS_RENDER = {'dlaa': '', 'quality': 'res720', 'balanced': 'res630', 'performance': 'res540', 'ultra': 'res360'}
 
 
 # The game's memory (9152 MiB of direct memory and 1 GiB of flexible memory, committed at start)
@@ -516,6 +518,29 @@ def game_info(folder):
     except (OSError, ValueError, ImportError):
         title, version = '?', '?'
     return title, eboot_version(folder / 'eboot.bin') or version
+
+
+# The game's archives in a CUSA08809 (EU) dump and their sizes: an incomplete copy (a download or
+# a copy cut short) only showed as a crash at boot (#30, #56). A dump merged with the 1.01 update
+# carries the update's cachedFiles.psarc.
+GAME_ARCHIVES = {'cachedFiles.psarc': (37159164, 37274125), 'pak0.psarc': (364098725,),
+                 'pak1.psarc': (464260479,), 'pak2.psarc': (16557548,), 'pak3.psarc': (720294074,),
+                 'pakN.psarc': (12838532222,)}
+
+
+def damaged_archives(folder):
+    """The archives of a CUSA08809 game folder that are missing or of another size."""
+    folder = Path(folder or '.')
+    present = {p.name.lower(): p for p in folder.glob('*.psarc')}
+    bad = []
+    for name, sizes in GAME_ARCHIVES.items():
+        path = present.get(name.lower())
+        try:
+            if not path or path.stat().st_size not in sizes:
+                bad.append(name)
+        except OSError:
+            bad.append(name)
+    return bad
 
 
 def user_dir(s):
@@ -775,7 +800,8 @@ def game_environment(s):
     # DLSS renders at its mode's size in place of the render resolution choice.
     dlss = dlss_mode(s)
     if dlss:
-        modes.append(DLSS_RENDER[dlss])
+        if DLSS_RENDER[dlss]:
+            modes.append(DLSS_RENDER[dlss])
         env['SOTC_DLSS'] = dlss
     elif s.get('render_res') in {key for key, _t in RENDER_RES if key}:
         modes.append(s['render_res'])
@@ -787,6 +813,9 @@ def game_environment(s):
     env['SOTC_WINDOW_MODE'] = mode
     env['BB_FULLSCREEN'] = '0' if mode == 'windowed' else '1'
     env['BB_PRESENT_MODE'] = s['present_mode']
+    # HDR (#37): an HDR10 swapchain when Windows and the display offer one (vk_swapchain.cpp); the
+    # game then sees an HDR display (sceVideoOutGetDeviceCapabilityInfo) and outputs HDR.
+    env['BB_HDR'] = '1' if s.get('hdr') else '0'
     if s['language']:
         env['BB_LANGUAGE'] = s['language']
     if str(s['player_name']).strip():
@@ -1450,6 +1479,8 @@ class Launcher:
         self.section(f, _('Tela', 'Display'))
         self.row(f, _('Modo de exibição', 'Display mode'), self.choice(f, 'window_mode', WINDOW_MODES))
         self.row(f, _('Sincronização vertical', 'Vertical sync'), self.choice(f, 'present_mode', PRESENT_MODES))
+        self.check(f, 'hdr', _('HDR (experimental)', 'HDR (experimental)'),
+                   _('Só com o HDR ligado no Windows e uma tela HDR.', 'Only with HDR on in Windows and an HDR display.'))
 
     def build_controls(self):
         ttk = self.ttk
@@ -1608,6 +1639,9 @@ class Launcher:
         info = game_info(self.var('game_dir').get())
         if not info:
             game = _('✗ Jogo não encontrado na pasta escolhida', '✗ Game not found in the selected folder')
+        elif info[0] == GAME_ID and (bad := damaged_archives(self.var('game_dir').get())):
+            game = _('⚠ Arquivos do jogo danificados ou incompletos: {}. Copie o jogo de novo.',
+                     '⚠ Game files damaged or incomplete: {}. Copy the game again.').format(', '.join(bad))
         elif info == (GAME_ID, GAME_VERSION):
             game = _('✓ {} versão {}', '✓ {} version {}').format(*info)
         else:
