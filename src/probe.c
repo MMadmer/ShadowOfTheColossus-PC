@@ -387,7 +387,9 @@ static void event_session_start(const char *app0) {
  * the frame stalls (54 ms of 83 in "io" on the user's HDD, FPS down to 5). Once the game has
  * shown 20 s of frames the *.psarc files are read once, in order (~150 MB/s on a HDD), with a low
  * I/O priority hint so the game's own reads go first; Windows keeps them in its file cache (RAM), and later
- * reads of the game come from memory. Skipped when they are more than half the RAM. */
+ * reads of the game come from memory. sotc (#264): the archives take 13.7 GB (pakN.psarc 12.8),
+ * and "all of them or none, within half the RAM" read nothing below 28 GB of RAM: now the small
+ * ones first, as many as fit in a quarter of the RAM (all but pakN on 16 GB). */
 static char prefetch_dir[1024];
 static DWORD WINAPI prefetch_thread(void *unused) {
     (void)unused;
@@ -413,11 +415,8 @@ static DWORD WINAPI prefetch_thread(void *unused) {
     } while (FindNextFileA(find,&found));
     FindClose(find);
     MEMORYSTATUSEX mem={.dwLength=sizeof(mem)};
-    if (!GlobalMemoryStatusEx(&mem) || total>mem.ullTotalPhys/2) {
-        fprintf(stderr,"SOTC prefetch: skipped (%llu MiB of archives, %llu MiB of RAM)\n",total>>20,
-                (unsigned long long)(mem.ullTotalPhys>>20));
-        return 0;
-    }
+    if (!GlobalMemoryStatusEx(&mem)) return 0;
+    const unsigned long long budget=mem.ullTotalPhys/4;
     /* The small archives first (boot and common data), then the big one. */
     for (int i=0;i<count;++i) for (int j=i+1;j<count;++j) if (sizes[j]<sizes[i]) {
         unsigned long long s=sizes[i]; sizes[i]=sizes[j]; sizes[j]=s;
@@ -428,8 +427,14 @@ static DWORD WINAPI prefetch_thread(void *unused) {
     void *buffer=VirtualAlloc(NULL,chunk,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE);
     if (!buffer) return 0;
     const DWORD start=GetTickCount();
-    unsigned long long done=0;
+    unsigned long long done=0, planned=0;
     for (int i=0;i<count;++i) {
+        if (planned+sizes[i]>budget) {
+            fprintf(stderr,"SOTC prefetch: %s left out (%llu MiB; %llu MiB of %llu MiB of archives fit in "
+                    "a quarter of the RAM)\n",names[i],sizes[i]>>20,planned>>20,total>>20);
+            continue;
+        }
+        planned+=sizes[i];
         char path[1400];
         snprintf(path,sizeof(path),"%s\\%s",prefetch_dir,names[i]);
         HANDLE f=CreateFileA(path,GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,NULL,
@@ -1612,10 +1617,14 @@ int main(int argc, char **argv) {
         _exit(0);
     }
     if (patch_file) apply_patches(patch_file, segments, ns, relocs, nr);
-    {   /* sotc: fps60game applied (EU 1.01, scripts/sotc_modes.py): F7 sets the engine's own frame
-         * rate target, the TargetFramesPerSeconds cvar (object 0x2eed7a0, value pointer at +0x60). */
-        static const unsigned char fps60game[]={0xc7,0x45,0x84,0x01,0x00,0x00,0x00};
-        if (size>0x2eed800 && !memcmp(image+0x49a47f,fps60game,sizeof fps60game))
+    {   /* sotc: EU 1.01, with or without fps60game (scripts/sotc_modes.py, its options code site
+         * checked in either state): F7 and the in-game menu set the engine's own frame rate target,
+         * the TargetFramesPerSeconds cvar (object 0x2eed7a0, value pointer at +0x60). Started at 30
+         * FPS, uncapping used to leave the target at 30 and the game's timing ran 30 Hz steps at 60
+         * FPS (#44, #49: some physics and timers twice as fast). */
+        static const unsigned char options_site[2][7]={{0xc7,0x45,0x84,0x01,0x00,0x00,0x00},
+                                                       {0xc7,0x45,0x84,0x02,0x00,0x00,0x00}};
+        if (size>0x2eed800 && (!memcmp(image+0x49a47f,options_site[0],7) || !memcmp(image+0x49a47f,options_site[1],7)))
             bbgpu_set_fps_target_slot(image+0x2eed7a0+0x60);
     }
 #ifdef _WIN32
