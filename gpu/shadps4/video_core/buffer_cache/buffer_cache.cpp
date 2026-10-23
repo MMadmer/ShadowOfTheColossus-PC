@@ -553,6 +553,7 @@ u64 BufferCache::DownloadMemory(const Buffer* arena, VAddr device_addr, u64 size
     // processor thread downloads memory.
     ApplyDownloads(pending, download.mapped, download.offset);
     SubtractDownloaded(pending); // sotc: after the backing holds the data (see FinishAsyncReadback)
+    return total_size_bytes;
 }
 
 void BufferCache::SubtractDownloaded(std::span<const ReadbackItem> items) {
