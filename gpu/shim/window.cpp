@@ -1,5 +1,6 @@
 // bbport: SDL3 window for the Vulkan swapchain (X11 or Wayland).
 #include <atomic>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -117,6 +118,39 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
         SDL_DisplayMode display_mode{};
         if (SDL_GetClosestFullscreenDisplayMode(SDL_GetDisplayForWindow(window), width_, height_, 0.0f, false,
                                                 &display_mode)) {
+            // sotc (upstream PR #243, Anthonypc23): the frames are paced on a 60 Hz vblank, so at
+            // 75 or 144 Hz a 30 FPS frame stays 2 or 3 refreshes in turn and the motion judders.
+            // The highest multiple of 60 at that size instead; BB_FULLSCREEN_HZ=<Hz> asks for a
+            // rate, =0 keeps the desktop's.
+            const char* hz_env = std::getenv("BB_FULLSCREEN_HZ");
+            const float wanted = hz_env && *hz_env ? static_cast<float>(std::atof(hz_env)) : -1.0f;
+            const auto multiple_of_60 = [](float hz) {
+                const int n = static_cast<int>(hz / 60.0f + 0.5f);
+                return n >= 1 && std::fabs(hz - 60.0f * n) < 0.5f;
+            };
+            if (wanted != 0.0f && (wanted > 0.0f || !multiple_of_60(display_mode.refresh_rate))) {
+                int count = 0;
+                SDL_DisplayMode** modes = SDL_GetFullscreenDisplayModes(SDL_GetDisplayForWindow(window), &count);
+                const SDL_DisplayMode* best = nullptr;
+                for (int i = 0; modes && i < count; ++i) {
+                    const SDL_DisplayMode* m = modes[i];
+                    if (m->w != display_mode.w || m->h != display_mode.h) {
+                        continue;
+                    }
+                    const bool better = wanted > 0.0f
+                        ? !best || std::fabs(m->refresh_rate - wanted) < std::fabs(best->refresh_rate - wanted)
+                        : multiple_of_60(m->refresh_rate) && (!best || m->refresh_rate > best->refresh_rate);
+                    if (better) {
+                        best = m;
+                    }
+                }
+                if (best) {
+                    LOG_INFO(Frontend, "Fullscreen at {:.2f} Hz instead of {:.2f} Hz", best->refresh_rate,
+                             display_mode.refresh_rate);
+                    display_mode = *best;
+                }
+                SDL_free(modes);
+            }
             SDL_SetWindowFullscreenMode(window, &display_mode);
         } else {
             LOG_WARNING(Frontend, "No {}x{} display mode ({}): fullscreen at the desktop's", width_, height_,

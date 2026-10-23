@@ -271,22 +271,21 @@ public:
                (vk13_props.requiredSubgroupSizeStages & vk::ShaderStageFlagBits::eCompute);
     }
 
-    /// sotc: AMD GCN (RX 470-590, Vega: subgroups of 64 only) runs the shaders lowered for 32
-    /// lanes and compute pipelines requiring 32, as the unofficial SotC-AMD-Fix layer does. The
-    /// LDS barriers alone did not stop the white/green flicker (#152, #187, #201); this did, on an
-    /// RX 570 (brxzzi). SOTC_AMD_WAVE32=0 turns it off, =1 forces it on any AMD card.
+    /// sotc: SOTC_AMD_WAVE32=1 runs the shaders lowered for 32 lanes on an AMD card, as the
+    /// unofficial SotC-AMD-Fix layer does. It took the white/green flicker away on an RX 570
+    /// (#152, #187, #201), but GCN (RX 470-590, Vega) has 64-lane waves only and cannot require 32:
+    /// the lowered ballots and readlanes (LowerWave64BallotPass, 32-lane groups) then disagree with
+    /// the hardware for lanes 32-63, and every GCN report with it on by default ended in "device
+    /// lost" (#123 after 190 s, #187 at start and after colossus 1). Off by default, as upstream.
     bool IsAmdWave32Forced() const {
         if (GetVendorID() != 0x1002) {
             return false;
         }
-        static const int env = [] {
+        static const bool on = [] {
             const char* v = std::getenv("SOTC_AMD_WAVE32");
-            return v ? std::atoi(v) : -1;
+            return v && std::atoi(v) != 0;
         }();
-        if (env >= 0) {
-            return env != 0;
-        }
-        return vk13_props.minSubgroupSize >= 64 && vk13_props.maxSubgroupSize >= 64;
+        return on;
     }
 
     /// sotc: whether a required subgroup size may be given for this stage.
