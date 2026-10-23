@@ -3,7 +3,7 @@
 ## 1.1.3 — 2026-10-23 (fork Madmer)
 Junta ao fork a 0.60.5 e a 0.60.6 do projeto original (abaixo) e as pull requests abertas dele que
 ainda faltavam, com correções de issues ainda abertas. Obrigado a **Oussama268, JihedMrouki,
-Lucas-blip-png, jownatan e AjncSystem**. O cache de shaders é refeito na primeira abertura.
+Lucas-blip-png, Anthonypc23 e AjncSystem**. O cache de shaders é refeito na primeira abertura.
 
 **Novidades**
 - **Campo de visão** (Gráficos > Geral): 100% (original), 110%, 120% ou 130%. Usa o fator
@@ -19,19 +19,28 @@ Lucas-blip-png, jownatan e AjncSystem**. O cache de shaders é refeito na primei
 **Correções**
 - **Jogo parado de vez com a tela de carregamento** (visto uma vez numa CPU de 4 threads, ao sair
   da tela título): uma thread de trabalho parou na primeira leitura de uma tarefa e o jogo esperou
-  por ela. Causa provável, corrigida: uma página marcada como escrita pela GPU sem nenhum byte da GPU
-  por trás ficava protegida, e a leitura caía no mesmo erro de página para sempre; ela agora é
-  liberada, como já acontecia com as escritas. O vigia de travamento grava as pilhas das threads de
-  novo aos 45 s, e o registro mostra quando uma página assim é liberada.
-- **Memória de buffers devolvida** (placas pequenas): os desenhos gravados desde o último envio
-  rodavam depois da devolução e podiam ler memória já sem ligação (um quadro de zeros, sombras
-  piscando); agora eles terminam antes.
-- **Lançador:** quem tinha desligado *Texturas em alta qualidade* na 1.1.2 ou antes continua com
-  elas desligadas (a atualização as ligava).
-- **Gráficos integrados Intel (HD/UHD/Iris):** o estado dinâmico de entrada de vértices fica
-  desligado no driver Intel do Windows, que desenhava lixo azul e rosa (#20); as placas Arc, também
-  as integradas dos Core Ultra, não mudam. Sem ele, o cache de shaders fica numa pasta própria
-  (`_novid`). `SOTC_VERTEX_INPUT_DYNAMIC=0/1` força.
+  por ela. Causa provável, corrigida: uma página marcada como escrita pela GPU sem nenhum byte da
+  GPU por trás (uma faixa sem memória ligada sai da lista, a marca da página ficava) continuava
+  protegida, e a leitura ou a escrita do jogo caía no mesmo erro de página para sempre. Ela agora é
+  liberada depois da leitura. O vigia de travamento grava as pilhas das threads de novo aos 45 s, e
+  o registro mostra quando uma página assim é liberada.
+- **Ligação de memória recusada três vezes pelo driver** (placas de 2 GB): as ligações sem memória
+  nova (a mudança de uma arena, as liberações) continuavam contadas como feitas, e os shaders liam
+  zeros ali; agora elas são guardadas e enviadas de novo no envio seguinte, antes das outras.
+  `SOTC_TEST_BIND_REFUSE_RETRY=1` simula esse caso para testes.
+- **Texturas Máxima:** a proteção da 1.1.1 contra a memória de vídeo acima do orçamento (texturas
+  um ou dois níveis mais grossas acima de 150% / 190%) valia só em Alta; agora vale também em
+  Máxima, que desliga apenas o ajuste pelo pool de páginas do jogo.
+- **Pular a introdução:** o som 3D do jogo (Audio3d) também fica mudo sob a tela de carregamento, e
+  o volume do lançador (`SOTC_VOLUME`) passa a valer para ele.
+- **Atualização automática:** um segundo SotC.exe aberto durante a atualização apagava o backup dos
+  arquivos substituídos; agora ele não mexe na pasta `update`, e uma atualização interrompida é
+  desfeita no início seguinte.
+- **Gráficos Intel HD/UHD com o driver antigo** (6ª a 11ª geração, versões 101.2xxx ou anteriores):
+  o estado dinâmico de entrada de vértices fica desligado, porque esse driver desenhava lixo azul e
+  rosa (#20). Sem ele, os pipelines são compilados no processador de comandos (engasgos na primeira
+  vez que um efeito aparece) e o cache de shaders fica numa pasta própria (`_novid`). Iris Xe, Arc e
+  Core Ultra usam o driver novo e não mudam. `SOTC_VERTEX_INPUT_DYNAMIC=0/1` força.
 - **F7 e o FPS do menu do jogo** trocam o alvo de FPS do jogo também quando ele abre em 30 FPS
   (#44, #49).
 - **Leitura antecipada dos arquivos (HD)** usa no máximo um quarto da RAM, dos arquivos menores
@@ -41,11 +50,14 @@ Lucas-blip-png, jownatan e AjncSystem**. O cache de shaders é refeito na primei
   (#267; `SOTC_JOB_PRIORITY=0` desliga).
 - **AMD GCN (RX 400/500):** a conversão dos shaders para 32 lanes fica opcional
   (`SOTC_AMD_WAVE32=1`): essas placas só rodam 64 lanes e o driver podia cair.
-- **Buffers frios liberados sem esperar a GPU** no processador de comandos (PR #238, Oussama268).
-- **CPUs fracas** (PR #258, JihedMrouki): posição invariante nos shaders de vértice (sem cintilação
-  entre passes que desenham a mesma geometria) e filas vazias sem trava.
-- **Tela cheia exclusiva** usa a maior frequência múltipla de 60 Hz do monitor (120 Hz, 240 Hz…)
-  na mesma resolução (PR #243, Lucas-blip-png); `BB_FULLSCREEN_HZ` força outra.
+- **Devolução de buffers frios** (PR #238, Oussama268): o processador de comandos não espera mais a
+  cópia de leitura; a devolução termina num quadro seguinte, quando a GPU já alcançou.
+- **PR #258** (JihedMrouki): nas placas sem baricêntricas nativas (GTX 10xx) a posição dos vértices
+  é invariante, e a pré-passada de profundidade e a passada de cor coincidem; o processador de
+  comandos pula as filas vazias sem travá-las.
+- **Tela cheia exclusiva:** com a área de trabalho numa frequência que não é múltipla de 60 Hz
+  (75 Hz, 144 Hz…), usa a maior múltipla de 60 Hz do monitor na mesma resolução, e os 30 FPS deixam
+  de alternar entre 2 e 3 atualizações (PR #243, Anthonypc23); `BB_FULLSCREEN_HZ` força outra.
 - Menu do jogo (F1) e registro de eventos, também as mensagens do carregador, traduzidos para
   espanhol, russo, chinês, japonês e coreano.
 
