@@ -477,6 +477,14 @@ static ABI int32_t a3d_port_advance(uint32_t port) {
         o->has_pcm=0;
         ++a3d.objects_heard;
     }
+    /* sotc: SOTC_VOLUME and the intro mute apply here too, as on the AudioOut ports. */
+    const float master=master_volume();
+    if (master!=1.0f) {
+        for (uint32_t s=0;s<2*a3d.grain;++s) {
+            mix[s]*=master;
+            if (master>1.0f) mix[s]=soft_limit(mix[s]);
+        }
+    }
     ++a3d.count; ++a3d.grains;
     static int told;
     const int first=!told && a3d.objects_heard;

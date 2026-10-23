@@ -629,8 +629,9 @@ static void touch_ids(PadData *d) {
  * Only with a profile (the first start asks for the language and settings before the movie),
  * the movie found by the game drawing a 3D scene (1,200+ draws and dispatches a frame; loading
  * and the title screen: under 500), the title by the count falling again. A button the player
- * presses ends it all; a button held while the game starts would make it pick +nointro, so
- * nothing is held before the movie. */
+ * presses before the movie ends it all; once the movie is being skipped the cover stays until
+ * the title (a press then would show the rest of it). A button held while the game starts would
+ * make it pick +nointro, so nothing is held before the movie. */
 enum { SKIP_WATCH, SKIP_HOLD, SKIP_TITLE, SKIP_DONE };
 void runtime_audio_set_muted(int muted);
 static void skip_movie(PadData *d) {
