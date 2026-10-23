@@ -1789,8 +1789,12 @@ bool Rasterizer::BindResources(const Pipeline* pipeline) {
         SotcStats::bind_calls.fetch_add(1, std::memory_order_relaxed);
     }
 
-    if (fast_eligible) {
+    // sotc: the final composite rebinds its UI image for the HUD-less copy and DLSS (BeginHudless);
+    // a draw reusing its binds would miss both, as the bind memo does (FinishBindMemo).
+    if (fast_eligible && hudless_ui_info < 0 && sr_scene_info < 0) {
         CommitFastBind(pipeline, fast_hash, uses_dma);
+    } else {
+        fast_bind.valid = false;
     }
 
     return true;

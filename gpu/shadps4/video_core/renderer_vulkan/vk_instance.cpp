@@ -384,9 +384,9 @@ bool Instance::CreateDevice() {
     depth_clip_enable = add_extension(VK_EXT_DEPTH_CLIP_ENABLE_EXTENSION_NAME);
     // sotc: Intel's Windows driver drew blue/pink garbage with dynamic vertex input on an HD 630
     // (#20); gow3_pc, also shadPS4-based, fixed the same picture by leaving it off there. Off on
-    // Intel's integrated GPUs under that driver (Arc draws fine with it, and its background
-    // pipeline compiles need it); SOTC_VERTEX_INPUT_DYNAMIC=0/1 decides elsewhere too. Without it
-    // the vertex input goes into the pipelines, as on drivers that do not offer it.
+    // Intel's integrated GPUs under that driver but the Arc ones (Arc draws fine with it, and its
+    // background pipeline compiles need it); SOTC_VERTEX_INPUT_DYNAMIC=0/1 decides elsewhere too.
+    // Without it the vertex input goes into the pipelines, as on drivers that do not offer it.
     static const int vertex_input_env = [] {
         const char* v = std::getenv("SOTC_VERTEX_INPUT_DYNAMIC");
         return v && *v ? std::atoi(v) : -1;
@@ -394,9 +394,11 @@ bool Instance::CreateDevice() {
     const bool vertex_input_allowed =
         vertex_input_env >= 0 ? vertex_input_env != 0
                               : driver_id != vk::DriverId::eIntelProprietaryWindows ||
-                                    properties.deviceType != vk::PhysicalDeviceType::eIntegratedGpu;
+                                    properties.deviceType != vk::PhysicalDeviceType::eIntegratedGpu ||
+                                    std::string_view{properties.deviceName.data()}.contains("Arc");
     vertex_input_dynamic_state =
         vertex_input_allowed && add_extension(VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME);
+    SotcStats::vertex_input_static.store(!vertex_input_dynamic_state, std::memory_order_relaxed);
     // Games excessively leave restart enabled with lists when it isn't actually needed, and it
     // slows down KosmicKrisp due to unrolling. Revisit if KosmicKrisp moves this to mesh shaders.
     list_restart = driver_id != vk::DriverId::eMesaKosmickrisp &&

@@ -12,6 +12,7 @@
 #include "video_core/cache_storage.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
+#include "video_core/sotc_stats.h"
 
 #include <miniz.h>
 #ifdef _WIN32
@@ -132,12 +133,14 @@ void DataBase::Open() {
         // The wave64 uniform branches (SOTC_WAVE64_UNIFORM) change the lowering and the barrier
         // analysis but not the profile: with them off the shaders go to a cache of their own
         // (AjncSystem#93), so a test with them off never reuses shaders built with them on.
+        // Pipelines built without dynamic vertex input carry the vertex formats (_novid).
         cache_path = GetUserPath(PathType::CacheDir) /
                      (std::string{game_info.GameSerial()} +
                       (EmulatorSettings.IsDirectMemoryAccessEnabled() ? "" : "_nodma") +
                       (EmulatorSettings.IsNoInt64() ? "_noi64" : "") +
                       (Libraries::Kernel::sceKernelIsNeoMode() ? "_neo" : "") +
-                      (Shader::Optimization::Wave64UniformBranchesEnabled() ? "" : "_w64off"));
+                      (Shader::Optimization::Wave64UniformBranchesEnabled() ? "" : "_w64off") +
+                      (SotcStats::vertex_input_static.load(std::memory_order_relaxed) ? "_novid" : ""));
         if (!std::filesystem::exists(cache_path)) {
             std::filesystem::create_directories(cache_path);
         }
