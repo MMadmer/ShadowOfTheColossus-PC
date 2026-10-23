@@ -149,15 +149,18 @@ inline void Collect(u64 (&entries)[256]) {
         std::fprintf(stderr, "SOTC LOD POOL: %d%% free (%lld of %llu pages)\n", PoolFreePercent(),
                      static_cast<long long>(p.free), static_cast<unsigned long long>(p.total));
     }
-    if (pool_log && (!linger_now || pool_low <= 0)) {
+    if (pool_log && !linger_now) {
         ++reports;
     }
-    if (pool_low <= 0 && coarser != 0) { // switched to "Maximum" while coarser
-        coarser = coarser_pool = coarser_vram = 0;
+    // "Maximum" turns the page pool switch off only: past the card's budget the textures still go
+    // coarser (a 2 GB card on Maximum ran out of memory without it).
+    if (pool_low <= 0 && coarser_pool != 0) {
+        coarser_pool = 0;
+        coarser = coarser_vram;
         std::fprintf(stderr, "SOTC LOD: page pool switch off, sampled textures ask for mip %u\n",
-                     static_cast<unsigned>(level));
+                     static_cast<unsigned>(level + coarser));
     }
-    if (linger_now && pool_low > 0 && reports++ % 30 == 0) {
+    if (linger_now && reports++ % 30 == 0) {
         const int free = PoolFreePercent();
         // sotc: with hysteresis. The pool hovers at 0-14% free in large areas (9152 MiB), and
         // switching at one threshold changed the mip every second or two (4, 3, 2, 3, 2...): each
@@ -166,7 +169,9 @@ inline void Collect(u64 (&entries)[256]) {
         // pool_low * 3 / 8), finer again only above twice pool_low (one level back above
         // pool_low * 3 / 4).
         u64 want = coarser_pool;
-        if (free >= 0) {
+        if (pool_low <= 0) {
+            want = 0;
+        } else if (free >= 0) {
             if (free < pool_low * 3 / 8) {
                 want = 2;
             } else if (free < pool_low) {
