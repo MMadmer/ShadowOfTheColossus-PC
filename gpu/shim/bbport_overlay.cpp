@@ -850,6 +850,15 @@ void Menu() {
         keep_open = false;
     }
     ImGui::SameLine();
+    // sotc (#210): as closing the window: a save being written is finished first (bbgpu.cpp).
+    if (ImGui::Button(T("Sair do jogo", "Quit the game"))) {
+        SotcEvent::Log("MENU", "%s", T("Sair do jogo", "Quit the game"));
+        SDL_Event quit{};
+        quit.type = SDL_EVENT_QUIT;
+        SDL_PushEvent(&quit);
+        keep_open = false;
+    }
+    ImGui::SameLine();
     ImGui::TextDisabled("%s", T("As configurações são salvas ao fechar", "Settings are saved on close"));
 
     ImGui::End();
