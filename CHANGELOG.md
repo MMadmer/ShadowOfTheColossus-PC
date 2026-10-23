@@ -1,6 +1,55 @@
 # Changelog
 
-## 1.1.2 — 2026-10-22 (fork MMadmer)
+## 1.1.3 — 2026-10-23 (fork Madmer)
+Junta ao fork a 0.60.5 e a 0.60.6 do projeto original (abaixo) e as pull requests abertas dele que
+ainda faltavam, com correções de issues ainda abertas. Obrigado a **Oussama268, JihedMrouki,
+Lucas-blip-png, jownatan e AjncSystem**. O cache de shaders é refeito na primeira abertura.
+
+**Novidades**
+- **Campo de visão** (Gráficos > Geral): 100% (original), 110%, 120% ou 130%. Usa o fator
+  "FOV Adjustment" da câmera do próprio jogo, então o culling e as sombras acompanham a visão mais
+  larga; vale também nas cenas (#179).
+- **DLAA** no NVIDIA DLSS: a suavização do DLSS na resolução nativa (#34).
+- **HDR (experimental)** (Gráficos > Tela): num monitor HDR10 o jogo oferece o próprio modo HDR
+  (#37).
+- **Sair do jogo** no menu do jogo (F1) (#210).
+- O lançador avisa quando os arquivos do jogo estão incompletos ou danificados (tamanho dos
+  `.psarc` da CUSA08809), em vez de o jogo fechar ao abrir (#30, #56).
+
+**Correções**
+- **Jogo parado de vez com a tela de carregamento** (visto uma vez numa CPU de 4 threads, ao sair
+  da tela título): uma thread de trabalho parou na primeira leitura de uma tarefa e o jogo esperou
+  por ela. Causa provável, corrigida: uma página marcada como escrita pela GPU sem nenhum byte da GPU
+  por trás ficava protegida, e a leitura caía no mesmo erro de página para sempre; ela agora é
+  liberada, como já acontecia com as escritas. O vigia de travamento grava as pilhas das threads de
+  novo aos 45 s, e o registro mostra quando uma página assim é liberada.
+- **Memória de buffers devolvida** (placas pequenas): os desenhos gravados desde o último envio
+  rodavam depois da devolução e podiam ler memória já sem ligação (um quadro de zeros, sombras
+  piscando); agora eles terminam antes.
+- **Lançador:** quem tinha desligado *Texturas em alta qualidade* na 1.1.2 ou antes continua com
+  elas desligadas (a atualização as ligava).
+- **Gráficos integrados Intel (HD/UHD/Iris):** o estado dinâmico de entrada de vértices fica
+  desligado no driver Intel do Windows, que desenhava lixo azul e rosa (#20); as placas Arc, também
+  as integradas dos Core Ultra, não mudam. Sem ele, o cache de shaders fica numa pasta própria
+  (`_novid`). `SOTC_VERTEX_INPUT_DYNAMIC=0/1` força.
+- **F7 e o FPS do menu do jogo** trocam o alvo de FPS do jogo também quando ele abre em 30 FPS
+  (#44, #49).
+- **Leitura antecipada dos arquivos (HD)** usa no máximo um quarto da RAM, dos arquivos menores
+  para os maiores; os que não cabem ficam de fora e aparecem no registro (#264).
+- **CPUs de 4 threads:** as threads de trabalho do jogo ficam abaixo do normal e as de leitura de
+  arquivos acima dele, como na correção do port de God of War III para os mesmos processadores
+  (#267; `SOTC_JOB_PRIORITY=0` desliga).
+- **AMD GCN (RX 400/500):** a conversão dos shaders para 32 lanes fica opcional
+  (`SOTC_AMD_WAVE32=1`): essas placas só rodam 64 lanes e o driver podia cair.
+- **Buffers frios liberados sem esperar a GPU** no processador de comandos (PR #238, Oussama268).
+- **CPUs fracas** (PR #258, JihedMrouki): posição invariante nos shaders de vértice (sem cintilação
+  entre passes que desenham a mesma geometria) e filas vazias sem trava.
+- **Tela cheia exclusiva** usa a maior frequência múltipla de 60 Hz do monitor (120 Hz, 240 Hz…)
+  na mesma resolução (PR #243, Lucas-blip-png); `BB_FULLSCREEN_HZ` força outra.
+- Menu do jogo (F1) e registro de eventos, também as mensagens do carregador, traduzidos para
+  espanhol, russo, chinês, japonês e coreano.
+
+## 1.1.2 — 2026-10-22 (fork Madmer)
 - **Pular a introdução** (*Пропуск интро*) virou uma escolha: *Desligado* (padrão), *Só as vinhetas*
   (`skipSplash=1` do motor: os logotipos do início) ou *Vinhetas e vídeo de abertura*. Na 1.1.1 a
   opção usava `+nointro`, que pulava também a tela título e o perfil: um jogo novo começava direto
@@ -9,7 +58,7 @@
   fica mudo até a tela título, e o vídeo é pulado por baixo dela. A tela "Pressione qualquer botão"
   e o menu com *Continuar* ficam.
 
-## 1.1.1 — 2026-10-22 (fork MMadmer)
+## 1.1.1 — 2026-10-22 (fork Madmer)
 - **Carregamento sem fim em placas de 2 GB** (GTX 1050), no início com as texturas em alta
   qualidade desligadas e no meio do jogo no mundo aberto:
   - o coletor do cache de texturas não liberava nada em placas pequenas: imagens escritas pela GPU,
@@ -26,7 +75,7 @@
   padrão) e barra de rolagem na página principal (os ajustes rápidos eram cortados em telas
   pequenas).
 
-## 1.1.0 — 2026-10-22 (fork MMadmer)
+## 1.1.0 — 2026-10-22 (fork Madmer)
 Junta ao fork tudo da 0.58 até a 0.60.4 do projeto original e as pull requests abertas dele, com
 correções de issues ainda abertas, NVIDIA DLSS e otimizações. Obrigado a **Lucas-blip-png,
 Oussama268, DUDUYG, jownatan e AjncSystem**, cujos commits entram com a autoria de cada um.

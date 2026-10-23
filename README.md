@@ -21,10 +21,11 @@ focused on performance, weak hardware and ease of use.
 - **The whole game, start to finish**, including the ending, the credits and the DLC.
 - **Smooth play on modest PCs**: the launcher picks a suitable render resolution for weak graphics
   cards, shaders are prepared once and never compiled during play.
-- **NVIDIA DLSS** on GeForce RTX cards and **frame generation** (AMD FSR 3.1 on any card,
+- **NVIDIA DLSS and DLAA** on GeForce RTX cards and **frame generation** (AMD FSR 3.1 on any card,
   NVIDIA DLSS-G on RTX 40/50) with a sharp interface.
-- **30 or 60 FPS**, resolutions from 720p to 4K, widescreen 16:10, 21:9 and 32:9, PS4 Pro mode,
-  high quality textures, 16x texture filtering.
+- **30 or 60 FPS**, resolutions from 720p to 4K, widescreen 16:10, 21:9 and 32:9, a wider field of
+  view (up to 130%), PS4 Pro mode, high quality textures, 16x texture filtering, HDR
+  (experimental).
 - **Any controller or keyboard and mouse**: Xbox, DualShock 4, DualSense and others. The game shows
   the buttons of the device you use, Xbox and keyboard ones included. Keys and mouse buttons can
   be remapped, rumble strength adjusted.
@@ -106,8 +107,8 @@ connect at any time, also while playing.
 - **No sound effects or music on a weak PC:** update to the latest version; close background
   programs.
 - **The game froze or closed:** open an [issue](https://github.com/MMadmer/ShadowOfTheColossus-PC/issues)
-  and attach `user\last_run.log`. If the game froze, wait a minute before closing it: the log then
-  records what every thread was doing.
+  and attach `user\last_run.log`. If the game froze, wait 20 seconds before closing it: the log
+  then records what every thread was doing.
 
 ### Building from source
 
@@ -176,10 +177,11 @@ source is its git tag.
 - **Игра проходится полностью**, включая финал, титры и DLC.
 - **Плавная игра на скромных компьютерах**: лаунчер подбирает подходящее разрешение рендера для
   слабых видеокарт, шейдеры подготавливаются один раз и не компилируются во время игры.
-- **NVIDIA DLSS** на видеокартах GeForce RTX и **генерация кадров** (AMD FSR 3.1 на любой
+- **NVIDIA DLSS и DLAA** на видеокартах GeForce RTX и **генерация кадров** (AMD FSR 3.1 на любой
   видеокарте, NVIDIA DLSS-G на RTX 40/50) с чётким интерфейсом.
-- **30 или 60 FPS**, разрешения от 720p до 4K, широкие экраны 16:10, 21:9 и 32:9, режим PS4 Pro,
-  текстуры высокого качества, анизотропная фильтрация 16x.
+- **30 или 60 FPS**, разрешения от 720p до 4K, широкие экраны 16:10, 21:9 и 32:9, расширенное поле
+  зрения (до 130%), режим PS4 Pro, текстуры высокого качества, анизотропная фильтрация 16x, HDR
+  (экспериментально).
 - **Любой геймпад или клавиатура и мышь**: Xbox, DualShock 4, DualSense и другие. Игра показывает
   кнопки используемого устройства, в том числе кнопки Xbox и клавиши клавиатуры. Клавиши и кнопки
   мыши переназначаются, сила вибрации настраивается.
@@ -263,8 +265,8 @@ AMD FX) поддерживаются: совместимая сборка выб
 - **На слабом компьютере пропадают звуковые эффекты или музыка:** обновитесь до последней версии и
   закройте фоновые программы.
 - **Игра зависла или закрылась:** создайте [обращение](https://github.com/MMadmer/ShadowOfTheColossus-PC/issues)
-  и приложите файл `user\last_run.log`. Если игра зависла, подождите минуту перед закрытием: тогда
-  в журнал записывается состояние всех потоков.
+  и приложите файл `user\last_run.log`. Если игра зависла, подождите 20 секунд перед закрытием:
+  тогда в журнал записывается состояние всех потоков.
 
 ### Сборка из исходного кода
 
