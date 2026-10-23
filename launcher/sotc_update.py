@@ -327,6 +327,20 @@ def _wait_for_exit(pid, seconds=60):
         ctypes.windll.kernel32.CloseHandle(handle)
 
 
+def _alive(pid):
+    """True while process pid runs (Windows; elsewhere unknown: False)."""
+    if not pid or os.name != 'nt':
+        return False
+    PROCESS_QUERY_LIMITED_INFORMATION, STILL_ACTIVE = 0x1000, 259
+    handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        return False
+    code = ctypes.c_ulong()
+    ok = ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
+    ctypes.windll.kernel32.CloseHandle(handle)
+    return bool(ok) and code.value == STILL_ACTIVE
+
+
 def _copy(src, dst):
     # A file may stay locked for a moment (antivirus scan of the new exe): retry for ~10 s.
     for attempt in range(20):
@@ -353,6 +367,10 @@ def apply_update(new_root, port_dir, pid=0, restart=True):
     _wait_for_exit(pid)
     backup = update_dir / 'backup'
     shutil.rmtree(backup, ignore_errors=True)
+    # While this file names a running applier, a launcher started meanwhile leaves update/ alone
+    # (cleanup); left behind by an applier that died, it restores the backup.
+    applying = update_dir / 'applying'
+    applying.write_text(str(os.getpid()), encoding='utf-8')
     done = []  # (installed file, its backup or None)
     ok = False
     try:
@@ -410,6 +428,10 @@ def apply_update(new_root, port_dir, pid=0, restart=True):
             except OSError as restore_error:
                 note(f'could not restore {dst}: {restore_error!r}')
         (update_dir / 'failed').write_text(str(error), encoding='utf-8')
+    try:
+        applying.unlink()
+    except OSError:
+        pass
     log.close()
     if restart and (port_dir / 'SotC.exe').is_file():
         flags = getattr(subprocess, 'DETACHED_PROCESS', 0) | getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0)
@@ -420,6 +442,31 @@ def apply_update(new_root, port_dir, pid=0, restart=True):
 def cleanup(port_dir):
     """At launcher start: the error of a failed update (or None), and update/ removed."""
     update_dir = Path(port_dir) / 'update'
+    applying = update_dir / 'applying'
+    if applying.is_file():
+        try:
+            pid = int(applying.read_text(encoding='utf-8').strip() or 0)
+        except (OSError, ValueError):
+            pid = 0
+        if _alive(pid):
+            return None  # the applier is still copying: its files and backup stay
+        # The applier died halfway (closed, crashed): the replaced files come back (the running
+        # launcher's own files cannot be written: they stay as they are).
+        backup = update_dir / 'backup'
+        restored = 0
+        for saved in (p for p in backup.rglob('*') if p.is_file()) if backup.is_dir() else ():
+            try:
+                shutil.copy2(saved, Path(port_dir) / saved.relative_to(backup))
+                restored += 1
+            except OSError:
+                pass
+        (update_dir / 'failed').write_text(
+            f'the update was interrupted; {restored} files of the previous version restored',
+            encoding='utf-8')
+        try:
+            applying.unlink()
+        except OSError:
+            pass
     failed = update_dir / 'failed'
     error = failed.read_text(encoding='utf-8', errors='replace') if failed.is_file() else None
     for name in ('new', 'applier', 'backup', 'failed', ASSET_NAME + '.part'):
