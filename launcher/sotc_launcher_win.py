@@ -14,6 +14,7 @@ import ctypes
 import json
 import math
 import os
+import platform
 from pathlib import Path
 import queue
 import re
@@ -159,7 +160,7 @@ def windows_language():
 # Settings, passed to sotc.py as environment variables.
 
 APP_DEFAULTS = {'ui_language': '', 'game_dir': str(PORT_DIR.parent / GAME_ID), 'sys_modules': '',
-                'user_dir': '', 'af16': True, 'hq_textures': True, 'skip_intro': 'off', 'window_icon_file': '', 'fps60': False,
+                'user_dir': '', 'af16': True, 'textures': 'high', 'skip_intro': 'off', 'window_icon_file': '', 'fps60': False,
                 'fps_mode': '30', 'window_mode': 'windowed',
                 'present_mode': 'Mailbox', 'language': '', 'player_name': '', 'show_fps': False,
                 'readbacks': '', 'extra_env': '', 'close_on_play': False, 'gamepad': '', 'pad_glyphs': '',
@@ -426,9 +427,15 @@ UPSCALERS = [('fsr1', ('AMD FSR 1', 'AMD FSR 1')),
              ('bilinear', ('Bilinear', 'Bilinear'))]
 # Frame rate: 30 (the game's cap, as on PS4), 60 (the game's own 60 FPS mode, that of the PS4 Pro
 # Performance mode, at most one frame per two 120 Hz vblanks: SOTC_FPS_LIMIT=60) or unlimited.
-FPS_MODES = [('30', ('30 FPS', '30 FPS')),
-             ('60', ('60 FPS', '60 FPS')),
-             ('unlimited', ('Ilimitado', 'Unlimited'))]
+FPS_MODES = [('30', ('30 FPS (como no PS4)', '30 FPS (as on PS4)')),
+             ('60', ('60 FPS (modo 60 do jogo)', "60 FPS (the game's 60 FPS mode)")),
+             ('unlimited', ('Ilimitado (acima de 60)', 'Unlimited (above 60)'))]
+# Texture level (#235): off (the game's 256x256 mips), high (fine mips streamed, coarser while the
+# game's page pool or video memory is short) or maximum (always fine; may close in very wide views,
+# not offered in PS4 Pro mode).
+TEXTURES = [('off', ('Desligada', 'Off')),
+            ('high', ('Alta (estável)', 'High (stable)')),
+            ('max', ('Máxima (nítida, pode fechar no modo Pro)', 'Maximum (sharp, may close in Pro mode)'))]
 # Frame generation (bb-probe: SOTC_FRAMEGEN; F8 in game switches off / DLSS-G / FSR 3.1).
 # Automatic: DLSS-G on an RTX 40/50, else FSR 3.1.
 FRAMEGEN = [('off', ('Desligada', 'Off')),
@@ -539,6 +546,78 @@ def open_session_log(log_dir):
     return open(log_dir / 'last_run.log', 'w', encoding='utf-8', buffering=1)
 
 
+def start_event_log(log_dir, settings, env):
+    """user/events.log: one line per event of the session (src/runtime_event.h), for players and
+    developers to read. The launcher writes the header (date, version, system, the settings in
+    words) and the game appends its events (SOTC_EVENT_LOG). The last 5 sessions are kept."""
+    log_dir.mkdir(parents=True, exist_ok=True)
+    for i in range(LOGS_KEPT - 1, 0, -1):
+        older = log_dir / ('events.log' if i == 1 else f'events.{i - 1}.log')
+        if older.is_file():
+            try:
+                os.replace(older, log_dir / f'events.{i}.log')
+            except OSError:
+                pass
+    path = log_dir / 'events.log'
+
+    def words(table, key, default=''):
+        return dict((k, _(*v)) for k, v in table).get(settings.get(key) or default, str(settings.get(key)))
+
+    def on_off(value):
+        return _('ligado', 'on') if value else _('desligado', 'off')
+
+    lines = [
+        _('Shadow of the Colossus PC {} - sessão de {}', 'Shadow of the Colossus PC {} - session of {}').format(
+            VERSION, time.strftime('%Y-%m-%d %H:%M:%S')),
+        _('Windows {} | jogo: {}', 'Windows {} | game: {}').format(platform.version(), settings.get('game_dir') or '?'),
+        _('Saída: {} | Upscaler: {} | Nitidez: {} | DLSS: {}', 'Output: {} | Upscaler: {} | Sharpening: {} | DLSS: {}').format(
+            words(OUTPUTS, 'output_res', '1920x1080'), words(UPSCALERS, 'upscaler', 'fsr1'),
+            words(SHARPNESS, 'sharpness', '250'), env.get('SOTC_DLSS') or 'off'),
+        _('FPS: {} | Texturas: {} | Filtro 16x: {} | Modo PS4 Pro: {}', 'FPS: {} | Textures: {} | 16x filtering: {} | PS4 Pro mode: {}').format(
+            words(FPS_MODES, 'fps_mode', '30'), words(TEXTURES, 'textures', 'high'), on_off(settings.get('af16')),
+            on_off(env.get('SOTC_NEO') == '1')),
+        _('Geração de quadros: {} | Memória de vídeo: {} | Sombras distantes: {} | Volume: {}%',
+          'Frame generation: {} | Video memory use: {} | Far shadows: {} | Volume: {}%').format(
+            words(FRAMEGEN, 'framegen', 'off'), words(VRAM_USE, 'vram_use', 'normal'),
+            on_off(str(settings.get('shadow_reuse') or '0') != '0'), settings.get('volume') or '100'),
+        _('Janela: {} | Pular a introdução: {} | Variáveis extras: {}',
+          'Window: {} | Skip intro: {} | Extra variables: {}').format(
+            words(WINDOW_MODES, 'window_mode', 'windowed'), words(SKIP_INTRO, 'skip_intro', 'off'),
+            settings.get('extra_env') or _('nenhuma', 'none')),
+    ]
+    if env.get('SOTC_NOTE'):
+        lines.append(_('Aviso: {}', 'Note: {}').format(env['SOTC_NOTE']))
+    try:
+        with open(path, 'w', encoding='utf-8') as out:
+            for line in lines:
+                out.write(f'[00:00:00.000] [CONFIG  ] {line}\n')
+    except OSError:
+        return ''
+    return str(path)
+
+
+def end_event_log(log_dir, code, stopped=False):
+    """The end of the session in user/events.log; after a crash its copy goes to user/crashes."""
+    path = log_dir / 'events.log'
+    if code == 0 or stopped:
+        text = (_('Jogo fechado normalmente', 'Game closed normally') if code == 0
+                else _('Jogo parado pelo lançador', 'Game stopped by the launcher'))
+    elif code & 0xffffffff == 3:
+        text = _('O jogo caiu (código 3): o motivo está na linha ERROR acima e no log da sessão',
+                 'The game crashed (code 3): the reason is in the ERROR line above and in the session log')
+    else:
+        text = _('O jogo terminou com erro (código {:#x})', 'The game ended with an error (code {:#x})').format(code & 0xffffffff)
+    try:
+        with open(path, 'a', encoding='utf-8') as out:
+            out.write(f'[--:--:--.---] [SESSION ] {text}\n')
+        if code != 0 and not stopped:
+            crashes = log_dir / 'crashes'
+            crashes.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, crashes / (time.strftime('%Y-%m-%d_%H-%M-%S') + f'_{code & 0xffffffff:#x}_events.log'))
+    except OSError:
+        pass
+
+
 def keep_crash_log(log_dir, code):
     """After a session that ended with an error code, copies its log to
     user/crashes/<date>_<time>_<code>.log (the last 20 are kept)."""
@@ -583,6 +662,8 @@ def migrate_settings(s):
             s['window_mode'] = 'borderless'
     # 1.1.1's Skip intro box (the engine's +nointro: it also skipped the title and the profile)
     # becomes the selector, off.
+    if 'textures' not in s:  # before the levels: the "high quality textures" box
+        s['textures'] = 'high' if s.pop('hq_textures', True) else 'off'
     if isinstance(s.get('skip_intro'), bool):
         s['skip_intro'] = 'off'
     if s.pop('button_icons', None) == 'xbox' and not s.get('pad_glyphs'):
@@ -752,11 +833,18 @@ def game_environment(s):
         framegen = 'auto'  # FSR 3.1 on a card without DLSS-G
     env['SOTC_FRAMEGEN'] = framegen
     env['SOTC_DLSSG_MULT'] = str(s.get('dlssg_mult') or '2')
-    # sotc: high quality textures: the texture banks sampled since the last report read as sampled
+    # sotc: texture level: the texture banks sampled since the last report read as sampled
     # (sotc_lod_stats.h; before, none ever did and the game never streamed its fine mips: blurry
-    # leaves and rocks). Off: the old behaviour, for cards short of video memory.
-    if s.get('hq_textures', True):
+    # leaves and rocks). Off: the old behaviour. Maximum: without the page pool switch; not in PS4
+    # Pro mode, where it exhausted the game's page pool within minutes at the Shrine (0x1a371).
+    textures = s.get('textures') or 'high'
+    if textures != 'off':
         env.setdefault('SOTC_LOD_LINGER', '1')
+    if textures == 'max' and env['SOTC_NEO'] == '1':
+        textures = 'high'
+        env['SOTC_NOTE'] = 'Texture quality Maximum is not used in PS4 Pro mode: High'
+    if textures == 'max':
+        env.setdefault('SOTC_LOD_POOL_LOW', '0')
     env['SOTC_UI_LANG'] = s.get('ui_language') or windows_language()  # overlay and F7/F8 texts
     # The game renders at the output size (sotc.py scales it down above about 4.2 million pixels; the
     # upscaler takes it to the output). 720p renders at 1080p, as on PS4; the PS4 Pro path keeps its
@@ -1196,11 +1284,11 @@ class Launcher:
                                             self.choice(quick, 'framegen', FRAMEGEN, 24)))
         self.row(quick, _('FPS', 'FPS'), self.choice(quick, 'fps_mode', FPS_MODES, 24))
         self.check(quick, 'af16', _('Filtragem anisotrópica 16x', '16x anisotropic filtering'))
-        self.check(quick, 'hq_textures', _('Texturas em alta qualidade', 'High quality textures'))
+        self.row(quick, _('Texturas', 'Textures'), self.choice(quick, 'textures', TEXTURES, 24))
         self.row(quick, _('Modo de exibição', 'Display mode'), self.choice(quick, 'window_mode', WINDOW_MODES, 24))
         self.check(quick, 'neo', _('Modo PS4 Pro', 'PS4 Pro mode'))
         self.row(quick, _('Pular as vinhetas de abertura', 'Skip intro'), self.choice(quick, 'skip_intro', SKIP_INTRO, 24))
-        for key in ('af16', 'hq_textures', 'fps_mode', 'window_mode', 'neo', 'output_res', 'render_res', 'upscaler',
+        for key in ('af16', 'textures', 'fps_mode', 'window_mode', 'neo', 'output_res', 'render_res', 'upscaler',
                     'sharpness', 'framegen'):
             self.vars[key].trace_add('write', lambda *_a: self.refresh_status())
 
@@ -2115,7 +2203,9 @@ class Launcher:
             self.append(_('Não foi possível gravar as teclas no sotc.ini: {}',
                           'Could not write the keys to sotc.ini: {}').format(error) + '\n')
         try:
-            self.process = subprocess.Popen(run_command(), cwd=PORT_DIR, env=game_environment(self.app),
+            env = game_environment(self.app)
+            env['SOTC_EVENT_LOG'] = start_event_log(user_dir(self.app), self.app, env)
+            self.process = subprocess.Popen(run_command(), cwd=PORT_DIR, env=env,
                                             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                             stderr=subprocess.STDOUT, creationflags=NO_WINDOW)
         except OSError as error:
@@ -2155,12 +2245,13 @@ class Launcher:
                 pass
             if not self.stopping:
                 keep_crash_log(log_dir, code)
+        end_event_log(user_dir(self.app), code, self.stopping)
         self.stopping = False
         self.output.put((code,))
 
     # Quick settings the in-game menu may have changed (it writes them to the settings file).
-    LIVE_KEYS = ('fps_mode', 'framegen', 'dlssg_mult', 'hq_textures', 'shadow_reuse', 'volume', 'fx_vignette',
-                 'fx_fog', 'fx_ssao', 'perf_dma')
+    LIVE_KEYS = ('fps_mode', 'framegen', 'dlssg_mult', 'textures', 'shadow_reuse', 'volume', 'upscaler',
+                 'sharpness', 'fx_vignette', 'fx_fog', 'fx_ssao', 'perf_dma')
 
     def reload_live_settings(self):
         saved = load_json(settings_in_use, {})
@@ -2401,7 +2492,9 @@ def play_without_window(settings):
     except OSError:
         pass
     with open_session_log(log_dir) as log:
-        process = subprocess.Popen(run_command(), cwd=PORT_DIR, env=game_environment(settings),
+        env = game_environment(settings)
+        env['SOTC_EVENT_LOG'] = start_event_log(log_dir, settings, env)
+        process = subprocess.Popen(run_command(), cwd=PORT_DIR, env=env,
                                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                    stderr=subprocess.STDOUT, creationflags=NO_WINDOW)
         for raw in iter(process.stdout.readline, b''):
@@ -2414,6 +2507,7 @@ def play_without_window(settings):
         code = process.wait()
         log.write(f'[exit code {code} = {code & 0xffffffff:#x}]\n')
     keep_crash_log(log_dir, code)
+    end_event_log(log_dir, code)
     return code
 
 
