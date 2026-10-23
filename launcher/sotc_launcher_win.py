@@ -170,7 +170,7 @@ APP_DEFAULTS = {'ui_language': '', 'game_dir': str(PORT_DIR.parent / GAME_ID), '
                 'perf_record_thread': True, 'perf_dma': True, 'gpu_submit': 'auto', 'vram_use': 'normal', 'volume': '100', 'shadow_reuse': '0', 'library_dirs': [], 'keys': {},
                 'auto_setup': True, 'dlc_dir': '', 'framegen': 'off', 'dlssg_mult': '2',
                 'check_updates': True, 'skip_version': '', 'dlss': 'off', 'vibration': '100',
-                'mouse_buttons': {}, 'gpu_name': ''}
+                'mouse_buttons': {}, 'gpu_name': '', 'fov': '100'}
 # Keyboard bindings (src/runtime_pad.c): PS4 input, its default SDL key name, label.
 KEY_INPUTS = [
     ('move_up', 'W', ('Andar para frente', 'Move forward')), ('move_down', 'S', ('Andar para trás', 'Move back')),
@@ -223,6 +223,9 @@ SKIP_INTRO = [('off', ('Desligado', 'Off')),
 SHADOW_REUSE = [('0', ('Desligado', 'Off')),
                 ('1', ('Ligado', 'On')),
                 ('auto', ('Automático', 'Automatic'))]
+# The cameras' field of view (SOTC_FOV, scripts/sotc_modes.py --fov), cutscenes included.
+FOV = [('100', ('100% (original)', '100% (original)')), ('110', ('110%', '110%')),
+       ('120', ('120%', '120%')), ('130', ('130%', '130%'))]
 VOLUME = [('100', ('100% (original)', '100% (original)')), ('150', ('150%', '150%')),
           ('200', ('200%', '200%')), ('300', ('300%', '300%'))]
 # Controller rumble strength (SOTC_VIBRATION, src/runtime_pad.c).
@@ -598,9 +601,10 @@ def start_event_log(log_dir, settings, env):
         _('Saída: {} | Upscaler: {} | Nitidez: {} | DLSS: {}', 'Output: {} | Upscaler: {} | Sharpening: {} | DLSS: {}').format(
             words(OUTPUTS, 'output_res', '1920x1080'), words(UPSCALERS, 'upscaler', 'fsr1'),
             words(SHARPNESS, 'sharpness', '250'), env.get('SOTC_DLSS') or 'off'),
-        _('FPS: {} | Texturas: {} | Filtro 16x: {} | Modo PS4 Pro: {}', 'FPS: {} | Textures: {} | 16x filtering: {} | PS4 Pro mode: {}').format(
+        _('FPS: {} | Texturas: {} | Filtro 16x: {} | Modo PS4 Pro: {} | Campo de visão: {}',
+          'FPS: {} | Textures: {} | 16x filtering: {} | PS4 Pro mode: {} | Field of view: {}').format(
             words(FPS_MODES, 'fps_mode', '30'), words(TEXTURES, 'textures', 'high'), on_off(settings.get('af16')),
-            on_off(env.get('SOTC_NEO') == '1')),
+            on_off(env.get('SOTC_NEO') == '1'), words(FOV, 'fov', '100')),
         _('Geração de quadros: {} | Memória de vídeo: {} | Sombras distantes: {} | Volume: {}%',
           'Frame generation: {} | Video memory use: {} | Far shadows: {} | Volume: {}%').format(
             words(FRAMEGEN, 'framegen', 'off'), words(VRAM_USE, 'vram_use', 'normal'),
@@ -816,6 +820,8 @@ def game_environment(s):
     # HDR (#37): an HDR10 swapchain when Windows and the display offer one (vk_swapchain.cpp); the
     # game then sees an HDR display (sceVideoOutGetDeviceCapabilityInfo) and outputs HDR.
     env['BB_HDR'] = '1' if s.get('hdr') else '0'
+    if s.get('fov') in {key for key, _t in FOV} - {'100'}:
+        env['SOTC_FOV'] = s['fov']
     if s['language']:
         env['BB_LANGUAGE'] = s['language']
     if str(s['player_name']).strip():
@@ -1434,6 +1440,8 @@ class Launcher:
         self.row(f, _('Multiplicador de quadros', 'Frame multiplier'), self.mult_box,
                  _('NVIDIA DLSS-G; x3 e x4 em placas GeForce RTX 50.',
                    'NVIDIA DLSS-G; x3 and x4 on GeForce RTX 50 series cards.'))
+        self.row(f, _('Campo de visão', 'Field of view'), self.choice(f, 'fov', FOV),
+                 _('Também se aplica às cenas.', 'Also applies to cutscenes.'))
         self.window_icon_row(f)
         self.section(f, _('Resolução', 'Resolution'))
         self.render_boxes.append(self.choice(f, 'render_res', RENDER_RES))

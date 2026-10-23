@@ -815,12 +815,26 @@ TEXTS = {
         '出力: {} | アップスケーラー: {} | シャープネス: {} | DLSS: {}',
         '출력: {} | 업스케일러: {} | 선명도: {} | DLSS: {}',
     ),
-    'FPS: {} | Texturas: {} | Filtro 16x: {} | Modo PS4 Pro: {}': (
-        'FPS: {} | Texturas: {} | Filtro 16x: {} | Modo PS4 Pro: {}',
-        'FPS: {} | Текстуры: {} | Фильтрация 16x: {} | Режим PS4 Pro: {}',
-        'FPS：{} | 纹理：{} | 16x 过滤：{} | PS4 Pro 模式：{}',
-        'FPS: {} | テクスチャ: {} | 16x フィルタリング: {} | PS4 Pro モード: {}',
-        'FPS: {} | 텍스처: {} | 16x 필터링: {} | PS4 Pro 모드: {}',
+    'FPS: {} | Texturas: {} | Filtro 16x: {} | Modo PS4 Pro: {} | Campo de visão: {}': (
+        'FPS: {} | Texturas: {} | Filtro 16x: {} | Modo PS4 Pro: {} | Campo de visión: {}',
+        'FPS: {} | Текстуры: {} | Фильтрация 16x: {} | Режим PS4 Pro: {} | Поле зрения: {}',
+        'FPS：{} | 纹理：{} | 16x 过滤：{} | PS4 Pro 模式：{} | 视野：{}',
+        'FPS: {} | テクスチャ: {} | 16x フィルタリング: {} | PS4 Pro モード: {} | 視野: {}',
+        'FPS: {} | 텍스처: {} | 16x 필터링: {} | PS4 Pro 모드: {} | 시야: {}',
+    ),
+    'Campo de visão': (
+        'Campo de visión',
+        'Поле зрения',
+        '视野',
+        '視野',
+        '시야',
+    ),
+    'Também se aplica às cenas.': (
+        'También se aplica a las escenas cinemáticas.',
+        'Также применяется к катсценам.',
+        '同样适用于过场动画。',
+        'カットシーンにも適用されます。',
+        '컷신에도 적용됩니다.',
     ),
     'Geração de quadros: {} | Memória de vídeo: {} | Sombras distantes: {} | Volume: {}%': (
         'Generación de fotogramas: {} | Memoria de vídeo: {} | Sombras lejanas: {} | Volumen: {}%',

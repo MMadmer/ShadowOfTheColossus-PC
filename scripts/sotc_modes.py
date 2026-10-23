@@ -18,6 +18,8 @@ Writes two files for the loader:
                    --render WxH (e.g. 3840x1600)  the game renders at this size instead of
                           1920x1080, with its aspect for the cameras (Hor+: a wider view, not a
                           stretched one); PS4 mode only, the PS4 Pro path keeps its sizes
+                   --fov PERCENT (e.g. 120)  the cameras' field of view, cutscenes included
+                          (AjncSystem #179)
   out/cmdline.bin  the engine command line the game appends to its own (SOTCCMD1,
                    bb-probe --sotc-cmdline): cvars of the Bluepoint engine, e.g.
                    +r_motionBlurEnable=0. Modes that are only cvars:
@@ -123,6 +125,10 @@ RENDER_SITES = [
     (0x0166633c, 'a', '398ee33f'),
 ]
 RT_POOL = 0x14280000
+# The camera's "FOV Adjustment" tweak (debug menu Shadow Camera, 0.1 to 3): a factor on the vertical
+# field of view in degrees, 1.0 in the game's data. The lenses read it whenever they build their
+# projections (0x5925f0, 0x593080), so culling and shadows follow the wider view.
+FOV_ADJUST = (0x031ca404, bytes.fromhex('0000803f'))
 # EU 1.01: the command line lea and the fps60 site.
 VERSION_CHECKS = [(CMDLINE_LEA, bytes.fromhex('488d352debad00')), (0x01390090, bytes.fromhex('ff25a20567')),
                   RENDER_WIDTH, RENDER_HEIGHT]
@@ -178,6 +184,7 @@ def main():
     parser.add_argument('--modes', default='', help='comma-separated: ' + ', '.join([*MODES, *CVAR_MODES]))
     parser.add_argument('--cvars', default='', help='engine cvars NAME=VALUE separated by spaces')
     parser.add_argument('--render', default='', help='render size WxH instead of 1920x1080, e.g. 3840x1600')
+    parser.add_argument('--fov', type=int, default=100, help='field of view in percent of the original (80 to 150)')
     args = parser.parse_args()
     elf, _, ph, _, _ = parse_self((args.game / 'eboot.bin').read_bytes())
     supported = is_supported(elf, ph)
@@ -202,6 +209,14 @@ def main():
             print(f'Render size {render}: on')
         else:
             print(f'Render size {render}: this eboot is not EU 1.01, not applied')
+    if args.fov != 100:
+        if not 80 <= args.fov <= 150:
+            raise SystemExit(f'field of view {args.fov}%: 80 to 150')
+        if supported and image_bytes(elf, ph, FOV_ADJUST[0] - BASE, 4) == FOV_ADJUST[1]:
+            writes.append((FOV_ADJUST[0] - BASE, struct.pack('<f', args.fov / 100)))
+            print(f'Field of view {args.fov}%: on')
+        else:
+            print(f'Field of view {args.fov}%: this eboot is not EU 1.01, not applied')
     for item in args.cvars.split():
         item = item.lstrip('+')
         if not CVAR.match(item):

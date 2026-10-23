@@ -30,6 +30,7 @@ Settings (environment variables, or sotc.ini beside this script as NAME=value li
                       21:9, a wider view); the output follows its aspect; PS4 mode only; at most 1080
                       lines tall and 4.2 million pixels, larger sizes are scaled down
     SOTC_CVARS        engine settings, NAME=VALUE separated by spaces (e.g. r_motionBlurEnable=0)
+    SOTC_FOV          optional: the cameras' field of view in percent of the original (80 to 150)
     BB_GAMEPAD        the gamepad to use (its name or part of it), when several are connected
     key.<input>=Keys, pad.<input>=buttons   remap the controls (README.md, Controles)
 The image is prepared again only when the game, the modules or the scripts change.
@@ -298,8 +299,9 @@ def main():
         env['SOTC_RENDER_RES'] = render  # the GPU library reads it (bilinear 2D art above 1080p)
     else:
         env.pop('SOTC_RENDER_RES', None)
+    fov = env.get('SOTC_FOV', '').strip()
     run_script('sotc_modes.py', source, '--out', out, '--modes', modes, '--cvars', cvars,
-               *(['--render', render] if render else []))
+               *(['--render', render] if render else []), *(['--fov', fov] if fov else []))
     if render:
         # The output keeps the render size's aspect (a 16:9 output would stretch a 21:9 image).
         try:
