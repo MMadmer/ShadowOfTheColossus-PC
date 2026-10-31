@@ -90,6 +90,16 @@ class GpuChoiceTests(unittest.TestCase):
         self.assertEqual(self.env(framegen='dlss', gpu_name='')['SOTC_FRAMEGEN'], 'dlss')
         self.assertEqual(self.env(framegen='fsr', gpu_name=RX_6600)['SOTC_FRAMEGEN'], 'fsr')
 
+    def test_sun_shadows(self):
+        # Off: no sun shadow cascades (+34% FPS on a CPU-bound PC, AjncSystem #294).
+        self.assertNotIn('r_enableCascadeShadows', self.env()['SOTC_CVARS'])
+        self.assertIn('r_enableCascadeShadows=0', self.env(fx_shadows=False)['SOTC_CVARS'].split())
+        from sotc_i18n import TEXTS
+        for _key, (pt, _en), _off in launcher.EFFECTS:
+            self.assertIn(pt, TEXTS)
+        for pt, _en in launcher.EFFECT_HINTS.values():
+            self.assertIn(pt, TEXTS)
+
     def test_vibration(self):
         self.assertEqual(self.env()['SOTC_VIBRATION'], '100')
         self.assertEqual(self.env(vibration='0')['SOTC_VIBRATION'], '0')

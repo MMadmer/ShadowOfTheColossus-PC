@@ -184,7 +184,7 @@ APP_DEFAULTS = {'ui_language': '', 'game_dir': str(PORT_DIR.parent / GAME_ID), '
                 'close_on_play': False, 'gamepad': '', 'pad_glyphs': '',
                 'output_res': '1920x1080', 'render_res': '', 'upscaler': 'fsr1', 'sharpness': '250', 'mouse': True,
                 'mouse_sens': '1.0', 'mouse_invert': False, 'neo': False, 'fx_vignette': True,
-                'fx_fog': True, 'fx_ssao': True, 'engine_cvars': '', 'perf_culling': True,
+                'fx_fog': True, 'fx_ssao': True, 'fx_shadows': True, 'engine_cvars': '', 'perf_culling': True,
                 'perf_record_thread': True, 'perf_dma': True, 'gpu_submit': 'auto', 'vram_use': 'normal', 'volume': '100', 'shadow_reuse': '0',
                 'grass_shadows': '2', 'grass_distance': '1', 'grass_height': '1', 'weed_distance': '1', 'weed_height': '1',
                 'grass_fade': '1', 'grass_detail': '0.25', 'library_dirs': [], 'keys': {},
@@ -367,7 +367,11 @@ def bind_mouse_button(custom, name, button):
 EFFECTS = [('fx_vignette', ('Vinheta', 'Vignette'),
             'r_vignetteOverrideEnable=1 r_vignetteEnable=0'),
            ('fx_fog', ('Névoa atmosférica', 'Atmospheric fog'), 'fog_enable=0'),
-           ('fx_ssao', ('Oclusão ambiente (SSAO)', 'Ambient occlusion (SSAO)'), 'AO_Mode=0')]
+           ('fx_ssao', ('Oclusão ambiente (SSAO)', 'Ambient occlusion (SSAO)'), 'AO_Mode=0'),
+           # Off: no sun shadow cascades, +34% FPS at 720p on a CPU-bound PC (AjncSystem #294).
+           ('fx_shadows', ('Sombras do sol', 'Sun shadows'), 'r_enableCascadeShadows=0')]
+EFFECT_HINTS = {'fx_shadows': ('Desativar aumenta o FPS quando o processador limita o desempenho.',
+                               'Turning it off raises the FPS when the processor limits performance.')}
 # Common screen sizes: 16:9, 16:10, 21:9 (ultrawide) and 32:9 (super ultrawide).
 # 5120x2160 is left out: the game faults at start (memory), 3840x2160 runs.
 SCREENS = [('1920x1080', '16:9, 1080p'), ('2560x1440', '16:9, 1440p'), ('3840x2160', '16:9, 4K'),
@@ -1631,7 +1635,7 @@ class Launcher:
                    'Values other than 1 make the grass sparser. Applies when the game starts.'))
         self.section(f, _('Efeitos', 'Effects'))
         for key, title, _off in EFFECTS:
-            self.check(f, key, _(*title))
+            self.check(f, key, _(*title), _(*EFFECT_HINTS[key]) if key in EFFECT_HINTS else None)
         self.note(f, _('Desfoque de movimento, brilho e filtros ficam no menu do jogo (Opções > Apresentação).',
                        'Motion blur, brightness and filters are in the in-game menu (Options > Presentation).'), top=4)
         self.section(f, _('Tela', 'Display'))
