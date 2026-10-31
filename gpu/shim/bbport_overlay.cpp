@@ -465,6 +465,19 @@ void SetFpsMode(int mode) {
     SotcEvent::Log("MENU", "FPS: %s", names[mode]);
 }
 
+// sotc: unlimited FPS flip pacing (VideoOutDriver::PresentThread): false = the vblank grid,
+// true = the game's own rate. SOTC_FLIP_PACER=0 starts on the grid.
+const char* FlipPacerName(bool paced) {
+    return paced ? SotcUi::T("Suave (ritmo do jogo)", "Smooth (game's rate)")
+                 : SotcUi::T("Grade do vblank (original)", "Vblank grid (original)");
+}
+
+void SetFlipPacer(bool paced) {
+    SotcFpsCap::flip_pacer.store(paced, std::memory_order_relaxed);
+    SotcEvent::Log("MENU", SotcUi::T("Ritmo dos quadros: %s", "Frame pacing: %s"),
+                   FlipPacerName(paced));
+}
+
 // sotc: upscaler 0 = FSR 1, 1 = bilinear; applied at the next frame (vk_presenter.cpp).
 void SetUpscaler(int mode) {
     SotcLive::fsr1.store(mode == 0 ? 1 : 0, std::memory_order_relaxed);
@@ -621,6 +634,20 @@ void QuickSettings() {
                "Started at 30 FPS: the game's own 60 FPS mode (right physics) only applies when the "
                "game starts with 60 FPS in the launcher."));
     }
+    // sotc: unlimited FPS flip pacing, switched at once (no key: F6 is the game's debug menu).
+    const bool paced = SotcFpsCap::flip_pacer.load(std::memory_order_relaxed);
+    if (ImGui::BeginCombo(T("Ritmo dos quadros", "Frame pacing"), FlipPacerName(paced))) {
+        for (const bool option : {false, true}) {
+            if (ImGui::Selectable(FlipPacerName(option), option == paced) && option != paced) {
+                SetFlipPacer(option);
+            }
+        }
+        ImGui::EndCombo();
+    }
+    Hint(T("Vale com FPS ilimitado: cada quadro é mostrado no ritmo do próprio jogo, e não na "
+           "grade do vblank, sem a alternância de 8/17 ms.",
+           "Applies with unlimited FPS: each frame is shown at the game's own rate instead of on "
+           "the vblank grid, without alternating 8/17 ms frames."));
 
     // sotc: upscaler and sharpening, applied at the next frame (vk_presenter.cpp, sotc_live.h).
     static const int env_fsr1 = [] {
