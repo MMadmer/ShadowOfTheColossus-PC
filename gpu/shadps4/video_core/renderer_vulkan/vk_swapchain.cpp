@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <limits>
 #include "common/assert.h"
 #include "common/logging/log.h"
@@ -242,6 +244,14 @@ void Swapchain::SetSurfaceProperties() {
 
     // Select number of images in swap chain, we prefer one buffer in the background to work on
     image_count = capabilities.minImageCount + 1;
+    // sotc: SOTC_SWAP_IMAGES=N (opt-in, from tabnul's PR #352): a deeper swapchain bridges NVIDIA's
+    // periodic vkQueuePresentKHR stall (40-140 ms every ~11 s seen on an RTX 5090, driver 617.42)
+    // with Mailbox/Immediate; it costs video memory and, with vsync (Fifo), latency.
+    if (const char* env = std::getenv("SOTC_SWAP_IMAGES"); env && env[0]) {
+        image_count = std::max(static_cast<u32>(std::strtoul(env, nullptr, 10)),
+                               capabilities.minImageCount);
+        std::fprintf(stderr, "GPU swapchain images: %u (SOTC_SWAP_IMAGES)\n", image_count);
+    }
     if (capabilities.maxImageCount > 0) {
         image_count = std::min(image_count, capabilities.maxImageCount);
     }

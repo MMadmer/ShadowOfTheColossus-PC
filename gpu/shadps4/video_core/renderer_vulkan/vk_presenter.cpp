@@ -1304,9 +1304,10 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
             // sceSaveDataDialog); draws nothing while it has nothing to show.
             static bool overlay_ready = false;
             if (!std::exchange(overlay_ready, true)) {
-                // Up to 2 overlay draws per game frame with FSR 3: a deeper buffer ring.
+                // Up to 2 overlay draws per game frame with FSR 3, and as many presents in flight as
+                // swapchain images: the buffer ring exceeds that (PR #352).
                 BbOverlay::Init(instance, swapchain.GetSurfaceFormat().format,
-                                std::max(swapchain.GetImageCount(), 8u));
+                                std::max(swapchain.GetImageCount() * 2, 8u));
             }
             BbOverlay::Render(cmdbuf, swapchain_image_view, extent);
         }
