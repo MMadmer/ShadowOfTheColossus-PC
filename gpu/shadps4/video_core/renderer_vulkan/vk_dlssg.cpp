@@ -1931,7 +1931,16 @@ void PrepareInputs(u32 frame_id, vk::CommandBuffer cmdbuf, VideoCore::TextureCac
     // The images Streamline was reading are free (inputs_done above): this frame's snapshot
     // takes their place, and they hold the next frame's.
     SwapImages(f, snap);
-    FillCameraMotion(cmdbuf, f, constants);
+    if (fsr) {
+        // FSR 3 reads depth as R32F: from the copy, now ShaderReadOnlyOptimal. Its motion vectors
+        // are kept before the fill below (vk_fsrfg.cpp, DepthSlot).
+        FsrFg::ConvertDepth(frame_id, cmdbuf, f.depth_view, f.mvec, width, height,
+                            constants.depthInverted == sl::Boolean::eTrue);
+    }
+    // Only DLSS (super resolution, DLSS-G) reads the filled vectors and the sky bias.
+    if (!fsr || SuperResolution()) {
+        FillCameraMotion(cmdbuf, f, constants);
+    }
 
     // sotc: only while SR upscales (not with F9 on FSR 1): the reset also stops frame generation.
     if (SuperResolution() && !sr_prev) {
@@ -1939,11 +1948,6 @@ void PrepareInputs(u32 frame_id, vk::CommandBuffer cmdbuf, VideoCore::TextureCac
     }
     f.constants = constants;
     f.valid = true;
-    if (fsr) {
-        // FSR 3 reads depth as R32F: from the copy, now ShaderReadOnlyOptimal.
-        FsrFg::ConvertDepth(frame_id, cmdbuf, f.depth_view, width, height,
-                            constants.depthInverted == sl::Boolean::eTrue);
-    }
     // Streamline needs the constants for DLSS-G and for super resolution.
     if (!(supported && FrameGen::Current() == FrameGen::Mode::Dlss) && !sr_supported) {
         return;

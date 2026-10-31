@@ -26,9 +26,11 @@ void Init(const Instance& instance);
 bool Supported();
 
 /// Command processor thread (Dlssg::PrepareInputs): converts this frame's depth copy (layout
-/// ShaderReadOnlyOptimal, sampled through `depth_view`) to R32F for presentation frame `frame_id`.
-void ConvertDepth(u32 frame_id, vk::CommandBuffer cmdbuf, vk::ImageView depth_view, u32 width,
-                  u32 height, bool inverted);
+/// ShaderReadOnlyOptimal, sampled through `depth_view`) to R32F for presentation frame `frame_id`
+/// and keeps a copy of its motion vectors (`mvec`, R16G16 float, ShaderReadOnlyOptimal before and
+/// after), taken before DLSS's camera motion fill rewrites them.
+void ConvertDepth(u32 frame_id, vk::CommandBuffer cmdbuf, vk::ImageView depth_view, vk::Image mvec,
+                  u32 width, u32 height, bool inverted);
 
 /// Presentation frame `frame_id` has no depth for FSR 3 (yet).
 void NoDepth(u32 frame_id);

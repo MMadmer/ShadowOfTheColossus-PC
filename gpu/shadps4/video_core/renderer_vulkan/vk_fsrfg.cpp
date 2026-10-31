@@ -52,6 +52,10 @@ struct OwnedImage {
 
 struct DepthSlot {
     OwnedImage r32;
+    // sotc: the game's motion vectors as it wrote them. DLSS's camera motion fill gives every
+    // zero vector the camera's motion, and FSR 3 trusted those over its own optical flow: a
+    // blend of two frames instead of a moved one while the camera turned (1.2.0).
+    OwnedImage mv;
     bool valid{};
 };
 
@@ -220,8 +224,9 @@ void Release() {
     {
         std::scoped_lock lock{depth_mutex};
         for (auto& slot : depth_slots) {
-            depth_bytes += u64{slot.r32.width} * slot.r32.height * 4;
+            depth_bytes += u64{slot.r32.width} * slot.r32.height * 8;
             DestroyImage(slot.r32);
+            DestroyImage(slot.mv);
             slot.valid = false;
         }
         depth_alive.store(false, std::memory_order_relaxed);
@@ -497,8 +502,8 @@ bool Supported() {
     return supported && !failed;
 }
 
-void ConvertDepth(u32 frame_id, vk::CommandBuffer cmdbuf, vk::ImageView depth_view, u32 width,
-                  u32 height, bool inverted) {
+void ConvertDepth(u32 frame_id, vk::CommandBuffer cmdbuf, vk::ImageView depth_view, vk::Image mvec,
+                  u32 width, u32 height, bool inverted) {
     if (!supported || frame_id >= kMaxFrames) {
         return;
     }
@@ -513,9 +518,12 @@ void ConvertDepth(u32 frame_id, vk::CommandBuffer cmdbuf, vk::ImageView depth_vi
     // was handed out again after its present fence.
     if (slot.r32.width != width || slot.r32.height != height) {
         DestroyImage(slot.r32);
-        if (!CreateImage(slot.r32, vk::Format::eR32Sfloat, width, height)) {
+        DestroyImage(slot.mv);
+        if (!CreateImage(slot.r32, vk::Format::eR32Sfloat, width, height) ||
+            !CreateImage(slot.mv, vk::Format::eR16G16Sfloat, width, height)) {
             std::fprintf(stderr, "SOTC FSR3 FG: cannot create the %ux%u depth image\n", width,
                          height);
+            DestroyImage(slot.r32);
             return;
         }
         depth_alive.store(true, std::memory_order_relaxed);
@@ -556,13 +564,42 @@ void ConvertDepth(u32 frame_id, vk::CommandBuffer cmdbuf, vk::ImageView depth_vi
     cmdbuf.pushConstants(*depth_layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(params),
                          params);
     cmdbuf.dispatch((width + 7) / 8, (height + 7) / 8, 1);
-    const auto to_read = Barrier(slot.r32.image, vk::PipelineStageFlagBits2::eComputeShader,
-                                 vk::AccessFlagBits2::eShaderWrite, vk::ImageLayout::eGeneral,
-                                 vk::PipelineStageFlagBits2::eAllCommands,
-                                 vk::AccessFlagBits2::eShaderRead, vk::ImageLayout::eGeneral);
+
+    const std::array to_copy{
+        Barrier(mvec, vk::PipelineStageFlagBits2::eAllCommands, vk::AccessFlagBits2::eNone,
+                vk::ImageLayout::eShaderReadOnlyOptimal, vk::PipelineStageFlagBits2::eCopy,
+                vk::AccessFlagBits2::eTransferRead, vk::ImageLayout::eTransferSrcOptimal),
+        Barrier(slot.mv.image, vk::PipelineStageFlagBits2::eAllCommands,
+                vk::AccessFlagBits2::eNone, vk::ImageLayout::eUndefined,
+                vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferWrite,
+                vk::ImageLayout::eTransferDstOptimal),
+    };
     cmdbuf.pipelineBarrier2(vk::DependencyInfo{
-        .imageMemoryBarrierCount = 1,
-        .pImageMemoryBarriers = &to_read,
+        .imageMemoryBarrierCount = static_cast<u32>(to_copy.size()),
+        .pImageMemoryBarriers = to_copy.data(),
+    });
+    const vk::ImageSubresourceLayers layers{vk::ImageAspectFlagBits::eColor, 0, 0, 1};
+    cmdbuf.copyImage(mvec, vk::ImageLayout::eTransferSrcOptimal, slot.mv.image,
+                     vk::ImageLayout::eTransferDstOptimal,
+                     vk::ImageCopy{.srcSubresource = layers,
+                                   .dstSubresource = layers,
+                                   .extent = {width, height, 1}});
+    const std::array to_read{
+        Barrier(slot.r32.image, vk::PipelineStageFlagBits2::eComputeShader,
+                vk::AccessFlagBits2::eShaderWrite, vk::ImageLayout::eGeneral,
+                vk::PipelineStageFlagBits2::eAllCommands, vk::AccessFlagBits2::eShaderRead,
+                vk::ImageLayout::eGeneral),
+        Barrier(slot.mv.image, vk::PipelineStageFlagBits2::eCopy,
+                vk::AccessFlagBits2::eTransferWrite, vk::ImageLayout::eTransferDstOptimal,
+                vk::PipelineStageFlagBits2::eAllCommands, vk::AccessFlagBits2::eShaderRead,
+                vk::ImageLayout::eGeneral),
+        Barrier(mvec, vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferRead,
+                vk::ImageLayout::eTransferSrcOptimal, vk::PipelineStageFlagBits2::eAllCommands,
+                vk::AccessFlagBits2::eShaderRead, vk::ImageLayout::eShaderReadOnlyOptimal),
+    };
+    cmdbuf.pipelineBarrier2(vk::DependencyInfo{
+        .imageMemoryBarrierCount = static_cast<u32>(to_read.size()),
+        .pImageMemoryBarriers = to_read.data(),
     });
     slot.valid = true;
 }
@@ -721,8 +758,8 @@ vk::Image Generate(vk::CommandBuffer cmdbuf, u32 frame_id, vk::Image frame_image
     prepare.color = color_in;
     prepare.depth = FgImage(depth_slots[frame_id].r32.image, vk::Format::eR32Sfloat, in.width,
                             in.height, vk::ImageLayout::eGeneral, kImageUsage);
-    prepare.motionVectors = FgImage(in.mvec, vk::Format::eR16G16Sfloat, in.width, in.height,
-                                    vk::ImageLayout::eShaderReadOnlyOptimal, in.mvec_usage);
+    prepare.motionVectors = FgImage(depth_slots[frame_id].mv.image, vk::Format::eR16G16Sfloat,
+                                    in.width, in.height, vk::ImageLayout::eGeneral, kImageUsage);
     prepare.renderWidth = in.width;
     prepare.renderHeight = in.height;
     prepare.jitterOffsetX = in.jitter[0];
