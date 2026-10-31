@@ -474,9 +474,9 @@ void Init(const Instance& instance) {
     // The reprojection: both game frames and the motion vectors sampled, the generated frame and
     // the real frame as storage images.
     reproject_shader = CompileSPV(FG_REPROJECT_COMP, device);
-    std::array<vk::DescriptorSetLayoutBinding, 6> reproject_bindings{};
+    std::array<vk::DescriptorSetLayoutBinding, 7> reproject_bindings{};
     for (u32 i = 0; i < reproject_bindings.size(); ++i) {
-        const bool sampled = i == 0 || i == 1 || i == 3;
+        const bool sampled = i == 0 || i == 1 || i == 3 || i == 6;
         reproject_bindings[i] = {.binding = i,
                             .descriptorType = sampled ? vk::DescriptorType::eCombinedImageSampler
                                                       : vk::DescriptorType::eStorageImage,
@@ -521,7 +521,7 @@ void Init(const Instance& instance) {
 /// (fg_reproject.comp). Recorded after the FSR 3.1 dispatch wrote `output`, before PutHudBack.
 /// `scene` is this frame's interpolation source.
 void Reproject(vk::CommandBuffer cmdbuf, u32 width, u32 height, const OwnedImage& scene,
-              bool has_hudless, vk::ImageView mvec_view) {
+              u32 hudless_mode, vk::ImageView mvec_view, vk::ImageView depth_view) {
     const auto written = Barrier(output.image, vk::PipelineStageFlagBits2::eComputeShader,
                                  vk::AccessFlagBits2::eShaderWrite, vk::ImageLayout::eGeneral,
                                  vk::PipelineStageFlagBits2::eComputeShader,
@@ -546,10 +546,13 @@ void Reproject(vk::CommandBuffer cmdbuf, u32 width, u32 height, const OwnedImage
         vk::DescriptorImageInfo{.imageView = color.view, .imageLayout = vk::ImageLayout::eGeneral},
         vk::DescriptorImageInfo{.imageView = prev_frame.view,
                                 .imageLayout = vk::ImageLayout::eGeneral},
+        vk::DescriptorImageInfo{.sampler = *hud_sampler,
+                                .imageView = depth_view,
+                                .imageLayout = vk::ImageLayout::eGeneral},
     };
-    std::array<vk::WriteDescriptorSet, 6> writes{};
+    std::array<vk::WriteDescriptorSet, 7> writes{};
     for (u32 i = 0; i < writes.size(); ++i) {
-        const bool sampled = i == 0 || i == 1 || i == 3;
+        const bool sampled = i == 0 || i == 1 || i == 3 || i == 6;
         writes[i] = {.dstBinding = i,
                      .descriptorCount = 1,
                      .descriptorType = sampled ? vk::DescriptorType::eCombinedImageSampler
@@ -557,7 +560,7 @@ void Reproject(vk::CommandBuffer cmdbuf, u32 width, u32 height, const OwnedImage
                      .pImageInfo = &infos[i]};
     }
     cmdbuf.pushDescriptorSetKHR(vk::PipelineBindPoint::eCompute, *reproject_layout, 0, writes);
-    const u32 params[3] = {width, height, has_hudless ? 1u : 0u};
+    const u32 params[3] = {width, height, hudless_mode};
     cmdbuf.pushConstants(*reproject_layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(params),
                          params);
     cmdbuf.dispatch((width + 7) / 8, (height + 7) / 8, 1);
@@ -973,7 +976,10 @@ vk::Image Generate(vk::CommandBuffer cmdbuf, u32 frame_id, vk::Image frame_image
         }();
         if (r == FFX_VK_FSR3_3_1_6_FRAMEGEN_OK && reproject && reproject_pipeline && in.mvec_view &&
             prev_scene_valid && !reset) {
-            Reproject(cmdbuf, width, height, scene, static_cast<bool>(hudless_image), in.mvec_view);
+            // The HUD-less frame: none (0), the HUD pass lays the HUD (1), FSR 3 composed it (2).
+            const u32 hudless_mode = !hudless_image ? 0u : hud_pass ? 1u : 2u;
+            Reproject(cmdbuf, width, height, scene, hudless_mode, in.mvec_view,
+                      depth_slots[frame_id].r32.view);
         }
         if (r == FFX_VK_FSR3_3_1_6_FRAMEGEN_OK && hud_pass) {
             PutHudBack(cmdbuf, width, height, ui_view);
