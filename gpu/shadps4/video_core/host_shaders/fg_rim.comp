@@ -2,12 +2,14 @@
 // sotc: FSR 3's generated frame, finished on its way to the swapchain image (vk_fsrfg.cpp).
 // Inside, the runtime blends the two game frames, each moved half way along the motion vectors.
 // Near the screen edges one of them has nothing there (the camera turned it away or in), and the
-// runtime inpaints those pixels: a blurred rim as wide as half a frame's motion, ~100 pixels in a
-// fast turn at 30 FPS, a rectangle trailing the camera (a little darker for as far again). Here
+// runtime inpaints those pixels: a blurred rim as wide as half a frame's motion, up to ~200
+// pixels in a fast turn at 30 FPS, a rectangle trailing the camera (darker for as far again). Here
 // that band is the frame that has the point, moved half way as well (the HUD-less scenes, with
 // this frame's HUD laid over them), and it fades into the runtime's pixels. The frame is made
 // opaque: the runtime leaves its inpainting weight in alpha, which NVIDIA's DXGI-layered present
-// can blend with the desktop.
+// can blend with the desktop. Where an object rushes past the camera (fg_halo.comp counts it in
+// this frame or the one before), the runtime cannot interpolate it: the frame is the game frame
+// that follows, held a moment longer.
 
 #version 450 core
 #extension GL_EXT_shader_image_load_formatted : require
@@ -19,6 +21,9 @@ layout (binding = 1) uniform sampler2D prev_scene; // the previous game frame (H
 layout (binding = 2) uniform sampler2D cur_scene;  // this game frame (HUD-less if any)
 layout (binding = 3) uniform sampler2D cur_full;   // this game frame as presented (HUD, overlay)
 layout (binding = 4) uniform sampler2D mvec;       // curUV - prevUV of this frame, top left
+layout (binding = 5, std430) readonly buffer Risk {
+    uint risk[]; // per ring slot: tiles of a rushing object (fg_halo.comp)
+};
 
 layout (push_constant) uniform Params {
     uvec2 size;        // of the swapchain image
@@ -26,6 +31,9 @@ layout (push_constant) uniform Params {
     uvec2 rect_size;
     vec2 mv_scale;     // the part of the motion vector image in use
     uint flags;        // 1: rebuild the rim (a previous frame exists), 2: the scenes are HUD-less
+    uint cur_slot;     // ring slots of this game frame and the one before (-1 none)
+    int prev_slot;
+    uint risk_min;     // tiles of a rushing object that make the runtime's frame unusable
 } pc;
 
 // The rim: where a frame lacks the point a whole frame's motion away (the runtime's pixels stay
@@ -35,9 +43,9 @@ const float kMargin = 16.0;
 const float kRamp = 96.0;
 const float kFade = 48.0;
 const float kSpread = 24.0; // pixels between the motion vector taps
-// Only this near the screen edges: an object rushing past the camera (Agro) has vectors that
-// would reach far inside.
-const float kEdgeCap = 256.0;
+// Only this near the screen edges (of the width; a fast turn moves the frame ~400 pixels at
+// 1440p): an object rushing past the camera (Agro) has vectors that would reach far inside.
+const float kEdgeCap = 0.2;
 
 // Pixels from uv to the nearest edge of the frame, negative outside.
 float Inside(vec2 uv, vec2 pixels) {
@@ -45,9 +53,23 @@ float Inside(vec2 uv, vec2 pixels) {
     return min(d.x, d.y);
 }
 
+// The shift (in uv) that brings uv `need` pixels inside the frame.
+vec2 Inward(vec2 uv, float need, vec2 pixels) {
+    const vec2 lo = uv * pixels;
+    const vec2 hi = (1.0 - uv) * pixels;
+    return vec2(lo.x < need ? need - lo.x : hi.x < need ? hi.x - need : 0.0,
+                lo.y < need ? need - lo.y : hi.y < need ? hi.y - need : 0.0) /
+           pixels;
+}
+
 void main() {
     const ivec2 at = ivec2(gl_GlobalInvocationID.xy);
     if (at.x >= int(pc.size.x) || at.y >= int(pc.size.y)) {
+        return;
+    }
+    if (risk[pc.cur_slot] >= pc.risk_min ||
+        (pc.prev_slot >= 0 && risk[uint(pc.prev_slot)] >= pc.risk_min)) {
+        imageStore(frame, at, vec4(texture(cur_full, (vec2(at) + 0.5) / vec2(pc.size)).rgb, 1.0));
         return;
     }
     vec3 color = imageLoad(frame, at).rgb;
@@ -67,17 +89,33 @@ void main() {
         const float in_prev = Inside(prev_uv, pixels);
         const float in_cur = Inside(cur_uv, pixels);
         const float far = min(Inside(fuv - mv, pixels), Inside(fuv + mv, pixels));
+        const float cap = kEdgeCap * pixels.x;
         float rim = (1.0 - smoothstep(kMargin, kMargin + kRamp, far)) *
-                    (1.0 - smoothstep(kEdgeCap, kEdgeCap + kRamp, Inside(fuv, pixels)));
+                    (1.0 - smoothstep(cap, cap + kRamp, Inside(fuv, pixels)));
         if (rim > 0.0 && max(in_prev, in_cur) >= 0.0) {
             // Each frame's share fades out towards its own edge: the one that has the point.
             const float w_prev = smoothstep(0.0, kFade, in_prev);
             const float w_cur = smoothstep(0.0, kFade, in_cur);
             const vec2 to_image = pixels / vec2(pc.size);
             const vec2 offset = vec2(pc.rect_offset) / vec2(pc.size);
-            vec3 rebuilt = (w_prev * texture(prev_scene, offset + prev_uv * to_image).rgb +
-                            w_cur * texture(cur_scene, offset + cur_uv * to_image).rgb) /
-                           max(w_prev + w_cur, 1e-4);
+            // The two game frames differ in tone (the game's exposure and fog change from frame
+            // to frame): the runtime's blend is half way. Their gap, measured nearby where both
+            // have the point, moves each frame there, so that the frame alone has that tone too.
+            const vec2 ref = fuv + Inward(prev_uv, kFade + 8.0, pixels) +
+                             Inward(cur_uv, kFade + 8.0, pixels);
+            const vec2 taps[5] = vec2[](vec2(0.0), vec2(12.0, 0.0), vec2(-12.0, 0.0),
+                                        vec2(0.0, 12.0), vec2(0.0, -12.0));
+            vec3 gap = vec3(0.0);
+            for (int i = 0; i < 5; ++i) {
+                const vec2 u = ref + taps[i] / pixels;
+                gap += texture(cur_scene, offset + (u + 0.5 * mv) * to_image).rgb -
+                       texture(prev_scene, offset + (u - 0.5 * mv) * to_image).rgb;
+            }
+            gap = clamp(0.1 * gap, vec3(-0.05), vec3(0.05)); // half of the mean gap
+            vec3 rebuilt =
+                (w_prev * (texture(prev_scene, offset + prev_uv * to_image).rgb + gap) +
+                 w_cur * (texture(cur_scene, offset + cur_uv * to_image).rgb - gap)) /
+                max(w_prev + w_cur, 1e-4);
             if ((pc.flags & 2u) != 0u) {
                 // This frame's HUD stays where it is: the presented frame minus its HUD-less one.
                 const vec2 here = (vec2(at) + 0.5) / vec2(pc.size);

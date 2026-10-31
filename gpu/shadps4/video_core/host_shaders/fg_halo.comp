@@ -1,0 +1,191 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// sotc: the motion vectors and depth FSR 3 frame generation reads (vk_fsrfg.cpp). The game's
+// motion blur smears a moving object over the pixels around it, whose vectors are the
+// background's: the runtime moved that smear with the background, away from the object (thin
+// outlines of a running Agro beside him, the object itself sharp). Pixels within half of a nearer
+// object's motion from it, along that motion, take its vector and depth, as the smear does
+// (the tile and neighbourhood maxima of motion blur reconstruction).
+//   pass 0: per 16x16 tile, the nearest pixel that moves; tiles where a near object rushes past
+//           the camera, against the farthest pixel of the tile, are counted (risk): the runtime
+//           cannot interpolate it (fg_rim.comp)
+//   pass 1: per tile, the nearest of those in the tiles around
+//   pass 2: per pixel, the vector and depth for the runtime
+
+#version 450 core
+#extension GL_EXT_samplerless_texture_functions : require
+
+layout (local_size_x = 8, local_size_y = 8) in;
+
+layout (binding = 0) uniform texture2D depth_in; // R32F, 0 at the near plane
+layout (binding = 1) uniform texture2D mvec_in;  // curUV - prevUV
+layout (binding = 2, rgba32f) uniform image2D tiles;     // mv, nearness, 1 (0: none moves)
+layout (binding = 3, rgba32f) uniform image2D near;      // the nearest of the tiles around
+layout (binding = 4, rg16f) uniform writeonly image2D mvec_out;
+layout (binding = 5, r32f) uniform writeonly image2D depth_out;
+layout (binding = 6, std430) buffer Risk {
+    uint risk[]; // per ring slot
+};
+
+layout (push_constant) uniform Params {
+    uvec2 size; // render size
+    uint pass;
+    uint slot;         // the ring slot of this frame
+    float close_by;    // the nearness of a point 2 units from the camera
+} pc;
+
+const uint kTile = 16;
+const int kReach = 3;        // tiles around: a smear up to ~50 pixels to each side
+const float kMoving = 4.0;   // pixels per frame
+const float kCloser = 1.1;   // nearer by 10% at least
+const float kRushing = 0.08; // of the width per frame, on the screen and against the background
+const float kNearer = 1.5;   // that near object: 1.5 times nearer than the background
+
+shared vec4 best[64];
+shared vec3 back[64]; // mv, nearness of the farthest pixel
+
+// 1 / view distance up to a constant: the game's depth is reversed-Z, 1 - fg_depth.comp's.
+float Nearness(float depth) {
+    return 1.0 - depth;
+}
+
+void main() {
+    const vec2 pixels = vec2(pc.size);
+    const ivec2 tiles_n = ivec2((pc.size + kTile - 1u) / kTile);
+    if (pc.pass == 0u) {
+        // Each invocation looks at 2x2 pixels of the work group's tile.
+        const uvec2 tile = gl_WorkGroupID.xy;
+        vec4 b = vec4(0.0);
+        vec3 f = vec3(0.0, 0.0, 2.0);
+        for (uint i = 0u; i < 4u; ++i) {
+            const ivec2 at = ivec2(tile * kTile + gl_LocalInvocationID.xy * 2u +
+                                   uvec2(i & 1u, i >> 1u));
+            if (any(greaterThanEqual(at, ivec2(pc.size)))) {
+                continue;
+            }
+            const vec2 mv = texelFetch(mvec_in, at, 0).xy;
+            const float r = Nearness(texelFetch(depth_in, at, 0).r);
+            if (length(mv * pixels) >= kMoving && r > b.z) {
+                b = vec4(mv, r, 1.0);
+            }
+            if (r < f.z) {
+                f = vec3(mv, r);
+            }
+        }
+        best[gl_LocalInvocationIndex] = b;
+        back[gl_LocalInvocationIndex] = f;
+        barrier();
+        for (uint s = 32u; s > 0u; s >>= 1u) {
+            if (gl_LocalInvocationIndex < s) {
+                if (best[gl_LocalInvocationIndex + s].z > best[gl_LocalInvocationIndex].z) {
+                    best[gl_LocalInvocationIndex] = best[gl_LocalInvocationIndex + s];
+                }
+                if (back[gl_LocalInvocationIndex + s].z < back[gl_LocalInvocationIndex].z) {
+                    back[gl_LocalInvocationIndex] = back[gl_LocalInvocationIndex + s];
+                }
+            }
+            barrier();
+        }
+        if (gl_LocalInvocationIndex == 0u) {
+            imageStore(tiles, ivec2(tile), best[0]);
+            // Fast on the screen (not the character the camera follows), and right by the camera
+            // or fast against the tile's background (not the camera turning).
+            const vec2 v_near = best[0].xy * pixels;
+            if (best[0].w > 0.0 && length(v_near) > kRushing * pixels.x &&
+                (best[0].z > pc.close_by ||
+                 (best[0].z > kNearer * back[0].z &&
+                  distance(v_near, back[0].xy * pixels) > kRushing * pixels.x))) {
+                atomicAdd(risk[pc.slot], 1u);
+            }
+        }
+        return;
+    }
+    if (pc.pass == 1u) {
+        const ivec2 t = ivec2(gl_GlobalInvocationID.xy);
+        if (any(greaterThanEqual(t, tiles_n))) {
+            return;
+        }
+        vec4 b = vec4(0.0);
+        for (int y = -kReach; y <= kReach; ++y) {
+            for (int x = -kReach; x <= kReach; ++x) {
+                const ivec2 o = t + ivec2(x, y);
+                if (any(lessThan(o, ivec2(0))) || any(greaterThanEqual(o, tiles_n))) {
+                    continue;
+                }
+                const vec4 c = imageLoad(tiles, o);
+                if (c.w > 0.0 && c.z > b.z) {
+                    b = c;
+                }
+            }
+        }
+        imageStore(near, t, b);
+        return;
+    }
+    const ivec2 at = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(at, ivec2(pc.size)))) {
+        return;
+    }
+    vec2 mv = texelFetch(mvec_in, at, 0).xy;
+    float depth = texelFetch(depth_in, at, 0).r;
+    const float here = Nearness(depth);
+    const vec2 v_here = mv * pixels;
+    // The candidates of the four tiles nearest to the pixel (no tile edges in the result) give
+    // the directions to look along, the nearest object first; a pixel found counts by its own
+    // motion: this one lies within half of it, on its line. Taps 2 pixels apart: a leg or the
+    // mane is not skipped (pixels beside each other decide alike, no speckles for the runtime).
+    const ivec2 base = ivec2(floor((vec2(at) - float(kTile / 2u)) / float(kTile)));
+    vec4 cands[4];
+    for (int j = 0; j < 4; ++j) {
+        cands[j] = imageLoad(near, clamp(base + ivec2(j & 1, j >> 1), ivec2(0), tiles_n - 1));
+    }
+    for (int round = 0; round < 4; ++round) {
+        int pick = -1;
+        for (int j = 0; j < 4; ++j) {
+            if (cands[j].w > 0.0 && (pick < 0 || cands[j].z > cands[pick].z)) {
+                pick = j;
+            }
+        }
+        if (pick < 0) {
+            break;
+        }
+        const vec4 c = cands[pick];
+        for (int j = 0; j < 4; ++j) {
+            if (cands[j].xyz == c.xyz) {
+                cands[j].w = 0.0;
+            }
+        }
+        const vec2 vc = c.xy * pixels;
+        if (c.z <= here * kCloser || distance(vc, v_here) < kMoving) {
+            continue;
+        }
+        const float len = length(vc);
+        const int steps = clamp(int(ceil(len / 2.0)), 2, 48);
+        float best_dist = 1e9;
+        for (int k = 0; k < steps; ++k) {
+            const float t = (float(k) + 0.5) / float(steps) - 0.5;
+            const ivec2 q = clamp(ivec2(vec2(at) + 0.5 + t * vc), ivec2(0), ivec2(pc.size) - 1);
+            const float dq = texelFetch(depth_in, q, 0).r;
+            if (Nearness(dq) <= here * kCloser) {
+                continue;
+            }
+            const vec2 mq = texelFetch(mvec_in, q, 0).xy;
+            const vec2 vq = mq * pixels;
+            const float lq = length(vq);
+            if (lq < kMoving) {
+                continue;
+            }
+            const vec2 d = vec2(at - q);
+            const float s = dot(d, vq) / (lq * lq);
+            const float dist = length(d);
+            if (abs(s) <= 0.5 && length(d - s * vq) <= 1.5 + 0.1 * lq && dist < best_dist) {
+                best_dist = dist;
+                mv = mq;
+                depth = dq;
+            }
+        }
+        if (best_dist < 1e9) {
+            break;
+        }
+    }
+    imageStore(mvec_out, at, vec4(mv, 0.0, 0.0));
+    imageStore(depth_out, at, vec4(depth));
+}

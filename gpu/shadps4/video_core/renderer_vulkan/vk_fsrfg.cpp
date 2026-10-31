@@ -30,6 +30,7 @@
 #include "video_core/sotc_stats.h"
 
 #include "video_core/host_shaders/fg_depth_comp.h"
+#include "video_core/host_shaders/fg_halo_comp.h"
 #include "video_core/host_shaders/fg_rim_comp.h"
 
 namespace Vulkan::FsrFg {
@@ -77,6 +78,18 @@ vk::UniquePipeline depth_pipeline;
 std::array<DepthSlot, kMaxFrames> depth_slots;
 std::mutex depth_mutex;
 
+// The runtime's motion vectors and depth with the motion blur's smear (fg_halo.comp), present
+// thread: the tile images of its passes.
+vk::ShaderModule halo_shader;
+vk::UniqueDescriptorSetLayout halo_set_layout;
+vk::UniquePipelineLayout halo_layout;
+vk::UniquePipeline halo_pipeline;
+OwnedImage halo_tiles, halo_near;
+// Per ring slot, the tiles of an object rushing past the camera (fg_halo.comp writes, fg_rim.comp
+// reads on the presenter's queue).
+VkBuffer risk_buffer{};
+VmaAllocation risk_alloc{};
+
 // The generated frame's rim and alpha (fg_rim.comp), inside the runtime's present.
 vk::ShaderModule rim_shader;
 vk::UniqueDescriptorSetLayout rim_set_layout;
@@ -97,7 +110,10 @@ vk::Format chain_format{};
 ffxContext fg_ctx{};
 vk::Extent2D ctx_display{}, ctx_render{};
 vk::Format ctx_format{};
-std::array<OwnedImage, kRing> hudless_copies, full_copies, mv_copies;
+std::array<OwnedImage, kRing> hudless_copies, full_copies;
+// What the runtime reads for each prepared frame at the render size (fg_halo.comp, or the game's
+// vectors and depth as they are); the rim reads the vectors too.
+std::array<OwnedImage, kRing> mv_copies, halo_depths;
 u32 ring_next = 0;
 s32 last_slot = -1; // the ring slot of the last prepared frame
 /// A prepared frame's ring slots for its rim, by frame id (present thread writes, the runtime's
@@ -109,6 +125,7 @@ struct RimFrame {
     float mv_scale[2]{1.0f, 1.0f};
     vk::Rect2D rect{};
     bool hudless = false;
+    u32 risk_min = ~0U; // tiles of a rushing object (3% of them) that hold the game frame instead
 };
 std::array<RimFrame, kRimFrames> rim_frames;
 std::mutex rim_mutex;
@@ -181,6 +198,24 @@ void DestroyImage(OwnedImage& img) {
         vmaDestroyImage(g_instance->GetAllocator(), img.image, img.alloc);
     }
     img = {};
+}
+
+/// The risk buffer, read on the runtime's presenter queue too.
+bool CreateRiskBuffer() {
+    const std::array families{g_instance->GetGraphicsQueueFamilyIndex(),
+                              g_instance->GetFgQueueFamily()};
+    const bool shared = families[0] != families[1];
+    const VkBufferCreateInfo info{
+        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        .size = kRing * sizeof(u32),
+        .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        .sharingMode = shared ? VK_SHARING_MODE_CONCURRENT : VK_SHARING_MODE_EXCLUSIVE,
+        .queueFamilyIndexCount = shared ? 2u : 0u,
+        .pQueueFamilyIndices = shared ? families.data() : nullptr,
+    };
+    const VmaAllocationCreateInfo alloc_info = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
+    return vmaCreateBuffer(g_instance->GetAllocator(), &info, &alloc_info, &risk_buffer,
+                           &risk_alloc, nullptr) == VK_SUCCESS;
 }
 
 vk::ImageMemoryBarrier2 Barrier(vk::Image image, vk::PipelineStageFlags2 src_stage,
@@ -457,14 +492,20 @@ ffxReturnCode_t Present(ffxCallbackDescFrameGenerationPresent* params, void*) {
             sampled(cur_full),
             sampled(mv_copies[info.slot]),
         };
-        std::array<vk::WriteDescriptorSet, 5> writes{};
-        for (u32 i = 0; i < writes.size(); ++i) {
+        std::array<vk::WriteDescriptorSet, 6> writes{};
+        for (u32 i = 0; i < infos.size(); ++i) {
             writes[i] = {.dstBinding = i,
                          .descriptorCount = 1,
                          .descriptorType = i == 0 ? vk::DescriptorType::eStorageImage
                                                   : vk::DescriptorType::eCombinedImageSampler,
                          .pImageInfo = &infos[i]};
         }
+        const vk::DescriptorBufferInfo risk{
+            .buffer = vk::Buffer{risk_buffer}, .offset = 0, .range = VK_WHOLE_SIZE};
+        writes[5] = {.dstBinding = 5,
+                     .descriptorCount = 1,
+                     .descriptorType = vk::DescriptorType::eStorageBuffer,
+                     .pBufferInfo = &risk};
         cmdbuf.pushDescriptorSetKHR(vk::PipelineBindPoint::eCompute, *rim_layout, 0, writes);
         struct {
             u32 size[2];
@@ -472,12 +513,18 @@ ffxReturnCode_t Present(ffxCallbackDescFrameGenerationPresent* params, void*) {
             u32 rect_size[2];
             float mv_scale[2];
             u32 flags;
+            u32 cur_slot;
+            s32 prev_slot;
+            u32 risk_min;
         } const constants{
             {frame.description.width, frame.description.height},
             {info.rect.offset.x, info.rect.offset.y},
             {info.rect.extent.width, info.rect.extent.height},
             {info.mv_scale[0], info.mv_scale[1]},
             (rim ? 1u : 0u) | (info.hudless ? 2u : 0u),
+            info.slot,
+            info.id == params->frameID ? info.prev_slot : -1,
+            info.id == params->frameID ? info.risk_min : ~0U,
         };
         cmdbuf.pushConstants(*rim_layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(constants),
                              &constants);
@@ -560,11 +607,13 @@ void DestroyContext() {
     (void)g_instance->GetDevice().waitIdle();
     ffx.DestroyContext(&fg_ctx, nullptr);
     fg_ctx = nullptr;
-    for (auto* ring : {&hudless_copies, &full_copies, &mv_copies}) {
+    for (auto* ring : {&hudless_copies, &full_copies, &mv_copies, &halo_depths}) {
         for (auto& copy : *ring) {
             DestroyImage(copy);
         }
     }
+    DestroyImage(halo_tiles);
+    DestroyImage(halo_near);
     DestroyOutputViews();
     last_slot = -1;
     active = false;
@@ -605,9 +654,7 @@ bool EnsureContext(vk::Extent2D display, u32 render_w, u32 render_h) {
     ffx.Configure(&fg_ctx, &messages.header);
     for (u32 i = 0; i < kRing; ++i) {
         if (!CreateImage(hudless_copies[i], chain_format, display.width, display.height, true) ||
-            !CreateImage(full_copies[i], chain_format, display.width, display.height, true) ||
-            !CreateImage(mv_copies[i], vk::Format::eR16G16Sfloat, desc.maxRenderSize.width,
-                         desc.maxRenderSize.height, true)) {
+            !CreateImage(full_copies[i], chain_format, display.width, display.height, true)) {
             std::fprintf(stderr, "SOTC FSR3 FG: cannot create the %ux%u frame copies\n",
                          display.width, display.height);
             DestroyContext();
@@ -688,25 +735,16 @@ const OwnedImage& CopyHudless(vk::CommandBuffer cmdbuf, const PresentInputs& in,
     return copy;
 }
 
-/// The presented frame (overlay included) and this frame's motion vectors into ring `slot`, for
-/// the generated frame's rim (Present). Both are left as they were.
-void CopyToRing(vk::CommandBuffer cmdbuf, const PresentInputs& in, const Dlssg::FrameInputs& fi,
-                u32 slot) {
+/// The presented frame (overlay included) into ring `slot`, for the generated frame's rim
+/// (Present). The backbuffer is left as it was.
+void CopyToRing(vk::CommandBuffer cmdbuf, const PresentInputs& in, u32 slot) {
     const OwnedImage& full = full_copies[slot];
-    const OwnedImage& mv = mv_copies[slot];
     const std::array pre{
         Barrier(in.backbuffer, vk::PipelineStageFlagBits2::eColorAttachmentOutput,
                 vk::AccessFlagBits2::eColorAttachmentWrite, vk::ImageLayout::eColorAttachmentOptimal,
                 vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferRead,
                 vk::ImageLayout::eTransferSrcOptimal),
         Barrier(full.image, vk::PipelineStageFlagBits2::eAllCommands, vk::AccessFlagBits2::eNone,
-                vk::ImageLayout::eUndefined, vk::PipelineStageFlagBits2::eCopy,
-                vk::AccessFlagBits2::eTransferWrite, vk::ImageLayout::eTransferDstOptimal),
-        Barrier(fi.mvec, vk::PipelineStageFlagBits2::eAllCommands,
-                vk::AccessFlagBits2::eMemoryWrite, vk::ImageLayout::eShaderReadOnlyOptimal,
-                vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferRead,
-                vk::ImageLayout::eTransferSrcOptimal),
-        Barrier(mv.image, vk::PipelineStageFlagBits2::eAllCommands, vk::AccessFlagBits2::eNone,
                 vk::ImageLayout::eUndefined, vk::PipelineStageFlagBits2::eCopy,
                 vk::AccessFlagBits2::eTransferWrite, vk::ImageLayout::eTransferDstOptimal),
     };
@@ -721,12 +759,6 @@ void CopyToRing(vk::CommandBuffer cmdbuf, const PresentInputs& in, const Dlssg::
                                    .dstSubresource = layers,
                                    .extent = {std::min(in.extent.width, full.width),
                                               std::min(in.extent.height, full.height), 1}});
-    cmdbuf.copyImage(fi.mvec, vk::ImageLayout::eTransferSrcOptimal, mv.image,
-                     vk::ImageLayout::eTransferDstOptimal,
-                     vk::ImageCopy{.srcSubresource = layers,
-                                   .dstSubresource = layers,
-                                   .extent = {std::min(fi.width, mv.width),
-                                              std::min(fi.height, mv.height), 1}});
     const std::array post{
         Barrier(in.backbuffer, vk::PipelineStageFlagBits2::eCopy,
                 vk::AccessFlagBits2::eTransferRead, vk::ImageLayout::eTransferSrcOptimal,
@@ -736,17 +768,214 @@ void CopyToRing(vk::CommandBuffer cmdbuf, const PresentInputs& in, const Dlssg::
         Barrier(full.image, vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferWrite,
                 vk::ImageLayout::eTransferDstOptimal, vk::PipelineStageFlagBits2::eAllCommands,
                 vk::AccessFlagBits2::eShaderRead, vk::ImageLayout::eShaderReadOnlyOptimal),
-        Barrier(fi.mvec, vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferRead,
-                vk::ImageLayout::eTransferSrcOptimal, vk::PipelineStageFlagBits2::eAllCommands,
-                vk::AccessFlagBits2::eShaderRead, vk::ImageLayout::eShaderReadOnlyOptimal),
-        Barrier(mv.image, vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferWrite,
-                vk::ImageLayout::eTransferDstOptimal, vk::PipelineStageFlagBits2::eAllCommands,
-                vk::AccessFlagBits2::eShaderRead, vk::ImageLayout::eShaderReadOnlyOptimal),
     };
     cmdbuf.pipelineBarrier2(vk::DependencyInfo{
         .imageMemoryBarrierCount = static_cast<u32>(post.size()),
         .pImageMemoryBarriers = post.data(),
     });
+}
+
+/// The ring of vectors and depths at the render size (made again when it changes, after the
+/// presents that may read the old ones).
+bool EnsureMotionImages(u32 width, u32 height) {
+    if (mv_copies[0].image && mv_copies[0].width == width && mv_copies[0].height == height) {
+        return true;
+    }
+    if (mv_copies[0].image) {
+        WaitForPresents();
+        (void)g_instance->GetDevice().waitIdle();
+    }
+    for (auto* ring : {&mv_copies, &halo_depths}) {
+        for (auto& img : *ring) {
+            DestroyImage(img);
+        }
+    }
+    DestroyImage(halo_tiles);
+    DestroyImage(halo_near);
+    const u32 tiles_w = (width + 15) / 16, tiles_h = (height + 15) / 16;
+    for (u32 i = 0; i < kRing; ++i) {
+        if (!CreateImage(mv_copies[i], vk::Format::eR16G16Sfloat, width, height, true) ||
+            (halo_pipeline &&
+             !CreateImage(halo_depths[i], vk::Format::eR32Sfloat, width, height))) {
+            return false;
+        }
+    }
+    return !halo_pipeline ||
+           (CreateImage(halo_tiles, vk::Format::eR32G32B32A32Sfloat, tiles_w, tiles_h) &&
+            CreateImage(halo_near, vk::Format::eR32G32B32A32Sfloat, tiles_w, tiles_h));
+}
+
+/// This frame's vectors (left ShaderReadOnlyOptimal) and depth (General) for the runtime into ring
+/// `slot`: fg_halo.comp's, or the game's as they are. Returns the depth image.
+const OwnedImage& PrepareMotion(vk::CommandBuffer cmdbuf, const Dlssg::FrameInputs& fi,
+                                const DepthSlot& depth, u32 slot) {
+    const OwnedImage& mv = mv_copies[slot];
+    if (risk_buffer) {
+        cmdbuf.fillBuffer(vk::Buffer{risk_buffer}, slot * sizeof(u32), sizeof(u32), 0);
+    }
+    const vk::BufferMemoryBarrier2 cleared{
+        .srcStageMask = vk::PipelineStageFlagBits2::eClear,
+        .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+        .dstAccessMask = vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite,
+        .buffer = vk::Buffer{risk_buffer},
+        .offset = 0,
+        .size = VK_WHOLE_SIZE,
+    };
+    if (risk_buffer) {
+        cmdbuf.pipelineBarrier2(
+            vk::DependencyInfo{.bufferMemoryBarrierCount = 1, .pBufferMemoryBarriers = &cleared});
+    }
+    if (!halo_pipeline) {
+        const std::array pre{
+            Barrier(fi.mvec, vk::PipelineStageFlagBits2::eAllCommands,
+                    vk::AccessFlagBits2::eMemoryWrite, vk::ImageLayout::eShaderReadOnlyOptimal,
+                    vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferRead,
+                    vk::ImageLayout::eTransferSrcOptimal),
+            Barrier(mv.image, vk::PipelineStageFlagBits2::eAllCommands, vk::AccessFlagBits2::eNone,
+                    vk::ImageLayout::eUndefined, vk::PipelineStageFlagBits2::eCopy,
+                    vk::AccessFlagBits2::eTransferWrite, vk::ImageLayout::eTransferDstOptimal),
+        };
+        cmdbuf.pipelineBarrier2(vk::DependencyInfo{
+            .imageMemoryBarrierCount = static_cast<u32>(pre.size()),
+            .pImageMemoryBarriers = pre.data(),
+        });
+        const vk::ImageSubresourceLayers layers{vk::ImageAspectFlagBits::eColor, 0, 0, 1};
+        cmdbuf.copyImage(fi.mvec, vk::ImageLayout::eTransferSrcOptimal, mv.image,
+                         vk::ImageLayout::eTransferDstOptimal,
+                         vk::ImageCopy{.srcSubresource = layers,
+                                       .dstSubresource = layers,
+                                       .extent = {mv.width, mv.height, 1}});
+        const std::array post{
+            Barrier(fi.mvec, vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferRead,
+                    vk::ImageLayout::eTransferSrcOptimal, vk::PipelineStageFlagBits2::eAllCommands,
+                    vk::AccessFlagBits2::eShaderRead, vk::ImageLayout::eShaderReadOnlyOptimal),
+            Barrier(mv.image, vk::PipelineStageFlagBits2::eCopy,
+                    vk::AccessFlagBits2::eTransferWrite, vk::ImageLayout::eTransferDstOptimal,
+                    vk::PipelineStageFlagBits2::eAllCommands, vk::AccessFlagBits2::eShaderRead,
+                    vk::ImageLayout::eShaderReadOnlyOptimal),
+        };
+        cmdbuf.pipelineBarrier2(vk::DependencyInfo{
+            .imageMemoryBarrierCount = static_cast<u32>(post.size()),
+            .pImageMemoryBarriers = post.data(),
+        });
+        return depth.r32;
+    }
+    const OwnedImage& out_depth = halo_depths[slot];
+    const vk::MemoryBarrier2 inputs{
+        .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+        .srcAccessMask = vk::AccessFlagBits2::eMemoryWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+        .dstAccessMask = vk::AccessFlagBits2::eShaderRead,
+    };
+    const std::array to_write{
+        Barrier(halo_tiles.image, vk::PipelineStageFlagBits2::eAllCommands,
+                vk::AccessFlagBits2::eNone, vk::ImageLayout::eUndefined,
+                vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderWrite,
+                vk::ImageLayout::eGeneral),
+        Barrier(halo_near.image, vk::PipelineStageFlagBits2::eAllCommands,
+                vk::AccessFlagBits2::eNone, vk::ImageLayout::eUndefined,
+                vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderWrite,
+                vk::ImageLayout::eGeneral),
+        Barrier(mv.image, vk::PipelineStageFlagBits2::eAllCommands, vk::AccessFlagBits2::eNone,
+                vk::ImageLayout::eUndefined, vk::PipelineStageFlagBits2::eComputeShader,
+                vk::AccessFlagBits2::eShaderWrite, vk::ImageLayout::eGeneral),
+        Barrier(out_depth.image, vk::PipelineStageFlagBits2::eAllCommands,
+                vk::AccessFlagBits2::eNone, vk::ImageLayout::eUndefined,
+                vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderWrite,
+                vk::ImageLayout::eGeneral),
+    };
+    cmdbuf.pipelineBarrier2(vk::DependencyInfo{
+        .memoryBarrierCount = 1,
+        .pMemoryBarriers = &inputs,
+        .imageMemoryBarrierCount = static_cast<u32>(to_write.size()),
+        .pImageMemoryBarriers = to_write.data(),
+    });
+    cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, *halo_pipeline);
+    const auto general = [](const OwnedImage& img) {
+        return vk::DescriptorImageInfo{.imageView = img.view,
+                                       .imageLayout = vk::ImageLayout::eGeneral};
+    };
+    const std::array infos{
+        general(depth.r32),
+        vk::DescriptorImageInfo{.imageView = fi.mvec_view,
+                                .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal},
+        general(halo_tiles),
+        general(halo_near),
+        general(mv),
+        general(out_depth),
+    };
+    std::array<vk::WriteDescriptorSet, 7> writes{};
+    for (u32 i = 0; i < infos.size(); ++i) {
+        writes[i] = {.dstBinding = i,
+                     .descriptorCount = 1,
+                     .descriptorType = i < 2 ? vk::DescriptorType::eSampledImage
+                                             : vk::DescriptorType::eStorageImage,
+                     .pImageInfo = &infos[i]};
+    }
+    const vk::DescriptorBufferInfo risk{
+        .buffer = vk::Buffer{risk_buffer}, .offset = 0, .range = VK_WHOLE_SIZE};
+    writes[6] = {.dstBinding = 6,
+                 .descriptorCount = 1,
+                 .descriptorType = vk::DescriptorType::eStorageBuffer,
+                 .pBufferInfo = &risk};
+    cmdbuf.pushDescriptorSetKHR(vk::PipelineBindPoint::eCompute, *halo_layout, 0, writes);
+    const u32 tiles_w = halo_tiles.width, tiles_h = halo_tiles.height;
+    const std::array groups{
+        std::array{tiles_w, tiles_h},
+        std::array{(tiles_w + 7) / 8, (tiles_h + 7) / 8},
+        std::array{(mv.width + 7) / 8, (mv.height + 7) / 8},
+    };
+    for (u32 pass = 0; pass < groups.size(); ++pass) {
+        if (pass > 0) {
+            // The tiles of the pass before.
+            const vk::MemoryBarrier2 tiles_done{
+                .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+                .srcAccessMask = vk::AccessFlagBits2::eShaderWrite,
+                .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+                .dstAccessMask = vk::AccessFlagBits2::eShaderRead,
+            };
+            cmdbuf.pipelineBarrier2(
+                vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &tiles_done});
+        }
+        // Nearness is 1 - fg_depth.comp's depth: the reversed-Z depth, near / distance.
+        struct {
+            u32 size[2];
+            u32 pass;
+            u32 slot;
+            float close_by;
+        } const params{{mv.width, mv.height}, pass, slot, fi.z_near / 2.0f};
+        cmdbuf.pushConstants(*halo_layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(params),
+                             &params);
+        cmdbuf.dispatch(groups[pass][0], groups[pass][1], 1);
+    }
+    const std::array done{
+        Barrier(mv.image, vk::PipelineStageFlagBits2::eComputeShader,
+                vk::AccessFlagBits2::eShaderWrite, vk::ImageLayout::eGeneral,
+                vk::PipelineStageFlagBits2::eAllCommands, vk::AccessFlagBits2::eShaderRead,
+                vk::ImageLayout::eShaderReadOnlyOptimal),
+        Barrier(out_depth.image, vk::PipelineStageFlagBits2::eComputeShader,
+                vk::AccessFlagBits2::eShaderWrite, vk::ImageLayout::eGeneral,
+                vk::PipelineStageFlagBits2::eAllCommands,
+                vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite,
+                vk::ImageLayout::eGeneral),
+    };
+    const vk::BufferMemoryBarrier2 counted{
+        .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+        .srcAccessMask = vk::AccessFlagBits2::eShaderWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+        .dstAccessMask = vk::AccessFlagBits2::eShaderRead,
+        .buffer = vk::Buffer{risk_buffer},
+        .offset = 0,
+        .size = VK_WHOLE_SIZE,
+    };
+    cmdbuf.pipelineBarrier2(vk::DependencyInfo{
+        .bufferMemoryBarrierCount = 1,
+        .pBufferMemoryBarriers = &counted,
+        .imageMemoryBarrierCount = static_cast<u32>(done.size()),
+        .pImageMemoryBarriers = done.data(),
+    });
+    return out_depth;
 }
 
 /// Generation off for this present: it shows the game frame alone, and the next prepared frame
@@ -843,6 +1072,54 @@ void Init(const Instance& instance) {
     }
     depth_pipeline = std::move(pipeline);
 
+    // The motion blur's smear for the runtime: its tile images and vectors as storage images.
+    if (can(vk::Format::eR16G16Sfloat, storage) && can(vk::Format::eR32G32B32A32Sfloat, storage)) {
+        halo_shader = CompileSPV(FG_HALO_COMP, device);
+        std::array<vk::DescriptorSetLayoutBinding, 7> halo_bindings{};
+        for (u32 i = 0; i < halo_bindings.size(); ++i) {
+            halo_bindings[i] = {.binding = i,
+                                .descriptorType = i < 2   ? vk::DescriptorType::eSampledImage
+                                                  : i < 6 ? vk::DescriptorType::eStorageImage
+                                                          : vk::DescriptorType::eStorageBuffer,
+                                .descriptorCount = 1,
+                                .stageFlags = vk::ShaderStageFlagBits::eCompute};
+        }
+        const vk::PushConstantRange halo_push = {
+            .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = 5 * sizeof(u32)};
+        auto [halo_set_result, halo_set] = device.createDescriptorSetLayoutUnique({
+            .flags = vk::DescriptorSetLayoutCreateFlagBits::ePushDescriptorKHR,
+            .bindingCount = static_cast<u32>(halo_bindings.size()),
+            .pBindings = halo_bindings.data(),
+        });
+        if (halo_set_result == vk::Result::eSuccess) {
+            halo_set_layout = std::move(halo_set);
+            const vk::DescriptorSetLayout halo_layouts[] = {*halo_set_layout};
+            auto [halo_layout_result, halo_pipeline_layout] = device.createPipelineLayoutUnique({
+                .setLayoutCount = 1,
+                .pSetLayouts = halo_layouts,
+                .pushConstantRangeCount = 1,
+                .pPushConstantRanges = &halo_push,
+            });
+            if (halo_layout_result == vk::Result::eSuccess) {
+                halo_layout = std::move(halo_pipeline_layout);
+                auto [halo_pipeline_result, pipeline_halo] = device.createComputePipelineUnique(
+                    {}, vk::ComputePipelineCreateInfo{
+                            .stage{.stage = vk::ShaderStageFlagBits::eCompute,
+                                   .module = halo_shader,
+                                   .pName = "main"},
+                            .layout = *halo_layout,
+                        });
+                if (halo_pipeline_result == vk::Result::eSuccess) {
+                    halo_pipeline = std::move(pipeline_halo);
+                }
+            }
+        }
+    }
+    if (!halo_pipeline) {
+        std::fprintf(stderr, "SOTC FSR3 FG: motion blur pass unavailable (outlines beside fast "
+                             "objects)\n");
+    }
+
     // The rim pass: the runtime's output image as a storage image of the swapchain's format, the
     // kept frames and motion vectors sampled.
     const auto features = gpu.getFeatures();
@@ -857,16 +1134,17 @@ void Init(const Instance& instance) {
         features.shaderStorageImageWriteWithoutFormat) {
         rim_sampler = std::move(sampler);
         rim_shader = CompileSPV(FG_RIM_COMP, device);
-        std::array<vk::DescriptorSetLayoutBinding, 5> rim_bindings{};
+        std::array<vk::DescriptorSetLayoutBinding, 6> rim_bindings{};
         for (u32 i = 0; i < rim_bindings.size(); ++i) {
             rim_bindings[i] = {.binding = i,
-                               .descriptorType = i == 0 ? vk::DescriptorType::eStorageImage
-                                                        : vk::DescriptorType::eCombinedImageSampler,
+                               .descriptorType = i == 0   ? vk::DescriptorType::eStorageImage
+                                                 : i < 5 ? vk::DescriptorType::eCombinedImageSampler
+                                                         : vk::DescriptorType::eStorageBuffer,
                                .descriptorCount = 1,
                                .stageFlags = vk::ShaderStageFlagBits::eCompute};
         }
         const vk::PushConstantRange rim_push = {
-            .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = 9 * sizeof(u32)};
+            .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = 12 * sizeof(u32)};
         auto [rim_set_result, rim_set] = device.createDescriptorSetLayoutUnique({
             .flags = vk::DescriptorSetLayoutCreateFlagBits::ePushDescriptorKHR,
             .bindingCount = static_cast<u32>(rim_bindings.size()),
@@ -890,7 +1168,7 @@ void Init(const Instance& instance) {
                                    .pName = "main"},
                             .layout = *rim_layout,
                         });
-                if (rim_pipeline_result == vk::Result::eSuccess) {
+                if (rim_pipeline_result == vk::Result::eSuccess && CreateRiskBuffer()) {
                     rim_pipeline = std::move(pipeline_rim);
                 }
             }
@@ -899,6 +1177,8 @@ void Init(const Instance& instance) {
     if (!rim_pipeline) {
         std::fprintf(stderr, "SOTC FSR3 FG: rim pass unavailable (an inpainted rim at the screen "
                              "edges in fast turns)\n");
+        // The halo pass counts into the rim pass's buffer.
+        halo_pipeline.reset();
     }
     if (!LoadRuntime()) {
         return;
@@ -1169,8 +1449,16 @@ void RecordPresent(vk::CommandBuffer cmdbuf, const PresentInputs& in) {
                                     FFX_API_RESOURCE_STATE_COMPUTE_READ);
         hudless = &hudless_resource;
     }
+    if (!EnsureMotionImages(fi.width, fi.height)) {
+        std::fprintf(stderr, "SOTC FSR3 FG: cannot create the %ux%u motion images\n", fi.width,
+                     fi.height);
+        Pause();
+        SetState(2);
+        return;
+    }
+    const OwnedImage& depth = PrepareMotion(cmdbuf, fi, *slot, ring_slot);
     if (in.backbuffer) {
-        CopyToRing(cmdbuf, in, fi, ring_slot);
+        CopyToRing(cmdbuf, in, ring_slot);
         std::scoped_lock lock{rim_mutex};
         rim_frames[frame_id % kRimFrames] = RimFrame{
             .id = frame_id,
@@ -1180,6 +1468,8 @@ void RecordPresent(vk::CommandBuffer cmdbuf, const PresentInputs& in) {
                          static_cast<float>(fi.height) / static_cast<float>(mv_copies[ring_slot].height)},
             .rect = in.rect,
             .hudless = hudless != nullptr,
+            .risk_min = halo_pipeline ? std::max(1U, halo_tiles.width * halo_tiles.height * 3 / 100)
+                                      : ~0U,
         };
     }
     last_slot = static_cast<s32>(ring_slot);
@@ -1212,10 +1502,11 @@ void RecordPresent(vk::CommandBuffer cmdbuf, const PresentInputs& in) {
     prepare.cameraFar = std::min(fi.z_far, 1.0e6f);
     prepare.cameraFovAngleVertical = fi.fov_y;
     prepare.viewSpaceToMetersFactor = 1.0f;
-    prepare.depth = Resource(slot->r32.image, vk::Format::eR32Sfloat, fi.width, fi.height,
+    prepare.depth = Resource(depth.image, vk::Format::eR32Sfloat, fi.width, fi.height,
                              kImageUsage, FFX_API_RESOURCE_STATE_UNORDERED_ACCESS);
-    prepare.motionVectors = Resource(fi.mvec, vk::Format::eR16G16Sfloat, fi.width, fi.height,
-                                     fi.mvec_usage, FFX_API_RESOURCE_STATE_COMPUTE_READ);
+    prepare.motionVectors = Resource(mv_copies[ring_slot].image, vk::Format::eR16G16Sfloat,
+                                     fi.width, fi.height, kImageUsage,
+                                     FFX_API_RESOURCE_STATE_COMPUTE_READ);
     if (const ffxReturnCode_t r = ffx.Dispatch(&fg_ctx, &prepare.header); r != FFX_API_RETURN_OK) {
         std::fprintf(stderr, "SOTC FSR3 FG: prepare failed (%u)\n", r);
         Pause();
@@ -1237,6 +1528,10 @@ void RecordPresent(vk::CommandBuffer cmdbuf, const PresentInputs& in) {
 
 void Shutdown() {
     DestroyContext();
+    if (risk_buffer) {
+        vmaDestroyBuffer(g_instance->GetAllocator(), risk_buffer, risk_alloc);
+        risk_buffer = {};
+    }
     std::scoped_lock lock{depth_mutex};
     for (auto& slot : depth_slots) {
         DestroyImage(slot.r32);
