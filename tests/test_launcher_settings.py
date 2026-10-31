@@ -1,7 +1,9 @@
 """Launcher settings: DLSS and frame generation by graphics card, vibration, mouse button bindings
-in sotc.ini, and the update folder search."""
+in sotc.ini, exit codes, and the update folder search."""
 from paths import ROOT
+import os
 import struct
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -138,6 +140,24 @@ class MouseBindingTests(unittest.TestCase):
             (Path(tmp) / 'sotc.ini.example').write_text('SOTC_MODES=fps60\n', encoding='utf-8')
             launcher.write_key_bindings({}, {}, ini)
             self.assertEqual(ini.read_text(encoding='utf-8').splitlines(), ['# settings', 'SOTC_MODES=af16'])
+
+
+@unittest.skipIf(launcher is None or os.name != 'nt', 'launcher not importable, or not Windows')
+class ExitCodeTests(unittest.TestCase):
+    def test_text(self):
+        self.assertEqual(launcher.exit_text(0), '0')
+        self.assertEqual(launcher.exit_text(3), '3')
+        self.assertEqual(launcher.exit_text(0xC0000409), '0xc0000409')
+        self.assertEqual(launcher.exit_text(-0x3FFFFBF7), '0xc0000409')
+
+    def test_script_role_keeps_the_ntstatus(self):
+        # SotC.exe --run / --script relays sotc.py's code: 0xC0000409 came out as 0xffffffff (#61).
+        with tempfile.TemporaryDirectory() as tmp:
+            script = Path(tmp) / 'crash.py'
+            script.write_text('import sys\nsys.exit(0xC0000409)\n', encoding='utf-8')
+            result = subprocess.run([sys.executable, str(ROOT / 'launcher' / 'sotc_launcher_win.py'), '--script',
+                                     str(script)], capture_output=True)
+        self.assertEqual(result.returncode, 0xC0000409)
 
 
 class FindUpdateTests(unittest.TestCase):

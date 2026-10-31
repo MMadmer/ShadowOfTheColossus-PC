@@ -124,6 +124,20 @@ def run_command():
     return [sys.executable, '--run'] if FROZEN else [sys.executable, str(PORT_DIR / 'sotc.py')]
 
 
+def exit_value(code):
+    """The sys.exit() value that ends this process with exit code `code` (as sotc.py's): from
+    0x80000000 up its signed 32-bit value, since older Pythons exit with -1 (0xffffffff) for a
+    larger int, which hid the NTSTATUS of crashes (#61)."""
+    code &= 0xffffffff
+    return code - (1 << 32) if code & 0x80000000 else code
+
+
+def exit_text(code):
+    """An exit code for messages: small ones in decimal, NTSTATUS values as 0xc0000409."""
+    status = code & 0xffffffff
+    return str(status) if status < 0x10000 else f'{status:#010x}'
+
+
 # ---------------------------------------------------------------------------------------------
 # Texts: Portuguese and English next to the code; Spanish, Russian, Chinese (Simplified),
 # Japanese and Korean in sotc_i18n.py, looked up by the Portuguese text. English for every other
@@ -2485,7 +2499,8 @@ class Launcher:
             for _i in range(500):
                 item = self.output.get_nowait()
                 if isinstance(item, tuple):
-                    self.append(_('\n— o jogo terminou (código {}) —\n', '\n— the game exited (code {}) —\n').format(item[0]))
+                    self.append(_('\n— o jogo terminou (código {}) —\n', '\n— the game exited (code {}) —\n').format(
+                        exit_text(item[0])))
                     self.process = None
                     self.reload_live_settings()
                     if self.job:
@@ -2726,7 +2741,7 @@ def play_without_window(settings):
 def main():
     args = sys.argv[1:]
     if args and args[0] in ('--run', '--script'):
-        sys.exit(run_role(args))
+        sys.exit(exit_value(run_role(args)))
     # sotc: --apply-update <new folder> <port folder> <launcher pid>: the copied launcher that
     # installs an update (sotc_update.py). --update-now: check, download and install without
     # the window (scripted tests; SOTC_UPDATE_URL can point at a test release).
@@ -2752,7 +2767,7 @@ def main():
     settings = load_settings()
     set_language(settings.get('ui_language') or windows_language())
     if '--play' in args and (Path(settings['game_dir'] or '.') / 'eboot.bin').is_file():
-        sys.exit(play_without_window(settings))
+        sys.exit(exit_value(play_without_window(settings)))
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(1)
     except (AttributeError, OSError):
