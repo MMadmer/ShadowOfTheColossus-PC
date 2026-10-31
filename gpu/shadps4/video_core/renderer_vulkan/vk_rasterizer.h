@@ -187,6 +187,10 @@ private:
 
     void BindVertexBuffers(const GraphicsPipeline* pipeline);
     void BindIndexBuffer(u32 index_offset = 0);
+    /// sotc: records the vertex input, vertex and index buffers again when a submit since
+    /// vertex_tick left them in the previous command buffer.
+    void RebindVertexIfSubmitted(const GraphicsPipeline* pipeline, u64& vertex_tick,
+                                 bool is_indexed, u32 index_offset = 0);
 
     void ResetBindings(bool is_compute);
     void CaptureTextures();
