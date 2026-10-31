@@ -141,7 +141,10 @@ void MarkSrtCleanPages(u64 address, u32 size) {
     }
     for (u64 page = address >> 12; page <= (address + size - 1) >> 12; ++page) {
         if ((page << 12) < SrtCleanPageLimit) {
-            context.clean_pages[page >> 6] |= 1ULL << (page & 63);
+            // sotc: atomic, as in SetSrtReadProtectedPages: Protect clears bits of the same
+            // words from other threads, and a plain |= could write a cleared bit back (PR #339).
+            __atomic_fetch_or(&context.clean_pages[page >> 6], 1ULL << (page & 63),
+                              __ATOMIC_RELAXED);
         }
     }
 }

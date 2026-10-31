@@ -372,13 +372,28 @@ void DataBase::Prefetch() {
     std::vector<std::filesystem::path> files;
     std::error_code ec;
     size_t in_pack = 0, listed = 0;
+    // sotc: a loose file written after the pack (a shader translated again in a later session,
+    // e.g. after a ShaderBinaryVersion change) holds the current data: it wins over the pack's
+    // copy, and the pack is rewritten with it below. Taking the pack's copy left those entries
+    // stale for good (1849 pipelines refused at every boot; HiddenUserHere's PR #339).
+    std::error_code time_ec;
+    const auto pack_time = std::filesystem::last_write_time(pack_path, time_ec);
+    const bool have_pack_time = !time_ec && !packed.empty();
     for (const auto& entry : std::filesystem::directory_iterator{cache_path, ec}) {
         const auto ext = entry.path().extension();
         if (!entry.is_regular_file(ec) || ext == ".tmp" || ext == ".sotcpack") {
             continue;
         }
         ++listed;
-        const auto it = packed.find(entry.path().filename().string());
+        auto it = packed.find(entry.path().filename().string());
+        if (it != packed.end() && have_pack_time) {
+            std::error_code entry_ec;
+            const auto entry_time = entry.last_write_time(entry_ec);
+            if (!entry_ec && entry_time > pack_time) {
+                packed.erase(it);
+                it = packed.end();
+            }
+        }
         if (it != packed.end()) {
             ++in_pack;
             prefetched.emplace(it->first, std::move(it->second));

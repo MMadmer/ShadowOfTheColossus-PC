@@ -100,8 +100,8 @@ static bool ExecuteCopyShaderHLE(const Shader::Info& info, const AmdGpu::Compute
             mark_whole);
         if (!mark_whole) {
             for (u32 i = batch_start; i < batch_end; ++i) {
-                buffer_cache.ObtainBuffer(dst_buf_sharp.base_address + copies[i].dstOffset,
-                                          static_cast<u32>(copies[i].size), true);
+                (void)buffer_cache.ObtainBuffer(dst_buf_sharp.base_address + copies[i].dstOffset,
+                                                static_cast<u32>(copies[i].size), true);
             }
         }
 
