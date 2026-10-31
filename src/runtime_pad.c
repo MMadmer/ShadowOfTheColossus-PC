@@ -458,6 +458,7 @@ static unsigned vibration_percent(void) {
     }
     return (unsigned)percent;
 }
+int runtime_rumble_enabled(void);
 static void rumble(SDL_Gamepad *g, uint64_t now) {
     if (!g) return;
     const int on=rumble_large || rumble_small;
@@ -474,8 +475,9 @@ static void sample_host(PadData *d) {
     d->connected=1; d->connected_count=connected_count ? connected_count : 1;
     d->timestamp=now_us();
     SDL_Gamepad *g=current_gamepad();
-    if ((rumble_large || rumble_small) && d->timestamp-rumble_at>1000000) rumble(g,d->timestamp);
-    if (gamepad_new && (rumble_large || rumble_small)) rumble(g,d->timestamp);
+    /* the game's last request is renewed only while vibration is on (runtime_rumble_set) */
+    const int rumbling=(rumble_large || rumble_small) && runtime_rumble_enabled();
+    if (rumbling && (d->timestamp-rumble_at>1000000 || gamepad_new)) rumble(g,d->timestamp);
     if (!bindings_ready) { load_bindings(); bindings_ready=1; }
     if (bbgpu_overlay_captures_input()) return; /* settings menu open: neutral input */
     const bool *k=SDL_WasInit(SDL_INIT_VIDEO) ? SDL_GetKeyboardState(NULL) : NULL;
@@ -813,11 +815,11 @@ void runtime_rumble_set(int on) {
 static ABI int32_t pad_vibration(int32_t handle, const uint8_t *param) {
     if (handle!=PAD_HANDLE || !opened) return ERR_INVALID_HANDLE;
     if (!param) return ERR_INVALID_ARG;
-    if (!runtime_rumble_enabled()) return 0;
     pthread_mutex_lock(&lock);
+    /* kept while vibration is off too, so the game's stop request is not lost */
     rumble_large=param[0];
     rumble_small=param[1];
-    rumble(current_gamepad(),now_us());
+    if (runtime_rumble_enabled()) rumble(current_gamepad(),now_us());
     pthread_mutex_unlock(&lock);
     return 0;
 }
