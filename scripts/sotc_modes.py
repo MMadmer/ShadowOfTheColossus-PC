@@ -21,6 +21,8 @@ Writes two files for the loader:
                           stretched one); PS4 mode only, the PS4 Pro path keeps its sizes
                    --fov PERCENT (e.g. 120)  the cameras' field of view, cutscenes included
                           (AjncSystem #179)
+                   the page allocator fix (POOL_FIX, the crash at 0x41a371) is always applied;
+                   SOTC_POOL_FIX=0 leaves it out
   out/cmdline.bin  the engine command line the game appends to its own (SOTCCMD1,
                    bb-probe --sotc-cmdline): cvars of the Bluepoint engine, e.g.
                    +r_motionBlurEnable=0. Modes that are only cvars:
@@ -276,8 +278,17 @@ def main():
     supported = is_supported(elf, ph)
     render = args.render if args.render != '1920x1080' else ''
     writes, cvars = [], []
-    if supported and image_bytes(elf, ph, POOL_FIX[0] - BASE, len(POOL_FIX[1])) == POOL_FIX[1]:
+    # SOTC_POOL_FIX=0 leaves the page allocator as the game has it (diagnostics: green or garbage
+    # textures, AjncSystem #326, #360).
+    if not supported:
+        print(f'Page allocator fix: this eboot is not {SUPPORTED}, not applied')
+    elif image_bytes(elf, ph, POOL_FIX[0] - BASE, len(POOL_FIX[1])) != POOL_FIX[1]:
+        print(f'Page allocator fix: unexpected bytes at {POOL_FIX[0]:#x}, not applied')
+    elif os.environ.get('SOTC_POOL_FIX', '1') == '0':
+        print('Page allocator fix: off (SOTC_POOL_FIX=0)')
+    else:
         writes.append((POOL_FIX[0] - BASE, POOL_FIX[2]))
+        print('Page allocator fix: on')
     for mode in filter(None, (m.strip().lower() for m in args.modes.split(','))):
         if mode not in MODES and mode not in CVAR_MODES:
             raise SystemExit(f'unknown mode {mode!r} (known: {", ".join([*MODES, *CVAR_MODES])})')
