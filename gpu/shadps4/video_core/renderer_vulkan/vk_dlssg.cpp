@@ -855,22 +855,42 @@ void PatchForegroundWindow(const wchar_t* module_name) {
     }
 }
 
-/// sotc: frames generated per game frame: the multiplier asked minus one, at most what the card
-/// does (multi frame generation, RTX 50).
-u32 GeneratedFrames() {
+/// sotc: the multiplier asked (SOTC_DLSSG_MULT=2..6 or dynamic, the in-game menu).
+u32 Multiplier() {
     u32 multiplier = SotcStats::fg_multiplier.load(std::memory_order_relaxed);
     if (!multiplier) {
         const char* v = std::getenv("SOTC_DLSSG_MULT");
-        multiplier = std::clamp(v ? static_cast<u32>(std::atoi(v)) : 2u, 2u, 4u);
+        multiplier = v && std::strcmp(v, "dynamic") == 0
+                         ? SotcStats::kFgDynamic
+                         : std::clamp(v ? static_cast<u32>(std::atoi(v)) : 2u, 2u, 6u);
         SotcStats::fg_multiplier.store(multiplier, std::memory_order_relaxed);
     }
-    return std::min(multiplier - 1, SotcStats::fg_max_generated.load(std::memory_order_relaxed));
+    return multiplier;
+}
+
+bool dynamic_refused = false; ///< Streamline refused eDynamic once (present thread)
+
+/// sotc: Dynamic Multi Frame Generation (RTX 50), only where the driver reports it: Streamline
+/// accepted eDynamic on drivers without it and generated nothing (PR #314).
+bool DynamicMfg() {
+    return Multiplier() == SotcStats::kFgDynamic && !dynamic_refused &&
+           SotcStats::fg_dynamic_supported.load(std::memory_order_relaxed);
+}
+
+/// sotc: frames generated per game frame: the multiplier asked minus one, at most what the card
+/// does (multi frame generation, RTX 50: up to 5); the most it does with Dynamic MFG.
+u32 GeneratedFrames() {
+    const u32 most = SotcStats::fg_max_generated.load(std::memory_order_relaxed);
+    const u32 multiplier = Multiplier();
+    return multiplier == SotcStats::kFgDynamic ? most : std::min(multiplier - 1, most);
 }
 u32 generated_set = 0; ///< numFramesToGenerate of the last options (present thread)
+bool dynamic_set = false;
 
 void SetOptions(bool on) {
     sl::DLSSGOptions options{};
-    options.mode = on ? sl::DLSSGMode::eOn : sl::DLSSGMode::eOff;
+    bool dynamic = on && DynamicMfg();
+    options.mode = !on ? sl::DLSSGMode::eOff : dynamic ? sl::DLSSGMode::eDynamic : sl::DLSSGMode::eOn;
     options.numFramesToGenerate = GeneratedFrames();
     generated_set = options.numFramesToGenerate;
     options.flags = sl::DLSSGFlags::eRetainResourcesWhenOff;
@@ -888,13 +908,22 @@ void SetOptions(bool on) {
     if (Parallel()) {
         options.queueParallelismMode = sl::DLSSGQueueParallelismMode::eBlockNoClientQueues;
     }
-    const sl::Result r = api.dlssg_set_options(sl::ViewportHandle{0}, options);
+    sl::Result r = api.dlssg_set_options(sl::ViewportHandle{0}, options);
+    if (r != sl::Result::eOk && dynamic) {
+        std::fprintf(stderr, "SOTC DLSSG: Dynamic MFG refused (%d), fixed multiplier\n",
+                     static_cast<int>(r));
+        dynamic_refused = true;
+        dynamic = false;
+        options.mode = sl::DLSSGMode::eOn;
+        r = api.dlssg_set_options(sl::ViewportHandle{0}, options);
+    }
+    dynamic_set = dynamic;
     if (r != sl::Result::eOk) {
         std::fprintf(stderr, "SOTC DLSSG: slDLSSGSetOptions(%s) failed (%d)\n", on ? "on" : "off",
                      static_cast<int>(r));
     } else if (log_level >= 1 || !options_set || (on && generated_set > 1)) {
-        std::fprintf(stderr, "SOTC DLSSG: frame generation %s (x%u)\n", on ? "on" : "off",
-                     generated_set + 1);
+        std::fprintf(stderr, "SOTC DLSSG: frame generation %s (x%u%s)\n", on ? "on" : "off",
+                     generated_set + 1, dynamic ? ", dynamic" : "");
     }
     fg_on = on;
     options_set = true;
@@ -1976,7 +2005,8 @@ void BeforePresent(u32 frame_id, vk::Rect2D rect, vk::Extent2D extent) {
     valid_streak =
         f.sl_valid && FrameGen::Current() == FrameGen::Mode::Dlss ? valid_streak + 1 : 0;
     const bool want = valid_streak >= 2;
-    if (want != fg_on || !options_set || (want && GeneratedFrames() != generated_set)) {
+    if (want != fg_on || !options_set ||
+        (want && (GeneratedFrames() != generated_set || DynamicMfg() != dynamic_set))) {
         SetOptions(want);
     }
     if (f.index == 0) {
@@ -2102,6 +2132,8 @@ void AfterPresent(u32 frame_id) {
     SotcStats::ov_fg_frames.store(state.numFramesActuallyPresented, std::memory_order_relaxed);
     SotcStats::fg_max_generated.store(std::max(state.numFramesToGenerateMax, 1u),
                                       std::memory_order_relaxed);
+    SotcStats::fg_dynamic_supported.store(state.bIsDynamicMFGSupported == sl::Boolean::eTrue,
+                                          std::memory_order_relaxed);
     SotcStats::ov_fg_status.store(static_cast<u32>(state.status), std::memory_order_relaxed);
     if (fg_on && state.status != sl::DLSSGStatus::eOk) {
         SotcStats::ov_fg_state.store(2, std::memory_order_relaxed);

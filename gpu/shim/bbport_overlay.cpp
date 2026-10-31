@@ -707,19 +707,28 @@ void QuickSettings() {
         }
         ImGui::EndCombo();
     }
-    // sotc: multi frame generation (RTX 50): DLSS-G shows up to 4 frames per game frame.
+    // sotc: multi frame generation (RTX 50): DLSS-G shows up to 6 frames per game frame, or as
+    // many as Dynamic MFG picks where the driver offers it.
     if (const u32 max_shown = SotcStats::fg_max_generated.load(std::memory_order_relaxed) + 1;
         fg == Mode::Dlss && max_shown > 2) {
-        static constexpr const char* multipliers[] = {"x2", "x3", "x4"};
-        const u32 now = std::clamp(SotcStats::fg_multiplier.load(std::memory_order_relaxed), 2u,
-                                   max_shown);
+        static constexpr const char* multipliers[] = {"x2", "x3", "x4", "x5", "x6"};
+        const bool dynamic_ok = SotcStats::fg_dynamic_supported.load(std::memory_order_relaxed);
+        const char* dynamic_name = T("Dinâmico", "Dynamic");
+        const u32 asked = SotcStats::fg_multiplier.load(std::memory_order_relaxed);
+        const bool dynamic_now = asked == SotcStats::kFgDynamic && dynamic_ok;
+        const u32 now = std::clamp(asked == SotcStats::kFgDynamic ? max_shown : asked, 2u,
+                                   std::min(max_shown, 6u));
         if (ImGui::BeginCombo(T("Multiplicador de quadros", "Frame multiplier"),
-                              multipliers[now - 2])) {
-            for (u32 m = 2; m <= std::min(max_shown, 4u); ++m) {
-                if (ImGui::Selectable(multipliers[m - 2], m == now)) {
+                              dynamic_now ? dynamic_name : multipliers[now - 2])) {
+            for (u32 m = 2; m <= std::min(max_shown, 6u); ++m) {
+                if (ImGui::Selectable(multipliers[m - 2], !dynamic_now && m == now)) {
                     SotcStats::fg_multiplier.store(m, std::memory_order_relaxed);
                     SaveLauncherSetting("dlssg_mult", "\"" + std::to_string(m) + "\"");
                 }
+            }
+            if (dynamic_ok && ImGui::Selectable(dynamic_name, dynamic_now)) {
+                SotcStats::fg_multiplier.store(SotcStats::kFgDynamic, std::memory_order_relaxed);
+                SaveLauncherSetting("dlssg_mult", "\"dynamic\"");
             }
             ImGui::EndCombo();
         }

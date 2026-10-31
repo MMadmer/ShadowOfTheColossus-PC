@@ -1029,6 +1029,13 @@ constexpr Texts kTexts[] = {
       "F9：纹理已重新加载",
       "F9：テクスチャを再読み込みしました",
       "F9: 텍스처를 다시 불러옴"}},
+    // Upstream 0.70 texts: grass, controller vibration, F5/F9 tools, FPS modes.
+    {"Dinâmico",
+     {"Dinámico",
+      "Динамический",
+      "动态",
+      "ダイナミック",
+      "동적"}},
 };
 // clang-format on
 

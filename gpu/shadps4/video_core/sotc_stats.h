@@ -364,9 +364,12 @@ inline std::atomic<float> ov_worst_cause_ms{0.0f};
 inline std::atomic<int> ov_fg_state{-1};
 inline std::atomic<uint32_t> ov_fg_frames{0};
 /// sotc: DLSS-G frames shown per game frame, as asked (SOTC_DLSSG_MULT, the in-game menu):
-/// 2-4, 0 until read. And the most the card generates per game frame (1: x2 only; RTX 50: 3).
+/// 2-6 or kFgDynamic, 0 until read. And the most the card generates per game frame (1: x2 only;
+/// RTX 50: 3 or 5) and whether it offers Dynamic Multi Frame Generation.
+inline constexpr uint32_t kFgDynamic = 7;
 inline std::atomic<uint32_t> fg_multiplier{0};
 inline std::atomic<uint32_t> fg_max_generated{1};
+inline std::atomic<bool> fg_dynamic_supported{false};
 inline std::atomic<uint32_t> ov_fg_status{0};
 /// FSR 3 frame generation (vk_fsrfg.cpp): 0 waiting for a 3D scene, 1 generating, 2 error.
 inline std::atomic<int> ov_fsr_state{0};
