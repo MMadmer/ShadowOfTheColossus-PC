@@ -39,8 +39,6 @@ struct Frame {
     u8 id{};
     /// sotc: this frame without the HUD (Rasterizer::TakeHudless) for frame generation, or null.
     Frame* hudless{};
-    vk::ImageView hudless_ui{}; ///< sotc: the UI layer of that composite (Rasterizer::HudlessUi)
-    u32 hudless_ui_width{}, hudless_ui_height{};
 
     ImTextureID imgui_texture;
 };
@@ -113,10 +111,6 @@ private:
     Frame* GetRenderFrame();
 
     void RecreateFrame(Frame* frame, u32 width, u32 height);
-
-    /// sotc: FSR 3 frame generation: presents the frame between the last game frame and
-    /// `frame`. False when there is none.
-    bool PresentGenerated(Frame* frame);
 
     void SetExpectedGameSize(s32 width, s32 height);
 

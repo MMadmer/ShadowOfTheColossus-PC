@@ -1936,12 +1936,11 @@ void PrepareInputs(u32 frame_id, vk::CommandBuffer cmdbuf, VideoCore::TextureCac
     // takes their place, and they hold the next frame's.
     SwapImages(f, snap);
     if (fsr) {
-        // FSR 3 reads depth as R32F: from the copy, now ShaderReadOnlyOptimal. Its motion vectors
-        // are kept before the fill below (vk_fsrfg.cpp, DepthSlot).
-        FsrFg::ConvertDepth(frame_id, cmdbuf, f.depth_view, f.mvec, width, height,
+        // FSR 3 reads depth as R32F: from the copy, now ShaderReadOnlyOptimal.
+        FsrFg::ConvertDepth(frame_id, cmdbuf, f.depth_view, width, height,
                             constants.depthInverted == sl::Boolean::eTrue);
     }
-    // DLSS reads the filled vectors, and FSR 3's edge pass (fg_edge.comp) for the sky's motion.
+    // DLSS and FSR 3 read the filled vectors (the sky moves with the camera).
     FillCameraMotion(cmdbuf, f, constants);
 
     // sotc: only while SR upscales (not with F9 on FSR 1): the reset also stops frame generation.

@@ -174,9 +174,6 @@ Rasterizer::~Rasterizer() {
     for (auto& [address, image] : hudless_images) {
         DestroyHudless(image);
     }
-    for (auto& slot : hudless_ui) {
-        DestroyHudless(slot.copy);
-    }
     DestroyHudless(hudless_clear);
     DestroyHudless(ui_shadow);
 }
@@ -984,68 +981,6 @@ bool Rasterizer::BeginHudless(const GraphicsPipeline* pipeline, const RenderStat
     };
     cmdbuf.pipelineBarrier2(
         vk::DependencyInfo{.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &to_target});
-    // The UI layer as the composite blended it, for its alpha (HudlessUi).
-    target.ui_slot = -1;
-    if (const VideoCore::ImageId ui_id = image_info_images[hudless_ui_info]) {
-        auto& ui_image = texture_cache.GetImage(ui_id);
-        const u32 ui_w = ui_image.info.size.width, ui_h = ui_image.info.size.height;
-        auto& slot = hudless_ui[hudless_ui_next % hudless_ui.size()];
-        auto& copy = slot.copy;
-        if (copy.image && (copy.width != ui_w || copy.height != ui_h ||
-                           copy.rt_format != ui_image.info.pixel_format)) {
-            DestroyHudless(copy);
-        }
-        if (!copy.image &&
-            CreateHudlessImage(instance, ui_image.info.pixel_format, ui_w, ui_h,
-                               vk::ImageUsageFlagBits::eTransferDst |
-                                   vk::ImageUsageFlagBits::eSampled,
-                               copy.image, copy.rt_view, copy.allocation)) {
-            copy.rt_format = ui_image.info.pixel_format;
-            copy.width = ui_w;
-            copy.height = ui_h;
-        }
-        if (copy.image) {
-            runtime.Transit(&ui_image, vk::ImageLayout::eTransferSrcOptimal,
-                            vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferRead);
-            runtime.FlushBarriers();
-            const auto to_dst = vk::ImageMemoryBarrier2{
-                .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
-                .srcAccessMask = vk::AccessFlagBits2::eShaderRead,
-                .dstStageMask = vk::PipelineStageFlagBits2::eCopy,
-                .dstAccessMask = vk::AccessFlagBits2::eTransferWrite,
-                .oldLayout = vk::ImageLayout::eUndefined,
-                .newLayout = vk::ImageLayout::eTransferDstOptimal,
-                .image = copy.image,
-                .subresourceRange = color_range,
-            };
-            cmdbuf.pipelineBarrier2(
-                vk::DependencyInfo{.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &to_dst});
-            cmdbuf.copyImage(ui_image.GetImage(), vk::ImageLayout::eTransferSrcOptimal, copy.image,
-                             vk::ImageLayout::eTransferDstOptimal,
-                             vk::ImageCopy{.srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
-                                           .dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
-                                           .extent = {ui_w, ui_h, 1}});
-            const auto to_read = vk::ImageMemoryBarrier2{
-                .srcStageMask = vk::PipelineStageFlagBits2::eCopy,
-                .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
-                .dstStageMask = vk::PipelineStageFlagBits2::eAllCommands,
-                .dstAccessMask = vk::AccessFlagBits2::eShaderRead,
-                .oldLayout = vk::ImageLayout::eTransferDstOptimal,
-                .newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
-                .image = copy.image,
-                .subresourceRange = color_range,
-            };
-            cmdbuf.pipelineBarrier2(
-                vk::DependencyInfo{.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &to_read});
-            runtime.Transit(&ui_image, vk::ImageLayout::eShaderReadOnlyOptimal,
-                            vk::PipelineStageFlagBits2::eFragmentShader,
-                            vk::AccessFlagBits2::eShaderRead);
-            runtime.FlushBarriers();
-            slot.address = hudless_vo;
-            target.ui_slot = static_cast<s32>(hudless_ui_next % hudless_ui.size());
-            ++hudless_ui_next;
-        }
-    }
     auto& ui = image_infos[hudless_ui_info];
     ui.imageView = hudless_clear.rt_view;
     ui.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
@@ -1065,38 +1000,12 @@ bool Rasterizer::BeginHudless(const GraphicsPipeline* pipeline, const RenderStat
     return true;
 }
 
-vk::ImageView Rasterizer::HudlessUi(VAddr address, u32& width, u32& height) {
-    if (hudless_ui_taken < 0) {
-        return {};
-    }
-    const auto& slot = hudless_ui[hudless_ui_taken];
-    if (slot.address != address || !slot.copy.image) {
-        return {};
-    }
-    width = slot.copy.width;
-    height = slot.copy.height;
-    return slot.copy.rt_view;
-}
-
-void Rasterizer::SetHudlessUiFrames(u32 frames) {
-    // A composite's copy is read when the present thread composes its frame. Ahead of it: the
-    // other queued presentation frames and the composite being drawn, which copies before its
-    // flip waits for a free frame. With 4 copies and 4 frames the newest one overwrote the copy
-    // still to be read once the queue was full (GPU bound, 1440p): another frame's UI alpha
-    // mixed the real frame into generated ones, a dark lagging rectangle (1.2.0).
-    hudless_ui.resize(std::max<size_t>(hudless_ui.size(), frames + 2));
-}
-
 vk::ImageView Rasterizer::TakeHudless(VAddr address, vk::Format format) {
-    hudless_ui_taken = -1;
     const auto it = hudless_images.find(address);
     if (it == hudless_images.end() || !std::exchange(it->second.fresh, false)) {
         return {};
     }
     auto& target = it->second;
-    // The copy this composite took; none when it took none (an older copy of the same video out
-    // image holds another frame's panels).
-    hudless_ui_taken = target.ui_slot;
     if (!target.read_view) {
         // As the presenter's view of the video out image: alpha excluded.
         auto [result, view] = instance.GetDevice().createImageView(vk::ImageViewCreateInfo{

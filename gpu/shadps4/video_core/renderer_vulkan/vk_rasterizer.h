@@ -150,13 +150,6 @@ public:
     /// out image at `address`, viewed as `format` (layout ShaderReadOnlyOptimal), when it was
     /// drawn since the last call; else a null view.
     vk::ImageView TakeHudless(VAddr address, vk::Format format);
-    /// sotc: after TakeHudless returned an image: the UI layer that composite blended (a copy,
-    /// layout ShaderReadOnlyOptimal, kept for the next few composites), its alpha composes the
-    /// HUD over generated frames; a null view when there is none.
-    vk::ImageView HudlessUi(VAddr address, u32& width, u32& height);
-    /// sotc: the presenter's number of presentation frames, before the first frame: sizes the
-    /// ring of UI copies (HudlessUi).
-    void SetHudlessUiFrames(u32 frames);
 
 private:
     void PrepareRenderState(const GraphicsPipeline* pipeline);
@@ -352,18 +345,8 @@ private:
         struct VmaAllocation_T* allocation{};
         u32 width{}, height{};
         bool fresh{};
-        s32 ui_slot{-1}; ///< sotc: the hudless_ui copy its last composite took, -1 none
     };
     void DestroyHudless(HudlessImage& image);
-    /// sotc: copies of the composite's UI layer (HudlessUi), a ring: the present thread reads one
-    /// when it composes that frame, after every queued presentation frame (SetHudlessUiFrames).
-    struct HudlessUiCopy {
-        HudlessImage copy;
-        VAddr address{};
-    };
-    std::vector<HudlessUiCopy> hudless_ui = std::vector<HudlessUiCopy>(4);
-    u32 hudless_ui_next{};
-    s32 hudless_ui_taken{-1}; ///< the copy of the last TakeHudless, -1 none
     std::unordered_map<VAddr, HudlessImage> hudless_images; ///< by video out address
     HudlessImage hudless_clear;  ///< 1x1, all zero: the UI layer of the redraw
     s32 hudless_ui_info{-1};     ///< this draw: image_infos index of the UI texture, -1 none

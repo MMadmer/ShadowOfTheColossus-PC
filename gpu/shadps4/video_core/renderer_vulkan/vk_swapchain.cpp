@@ -11,6 +11,7 @@
 #include "imgui/renderer/imgui_core.h"
 #include "sdl_window.h"
 #include "video_core/renderer_vulkan/vk_dlssg.h"
+#include "video_core/renderer_vulkan/vk_fsrfg.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_swapchain.h"
 
@@ -31,7 +32,7 @@ Swapchain::Swapchain(const Instance& instance_, const Frontend::WindowSDL& windo
 }
 
 Swapchain::~Swapchain() {
-    Destroy();
+    Destroy(true);
     instance.GetInstance().destroySurfaceKHR(surface);
 }
 
@@ -73,7 +74,14 @@ void Swapchain::Create(u32 width_, u32 height_) {
         .oldSwapchain = nullptr,
     };
 
-    auto [swapchain_result, chain] = instance.GetDevice().createSwapchainKHR(swapchain_info);
+    // sotc: with FSR 3 frame generation, AMD's frame generation swap chain (vk_fsrfg.h).
+    vk::SwapchainKHR chain{};
+    vk::Result swapchain_result{};
+    if (const auto ffx_result = FsrFg::CreateSwapchain(swapchain_info, chain)) {
+        swapchain_result = *ffx_result;
+    } else {
+        std::tie(swapchain_result, chain) = instance.GetDevice().createSwapchainKHR(swapchain_info);
+    }
     ASSERT_MSG(swapchain_result == vk::Result::eSuccess, "Failed to create swapchain: {}",
                vk::to_string(swapchain_result));
     swapchain = chain;
@@ -108,8 +116,10 @@ void Swapchain::SetHDR(bool hdr) {
 bool Swapchain::AcquireNextImage() {
     vk::Device device = instance.GetDevice();
     vk::Result result =
-        device.acquireNextImageKHR(swapchain, std::numeric_limits<u64>::max(),
-                                   image_acquired[frame_index], VK_NULL_HANDLE, &image_index);
+        FsrFg::OwnsSwapchain()
+            ? FsrFg::AcquireNextImage(swapchain, image_acquired[frame_index], image_index)
+            : device.acquireNextImageKHR(swapchain, std::numeric_limits<u64>::max(),
+                                         image_acquired[frame_index], VK_NULL_HANDLE, &image_index);
 
     switch (result) {
     case vk::Result::eSuccess:
@@ -139,7 +149,8 @@ bool Swapchain::Present() {
         .pImageIndices = &image_index,
     };
 
-    auto result = instance.GetPresentQueue().presentKHR(present_info);
+    auto result = FsrFg::OwnsSwapchain() ? FsrFg::QueuePresent(present_info)
+                                         : instance.GetPresentQueue().presentKHR(present_info);
     if (result == vk::Result::eErrorOutOfDateKHR || result == vk::Result::eSuboptimalKHR) {
         needs_recreation = true;
     } else {
@@ -271,8 +282,10 @@ void Swapchain::SetSurfaceProperties() {
     }
 }
 
-void Swapchain::Destroy() {
+void Swapchain::Destroy(bool last) {
     vk::Device device = instance.GetDevice();
+    // sotc: the frame generation swap chain's presenter thread is done with its queues first.
+    FsrFg::WaitForPresents();
     const auto wait_result = device.waitIdle();
     if (wait_result != vk::Result::eSuccess) {
         LOG_WARNING(Render_Vulkan, "Failed to wait for device to become idle: {}",
@@ -284,9 +297,14 @@ void Swapchain::Destroy() {
     }
     images_view.clear();
 
-    if (swapchain) {
+    if (FsrFg::OwnsSwapchain()) {
+        if (swapchain || last) {
+            FsrFg::DestroySwapchain(swapchain, last);
+        }
+    } else if (swapchain) {
         device.destroySwapchainKHR(swapchain);
     }
+    swapchain = nullptr;
 
     for (const auto& sem : image_acquired) {
         device.destroySemaphore(sem);
@@ -326,7 +344,13 @@ void Swapchain::RefreshSemaphores() {
 
 void Swapchain::SetupImages() {
     vk::Device device = instance.GetDevice();
-    auto [images_result, imgs] = device.getSwapchainImagesKHR(swapchain);
+    vk::Result images_result{};
+    std::vector<vk::Image> imgs;
+    if (FsrFg::OwnsSwapchain()) {
+        images_result = FsrFg::GetSwapchainImages(swapchain, imgs);
+    } else {
+        std::tie(images_result, imgs) = device.getSwapchainImagesKHR(swapchain);
+    }
     ASSERT_MSG(images_result == vk::Result::eSuccess, "Failed to create swapchain images: {}",
                vk::to_string(images_result));
     images = std::move(imgs);

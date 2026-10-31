@@ -102,8 +102,8 @@ private:
     /// Sets the surface properties according to device capabilities
     void SetSurfaceProperties();
 
-    /// Destroys current swapchain resources
-    void Destroy();
+    /// Destroys current swapchain resources; sotc: `last` with AMD's frame generation swap chain.
+    void Destroy(bool last = false);
 
     /// Performs creation of image views and framebuffers from the swapchain images
     void SetupImages();

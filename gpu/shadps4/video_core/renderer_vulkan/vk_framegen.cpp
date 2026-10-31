@@ -175,8 +175,8 @@ bool NvidiaGpu() {
 }
 
 bool WantStreamline() {
-    // With fsr too, so that F8 can still switch to DLSS-G.
-    if (AskedMode() == Asked::Off) {
+    // sotc: FSR 3 runs on AMD's frame generation swap chain, which Streamline's cannot share.
+    if (AskedMode() == Asked::Off || AskedMode() == Asked::Fsr) {
         return false;
     }
     if (!NvidiaGpu()) {

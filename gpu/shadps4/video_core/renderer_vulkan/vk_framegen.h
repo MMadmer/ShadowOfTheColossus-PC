@@ -5,8 +5,9 @@
 //
 // SOTC_FRAMEGEN=off|auto|dlss|fsr chooses the mode at start (the launcher's setting; the old
 // SOTC_DLSSG=1 means dlss). auto: DLSS-G when the GPU has it, else FSR 3. F8 in game switches
-// off -> DLSS-G -> FSR 3 -> off, skipping what the GPU cannot do. Streamline (DLSS-G) is loaded
-// only with an NVIDIA GPU and a mode other than off, so with off F8 offers FSR 3 alone.
+// between off and the mode of the session: each runs on a swap chain of its own (Streamline's
+// for DLSS-G, AMD's frame generation swap chain for FSR 3), chosen at start. Streamline is
+// loaded only with an NVIDIA GPU and dlss or auto.
 
 #pragma once
 

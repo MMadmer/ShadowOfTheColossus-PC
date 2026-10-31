@@ -16,6 +16,7 @@
 #include "sdl_window.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
 #include "video_core/renderer_vulkan/vk_dlssg.h"
+#include "video_core/renderer_vulkan/vk_framegen.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_platform.h"
@@ -507,20 +508,58 @@ bool Instance::CreateDevice() {
         return false;
     }
 
-    static constexpr std::array queue_priorities = {1.0f};
-    const vk::DeviceQueueCreateInfo queue_info = {
+    // sotc: with frame generation asked at start, the queues of AMD's frame generation swap chain
+    // (vk_fsrfg.cpp), as Dead Air Refined keeps them: its presenter's two from the graphics family
+    // when it has them (NVIDIA: 16), else from a compute family (AMD and Intel have one graphics
+    // queue), and an async compute queue of a compute family.
+    static constexpr std::array queue_priorities = {1.0f, 1.0f, 1.0f};
+    boost::container::static_vector<vk::DeviceQueueCreateInfo, 2> queue_infos;
+    u32 graphics_count = 1, compute_count = 0;
+    u32 compute_family = queue_family_index;
+    std::array<u32, 3> fg_index{}; // present, acquire, async compute, in their families
+    if (FrameGen::AskedAtStart()) {
+        for (std::size_t i = 0; i < family_properties.size(); i++) {
+            const auto flags = family_properties[i].queueFlags;
+            if ((flags & vk::QueueFlagBits::eCompute) && !(flags & vk::QueueFlagBits::eGraphics)) {
+                compute_family = static_cast<u32>(i);
+                break;
+            }
+        }
+        const u32 compute_avail =
+            compute_family != queue_family_index ? family_properties[compute_family].queueCount : 0;
+        if (family_properties[queue_family_index].queueCount >= 3) {
+            fg_queue_family = queue_family_index;
+            fg_index = {1, 2, 0};
+            graphics_count = 3;
+            compute_count = std::min(compute_avail, 1u);
+        } else if (compute_avail >= 2) {
+            fg_queue_family = compute_family;
+            fg_index = {0, 1, 2};
+            compute_count = std::min(compute_avail, 3u);
+        }
+    }
+    const bool fg_queues_wanted = graphics_count == 3 || compute_count >= 2;
+    const bool fg_async = fg_queues_wanted && compute_count == (graphics_count == 3 ? 1u : 3u);
+    queue_infos.push_back({
         .queueFamilyIndex = queue_family_index,
-        .queueCount = static_cast<u32>(queue_priorities.size()),
+        .queueCount = graphics_count,
         .pQueuePriorities = queue_priorities.data(),
-    };
+    });
+    if (compute_count) {
+        queue_infos.push_back({
+            .queueFamilyIndex = compute_family,
+            .queueCount = compute_count,
+            .pQueuePriorities = queue_priorities.data(),
+        });
+    }
 
     const auto vk11_features = feature_chain.get<vk::PhysicalDeviceVulkan11Features>();
     vk12_features = feature_chain.get<vk::PhysicalDeviceVulkan12Features>();
     vk13_features = feature_chain.get<vk::PhysicalDeviceVulkan13Features>();
     vk::StructureChain device_chain = {
         vk::DeviceCreateInfo{
-            .queueCreateInfoCount = 1u,
-            .pQueueCreateInfos = &queue_info,
+            .queueCreateInfoCount = static_cast<u32>(queue_infos.size()),
+            .pQueueCreateInfos = queue_infos.data(),
             .enabledExtensionCount = static_cast<u32>(enabled_extensions.size()),
             .ppEnabledExtensionNames = enabled_extensions.data(),
         },
@@ -583,8 +622,11 @@ bool Instance::CreateDevice() {
         },
         vk::PhysicalDeviceVulkan13Features{
             .robustImageAccess = vk13_features.robustImageAccess,
+            // sotc: vkCreatePrivateDataSlot, AMD FidelityFX (vk_fsrfg.cpp).
+            .privateData = vk13_features.privateData,
             .shaderDemoteToHelperInvocation = vk13_features.shaderDemoteToHelperInvocation,
             .subgroupSizeControl = vk13_features.subgroupSizeControl,
+            .computeFullSubgroups = vk13_features.computeFullSubgroups,
             .synchronization2 = vk13_features.synchronization2,
             .dynamicRendering = vk13_features.dynamicRendering,
             .maintenance4 = vk13_features.maintenance4,
@@ -737,6 +779,14 @@ bool Instance::CreateDevice() {
 
     graphics_queue = device->getQueue(queue_family_index, 0);
     present_queue = device->getQueue(queue_family_index, 0);
+    if (fg_queues_wanted) {
+        fg_queues[0] = device->getQueue(fg_queue_family, fg_index[0]);
+        fg_queues[1] = device->getQueue(fg_queue_family, fg_index[1]);
+    }
+    if (fg_async) {
+        fg_async_family = compute_family;
+        fg_queues[2] = device->getQueue(compute_family, fg_index[2]);
+    }
 
     if (calibrated_timestamps) {
         const auto [time_domains_result, time_domains] =

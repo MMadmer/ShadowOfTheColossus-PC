@@ -297,8 +297,8 @@ extern "C" uint64_t runtime_file_read_ns_take(void);
 
 // sotc: SOTC_ASYNC_PRESENT=1. Measured with DLSS-G: Streamline's present returns in 0.1 ms
 // (its pacer presents on a thread of its own), so the vblank thread keeps presenting by default.
-// FSR 3 frame generation presents the game frame half a frame after the generated one: from
-// the first FSR 3 frame on, the presenter has a thread of its own (vblank thread only).
+// FSR 3 frame generation: AMD's swap chain may wait in its present for its presenter thread;
+// from the first FSR 3 frame on, the presenter has a thread of its own (vblank thread only).
 bool VideoOutDriver::AsyncPresent() {
     static const bool async = [] {
         const char* v = std::getenv("SOTC_ASYNC_PRESENT");

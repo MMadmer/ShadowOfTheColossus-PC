@@ -77,6 +77,25 @@ public:
         return present_queue;
     }
 
+    /// sotc: queues kept for AMD's frame generation swap chain (vk_fsrfg.cpp): its presenter's
+    /// two (0: present, 1: image acquire; graphics family queues 1 and 2, else two of a compute
+    /// family) and an async compute queue (2, null without a compute family).
+    bool HasFgQueues() const {
+        return static_cast<bool>(fg_queues[1]);
+    }
+
+    u32 GetFgQueueFamily() const {
+        return fg_queue_family;
+    }
+
+    u32 GetFgAsyncComputeFamily() const {
+        return fg_async_family;
+    }
+
+    vk::Queue GetFgQueue(u32 index) const {
+        return fg_queues[index];
+    }
+
     TracyVkCtx GetProfilerContext() const {
         return profiler_context;
     }
@@ -638,6 +657,9 @@ private:
     VmaAllocator allocator{};
     vk::Queue present_queue;
     vk::Queue graphics_queue;
+    std::array<vk::Queue, 3> fg_queues{};
+    u32 fg_queue_family{};
+    u32 fg_async_family{};
     std::vector<vk::PhysicalDevice> physical_devices;
     std::vector<std::string> available_extensions;
     std::unordered_map<vk::Format, vk::FormatProperties3> format_properties;

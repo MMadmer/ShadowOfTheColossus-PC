@@ -1,71 +1,85 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-// sotc: AMD FSR 3 frame generation (FidelityFX SDK 2.3 optical flow + frame interpolation,
-// third_party/fsr-vulkan) for GPUs without DLSS-G: RTX 20/30, AMD, Intel.
+// sotc: AMD FSR 3.1 frame generation through AMD's own runtime (amd_fidelityfx_vk.dll, FidelityFX
+// SDK 1.1.4, ffx-api; next to bb-probe.exe), as in Dead Air Refined: GPUs without DLSS-G.
 //
-// Inputs are DLSS-G's (vk_dlssg.h: the G-buffer depth and motion vectors, the camera), with the
-// depth converted to R32F. At each game frame the presenter interpolates between the previous
-// frame and this one, presents that image, then presents the game frame half a frame later on
-// the presenter thread (VideoOutDriver::AsyncPresent). The overlay is drawn on both.
+// The runtime's frame generation swap chain replaces the presenter's when FSR 3 is the mode at
+// start: its present generates a frame between the last game frame and this one and paces both
+// on a thread of its own. Inputs are DLSS-G's (vk_dlssg.h: the G-buffer depth, converted to
+// R32F, the motion vectors with the sky's camera motion, the camera), and the HUD-less frame:
+// the runtime takes the HUD (and the port's overlay) as the difference between the presented
+// image and that frame, and lays it over the generated frame unmoved.
 
 #pragma once
 
+#include <optional>
+#include <vector>
 #include "common/types.h"
 #include "video_core/renderer_vulkan/vk_common.h"
 
 namespace Vulkan {
 class Instance;
-class Scheduler;
 }
 
 namespace Vulkan::FsrFg {
 
-/// After the device is created: the depth conversion pipeline; checks the device can run FSR 3.
+/// After the device is created: the depth conversion pipeline; loads the runtime when frame
+/// generation was asked at start and the device kept the queues of its presenter.
 void Init(const Instance& instance);
 
 /// FSR 3 frame generation can run on this device.
 bool Supported();
 
+/// Swapchain (vk_swapchain.cpp). The first chain decides: with FSR 3 the mode at start, the
+/// runtime's swap chain replaces it for the session (DLSS-G is then unavailable); otherwise FSR 3
+/// becomes unavailable. nullopt: make a plain swapchain.
+std::optional<vk::Result> CreateSwapchain(const vk::SwapchainCreateInfoKHR& info,
+                                          vk::SwapchainKHR& chain);
+
+/// The runtime's swap chain is the presenter's.
+bool OwnsSwapchain();
+
+/// Replacements of vkGetSwapchainImagesKHR, vkAcquireNextImageKHR and vkQueuePresentKHR (on the
+/// graphics queue, without Scheduler::submit_mutex: the runtime submits under it).
+vk::Result GetSwapchainImages(vk::SwapchainKHR chain, std::vector<vk::Image>& images);
+vk::Result AcquireNextImage(vk::SwapchainKHR chain, vk::Semaphore acquired, u32& index);
+vk::Result QueuePresent(const vk::PresentInfoKHR& info);
+
+/// The presents the runtime queued are done.
+void WaitForPresents();
+
+/// Destroys a chain; `last`: with the runtime's swap chain itself (the presenter goes).
+void DestroySwapchain(vk::SwapchainKHR chain, bool last);
+
 /// Command processor thread (Dlssg::PrepareInputs): converts this frame's depth copy (layout
-/// ShaderReadOnlyOptimal, sampled through `depth_view`) to R32F for presentation frame `frame_id`
-/// and keeps a copy of its motion vectors (`mvec`, R16G16 float, ShaderReadOnlyOptimal before and
-/// after), taken before DLSS's camera motion fill rewrites them.
-void ConvertDepth(u32 frame_id, vk::CommandBuffer cmdbuf, vk::ImageView depth_view, vk::Image mvec,
-                  u32 width, u32 height, bool inverted);
+/// ShaderReadOnlyOptimal, sampled through `depth_view`) to R32F, 0 at the near plane, for
+/// presentation frame `frame_id`.
+void ConvertDepth(u32 frame_id, vk::CommandBuffer cmdbuf, vk::ImageView depth_view, u32 width,
+                  u32 height, bool inverted);
 
 /// Presentation frame `frame_id` has no depth for FSR 3 (yet).
 void NoDepth(u32 frame_id);
 
-/// Present thread, at a game frame: the time since the last one, for the pacing.
-void NoteGameFrame();
+/// What a present shows (Presenter::Present).
+struct PresentInputs {
+    u32 frame_id;           ///< presentation frame
+    bool game_frame;        ///< a new game frame (not a repeat or a blank frame)
+    vk::Image hudless;      ///< the frame without the HUD (layout General), or null
+    u32 hudless_width, hudless_height;
+    u32 frame_width, frame_height;
+    vk::Rect2D rect;        ///< where the frame lands in the swapchain image (letterboxed)
+    vk::Extent2D extent;    ///< of the swapchain image
+    vk::Image backbuffer;   ///< the swapchain image, frame and overlay drawn (ColorAttachmentOptimal)
+    bool hdr;               ///< the swapchain is HDR (no frame generation)
+};
 
-/// Present thread: records the interpolation between the last game frame and this one
-/// (`frame_image`, layout General before and after, `width` x `height`). Returns the generated
-/// image (RGBA8, layout General, same size) to present now, or a null image when there is none
-/// (first frame, after a cut or a frame without inputs). `hudless_image`: the same frame without
-/// the HUD (layout General before and after, same size), or a null image. sotc: `ui_view`: the
-/// game's UI layer of that frame (ShaderReadOnlyOptimal, any size), whose alpha lays the HUD over
-/// the generated scene, or a null view.
-vk::Image Generate(vk::CommandBuffer cmdbuf, u32 frame_id, vk::Image frame_image, u32 width,
-                   u32 height, vk::Image hudless_image, vk::ImageView ui_view);
+/// Present thread, recording the present into `cmdbuf` (submitted before QueuePresent): the
+/// HUD-less frame at the swapchain's size and FSR 3's preparation from this frame's depth,
+/// motion vectors and camera, then generation on for this present; off when the mode is not
+/// FSR 3 or the frame has no inputs.
+void RecordPresent(vk::CommandBuffer cmdbuf, const PresentInputs& in);
 
-/// Present thread: the commands of Generate were submitted at `tick` of `scheduler`.
-void Submitted(Scheduler& scheduler, u64 tick);
-
-/// Present thread, after the generated frame was presented: waits until the game frame is due
-/// (half the frame interval later).
-void WaitForGameFrame();
-
-/// Present thread, after each present while FSR 3 runs: the pacing statistics (SOTC_FSRFG_LOG=1
-/// prints them every 5 s).
-void NotePresent();
-
-/// sotc: present thread, at each present. A few presents after the mode left FSR 3 (F8, the
-/// in-game menu), the context, its images and the depth images (up to ~130 MB at 1080p) are
-/// freed once `draw` (the scheduler ConvertDepth records on) finished the depth conversions
-/// recorded before; switched on again, FSR 3 makes them as at its first use.
-void Update(bool fsr_enabled, Scheduler& draw);
-
-/// sotc: frees them at once (the presenter's destructor, with the schedulers finished).
+/// sotc: frees the frame generation context and the images (the presenter's destructor, with
+/// the schedulers finished). The swap chain goes with the presenter's (DestroySwapchain).
 void Shutdown();
 
 } // namespace Vulkan::FsrFg
