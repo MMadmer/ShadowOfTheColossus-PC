@@ -271,6 +271,17 @@ bool WindowSDL::PollEvents() {
             UpdateTextTitle();
         }
     }
+    // sotc: the shader loading window held the foreground; a window that is not in front leaves
+    // the taskbar over a borderless one. Not the test window, which stays behind.
+    if (raise_request.exchange(false, std::memory_order_relaxed) && !g_behind_hwnd) {
+        SDL_RaiseWindow(window);
+#ifdef _WIN32
+        if (HWND hwnd = static_cast<HWND>(SDL_GetPointerProperty(
+                SDL_GetWindowProperties(window), SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr))) {
+            SetForegroundWindow(hwnd);
+        }
+#endif
+    }
     if (const s8 fs = fullscreen_request.exchange(-1, std::memory_order_relaxed); fs >= 0) {
         SDL_SetWindowFullscreen(window, fs != 0);
     }

@@ -32,6 +32,8 @@ public:
     bool IsFullscreen() const;
     /// Processes pending window events. Returns false once the user closed the window.
     bool PollEvents();
+    /// sotc: brings the window to the foreground at the next PollEvents (any thread).
+    void RequestRaise() { raise_request.store(true, std::memory_order_relaxed); }
     /// Keyboard text entry for the system IME dialog; typed text shows in the title bar.
     void BeginTextInput(const std::string& initial, const std::string& prompt);
     /// 0 while typing, 1 confirmed (Enter), 2 cancelled (Escape); text is UTF-8.
@@ -41,6 +43,7 @@ private:
     std::atomic<s32> width, height;
     std::atomic<bool> is_open{true};
     std::atomic<s8> fullscreen_request{-1}; ///< sotc: SetFullscreen's state for PollEvents, -1 none
+    std::atomic<bool> raise_request{false};  ///< sotc: RequestRaise, for PollEvents
     std::mutex text_mutex;
     bool text_requested{}, text_active{};
     int text_state{};

@@ -134,6 +134,15 @@ def run_command():
     return [sys.executable, '--run'] if FROZEN else [sys.executable, str(PORT_DIR / 'sotc.py')]
 
 
+def allow_game_foreground():
+    """Lets the game (two processes down) take the foreground from the launcher: a borderless
+    window that is not in front keeps the taskbar over it."""
+    try:
+        ctypes.windll.user32.AllowSetForegroundWindow(-1)  # ASFW_ANY
+    except (AttributeError, OSError):
+        pass
+
+
 def exit_value(code):
     """The sys.exit() value that ends this process with exit code `code` (as sotc.py's): from
     0x80000000 up its signed 32-bit value, since older Pythons exit with -1 (0xffffffff) for a
@@ -2473,6 +2482,7 @@ class Launcher:
         try:
             env = game_environment(self.app)
             env['SOTC_EVENT_LOG'] = start_event_log(user_dir(self.app), self.app, env)
+            allow_game_foreground()
             self.process = subprocess.Popen(run_command(), cwd=PORT_DIR, env=env,
                                             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                             stderr=subprocess.STDOUT, creationflags=NO_WINDOW)
@@ -2775,6 +2785,7 @@ def play_without_window(settings):
     with open_session_log(log_dir) as log:
         env = game_environment(settings)
         env['SOTC_EVENT_LOG'] = start_event_log(log_dir, settings, env)
+        allow_game_foreground()
         process = subprocess.Popen(run_command(), cwd=PORT_DIR, env=env,
                                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                    stderr=subprocess.STDOUT, creationflags=NO_WINDOW)

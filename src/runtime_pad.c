@@ -335,6 +335,7 @@ static void apply_keyboard(PadData *d, const bool *k) {
 
 /* sotc: the captured mouse turns the camera (right stick) and presses its bound buttons.
  * SOTC_MOUSE_SENS (default 1.0) scales the motion, SOTC_MOUSE_INVERT=1 inverts the vertical. */
+static unsigned mouse_buttons; /* this sample's buttons from the mouse (skip_movie ignores them) */
 static int apply_mouse(PadData *d) { /* 1: the mouse moved or pressed a bound button */
     static float sensitivity=-1, smooth_x, smooth_y; static int invert;
     if (sensitivity<0) {
@@ -344,6 +345,7 @@ static int apply_mouse(PadData *d) { /* 1: the mouse moved or pressed a bound bu
         invert=getenv("SOTC_MOUSE_INVERT") && getenv("SOTC_MOUSE_INVERT")[0]=='1';
     }
     float dx=0, dy=0; unsigned held=0;
+    mouse_buttons=0;
     if (!bbgpu_mouse_take(&dx,&dy,&held)) { smooth_x=smooth_y=0; return 0; }
     int used=dx*dx+dy*dy>9.0f;
     static int told;
@@ -356,6 +358,7 @@ static int apply_mouse(PadData *d) { /* 1: the mouse moved or pressed a bound bu
         else if (i==IN_TOUCHPAD) touch_click(d,0);
         else if (i==IN_TOUCHPAD_RIGHT) touch_click(d,1);
         d->buttons|=input_buttons[i];
+        mouse_buttons|=input_buttons[i];
     }
     /* Pixels moved since the last sample, averaged with the sample before (the game may read
      * the pad between two mouse reports), become a stick deflection past the game's dead zone.
@@ -704,7 +707,9 @@ static void skip_movie(PadData *d) {
     const unsigned commands=bbgpu_frame_commands();
     int done=now-since>180000000ull;  /* never stuck behind the loading screen */
     if (state==SKIP_WATCH) {
-        done|=d->buttons!=0;          /* the player took over */
+        /* The player took over; a click is not taken for that: it is how the window gets the
+         * focus back during the loading (1.2.0, the movie played). */
+        done|=(d->buttons & ~mouse_buttons)!=0;
         busy_since=commands>900 ? (busy_since ? busy_since : now) : 0;
         if (busy_since && now-busy_since>=200000) {
             state=SKIP_HOLD; hold_start=now; calm_since=0;
