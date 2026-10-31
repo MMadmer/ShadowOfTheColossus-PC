@@ -34,6 +34,7 @@
 
 typedef struct {
     int used, type, channels, is_float, frames, sample_bytes, std_layout;
+    int downmix; /* sotc: an 8-channel port on a stereo device, mixed down in output_port */
     int32_t volume[8];
     SDL_AudioStream *stream;
     uint64_t open_tried_ns; /* sotc: last attempt to open the device stream (open_stream) */
@@ -74,9 +75,13 @@ static int sdl_audio(void) {
 }
 /* sotc: the device stream of a port. With no device at the time (a Bluetooth headset not ready
  * yet, a device change) the port used the timer sink for the whole session: it now tries again
- * every second from the output path (#214). */
+ * every second from the output path (#214). An 8-channel port on a stereo device gets a stereo
+ * stream (see output_port); 6- and 8-channel devices take the 7.1 stream as it is. */
 static void open_stream(Port *p) {
-    SDL_AudioSpec spec={p->is_float ? SDL_AUDIO_F32 : SDL_AUDIO_S16, p->channels, 48000};
+    SDL_AudioSpec device;
+    p->downmix=p->channels==8 && SDL_GetAudioDeviceFormat(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK,&device,NULL) &&
+               device.channels==2;
+    SDL_AudioSpec spec={p->is_float ? SDL_AUDIO_F32 : SDL_AUDIO_S16, p->downmix ? 2 : p->channels, 48000};
     p->open_tried_ns=now_ns();
     p->stream=SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK,&spec,NULL,NULL);
     if (p->stream) SDL_ResumeAudioStreamDevice(p->stream);
@@ -135,12 +140,13 @@ static ABI int32_t audio_open(int32_t user, int32_t type, int32_t index, uint32_
     const char *dump=getenv("BB_AUDIO_DUMP");
     if (dump) {
         char path[4096];
-        snprintf(path,sizeof(path),"%s.port%d.%dch.%s",dump,id,p->channels,p->is_float ? "f32" : "s16");
+        snprintf(path,sizeof(path),"%s.port%d.%dch.%s",dump,id,p->downmix ? 2 : p->channels,p->is_float ? "f32" : "s16");
         p->dump=fopen(path,"wb");
     }
     ++ports_opened;
     pthread_mutex_unlock(&table_lock);
-    printf("Runtime: audio port %d opened (type %d, %d ch, %s, %u frames)\n",id,type,p->channels,p->is_float ? "float" : "s16",length);
+    printf("Runtime: audio port %d opened (type %d, %d ch, %s, %u frames%s)\n",id,type,p->channels,p->is_float ? "float" : "s16",length,
+           p->downmix ? ", mixed down to the stereo device" : "");
     return (type<<16) | id | 0x20000000;
 }
 static ABI int32_t audio_close(int32_t handle) {
@@ -195,6 +201,16 @@ static inline float soft_limit(float v) {
     float o=0.8f+0.2f*tanhf((a-0.8f)/0.2f);
     return v<0.0f ? -o : o;
 }
+/* sotc: 7.1 (SDL order: FL FR FC LFE BL BR SL SR) to stereo for a stereo device (#214, #95).
+ * SDL's own conversion weights the front channels 0.21 (-13.5 dB) so that its sum never clips,
+ * and the game was very quiet on headphones and stereo speakers. ITU-R BS.775: front at unity,
+ * centre and surrounds at -3 dB, LFE left out; peaks of the sum go through the soft limiter. */
+static inline void downmix_stereo(const float v[8], float *left, float *right) {
+    const float k=0.70710678f;
+    const float l=v[0]+k*(v[2]+v[4]+v[6]), r=v[1]+k*(v[2]+v[5]+v[7]);
+    *left=soft_limit(l);
+    *right=soft_limit(r);
+}
 
 /* `pace`: wait for this port's next period. sceAudioOutOutputs waits once for all its ports. */
 static int32_t output_port(int32_t handle, const void *data, int pace) {
@@ -204,7 +220,15 @@ static int32_t output_port(int32_t handle, const void *data, int pace) {
     pthread_mutex_unlock(&table_lock);
     if (!p) return error;
     pthread_mutex_lock(&p->lock);
-    size_t samples=(size_t)p->frames*(size_t)p->channels, bytes=samples*(size_t)p->sample_bytes;
+    /* Before the buffer is converted: a stream opened now may be a stereo one (downmix). */
+    if (data && !p->stream && sdl_ready>0 && now_ns()-p->open_tried_ns>=1000000000u) {
+        open_stream(p);
+        if (p->stream) printf("Runtime: audio port %d: device stream opened%s\n",(int)(p-ports),
+                              p->downmix ? " (mixed down to the stereo device)" : "");
+    }
+    /* bytes: what goes to the device stream (2 channels when mixed down) */
+    const int out_channels=p->downmix ? 2 : p->channels;
+    size_t samples=(size_t)p->frames*(size_t)p->channels, bytes=(size_t)p->frames*(size_t)out_channels*(size_t)p->sample_bytes;
     uint64_t period=(uint64_t)p->frames*1000000000u/48000u;
     if (data) {
         /* Apply per-channel volume and map PS4 8ch (L R C LFE SL SR BL BR) to SDL 7.1 order. */
@@ -212,19 +236,21 @@ static int32_t output_port(int32_t handle, const void *data, int pace) {
         static const int remap[8]={0,1,2,3,6,7,4,5};
         const float master=master_volume();
         const int limit=master>1.0f;
-        for (size_t f=0;f<(size_t)p->frames;++f) for (int c=0;c<p->channels;++c) {
-            int target=p->channels==8 && !p->std_layout ? remap[c] : c;
-            size_t from=f*(size_t)p->channels+(size_t)c, to=f*(size_t)p->channels+(size_t)target;
-            float gain=(float)p->volume[c]/VOLUME_0DB*master;
-            if (p->is_float) {
-                float v; memcpy(&v,(const char *)data+from*4,4); v*=gain;
-                if (limit) v=soft_limit(v);
-                memcpy(converted+to*4,&v,4);
-            } else {
-                int16_t s16; memcpy(&s16,(const char *)data+from*2,2);
-                float v=(float)s16*gain/32768.0f;
-                if (limit) v=soft_limit(v);
-                s16=(int16_t)(v*32767.0f); memcpy(converted+to*2,&s16,2);
+        for (size_t f=0;f<(size_t)p->frames;++f) {
+            float v[8]={0};
+            for (int c=0;c<p->channels;++c) {
+                const int target=p->channels==8 && !p->std_layout ? remap[c] : c;
+                const size_t from=f*(size_t)p->channels+(size_t)c;
+                const float gain=(float)p->volume[c]/VOLUME_0DB*master;
+                if (p->is_float) { memcpy(&v[target],(const char *)data+from*4,4); v[target]*=gain; }
+                else { int16_t s16; memcpy(&s16,(const char *)data+from*2,2); v[target]=(float)s16*gain/32768.0f; }
+            }
+            if (p->downmix) downmix_stereo(v,&v[0],&v[1]);
+            else if (limit) for (int c=0;c<out_channels;++c) v[c]=soft_limit(v[c]);
+            for (int c=0;c<out_channels;++c) {
+                const size_t to=f*(size_t)out_channels+(size_t)c;
+                if (p->is_float) memcpy(converted+to*4,&v[c],4);
+                else { const int16_t s16=(int16_t)(v[c]*32767.0f); memcpy(converted+to*2,&s16,2); }
             }
         }
         if (p->dump) fwrite(converted,1,bytes,p->dump);
@@ -250,10 +276,6 @@ static int32_t output_port(int32_t handle, const void *data, int pace) {
             if (!p->next_deadline_ns || now>p->next_deadline_ns+8*period) p->next_deadline_ns=now; /* start or stall: restart cadence */
             else sleep_until(p->next_deadline_ns);
             p->next_deadline_ns+=period;
-        }
-        if (!p->stream && sdl_ready>0 && now_ns()-p->open_tried_ns>=1000000000u) {
-            open_stream(p);
-            if (p->stream) printf("Runtime: audio port %d: device stream opened\n",(int)(p-ports));
         }
         if (p->stream) {
             /* The device drains the queue in quanta (21 ms on PipeWire), so the level

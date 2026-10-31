@@ -18,6 +18,7 @@
 #include <errno.h>
 #ifdef _WIN32
 #include <windows.h>
+#include <psapi.h>
 #else
 #include <fcntl.h>
 #include <sys/mman.h>
@@ -706,7 +707,9 @@ static int split_at(uintptr_t a) {
     if (i==vma_count || vmas[i].start>=a) return 0;
     Vma right=vmas[i];
     right.start=a;
-    if (right.kind==KIND_DIRECT) right.phys+=a-vmas[i].start;
+    /* sotc: flexible memory is a contiguous run of the pool as well: the right piece must keep pointing
+     * at its own pages, or a later drop_range frees (and zeroes) the left piece's live ones. */
+    if (right.kind==KIND_DIRECT || right.kind==KIND_FLEXIBLE) right.phys+=a-vmas[i].start;
     dirty(vmas[i].start,vmas[i].end);
     vma_seq_begin();
     vmas[i].end=a;
@@ -768,6 +771,15 @@ static int32_t place(void **inout, uint64_t size, int prot, int flags, uint64_t 
     }
     if (host_map(address,size,host_prot(prot),kind==KIND_RESERVED,phys)) return NO_MEMORY;
     void *mapped=(void *)address;
+    /* sotc: a fixed mapping over live memory replaces it; the GPU side drops what it tracks there
+     * first (as unmap does), or it keeps buffers and images of the old contents. */
+    if (flags & MAP_FIXED_FLAG)
+        for (size_t i=vma_index(address); i<vma_count && vmas[i].start<address+size; ++i)
+            if (vmas[i].kind!=KIND_RESERVED) {
+                uintptr_t lo=vmas[i].start>address ? vmas[i].start : address;
+                uintptr_t hi=vmas[i].end<address+size ? vmas[i].end : address+size;
+                queue_hook(HOOK_UNMAP,lo,hi-lo);
+            }
     drop_range(address,address+size);
     if (vma_insert(vma_index(address),(Vma){address,address+size,kind,prot,type,phys})) return NO_MEMORY;
     if (kind==KIND_FLEXIBLE) flexible_bytes+=size;
@@ -1535,4 +1547,16 @@ void runtime_memory_report(void) {
     printf("Runtime: flexible maps=%zu, in use=%" PRIu64 ", protects=%zu, queries=%zu, regions=%zu\n",
            flexible_maps, flexible_bytes, protects, queries, vma_count);
 }
-
+/* sotc: the process's private bytes (commit charge) and working set, for the per-minute PERF line
+ * (RAM reports, fork #2); 0 where unknown. Views of the guest memory section are not private: they
+ * show in the working set only. */
+void runtime_memory_process_usage(uint64_t *private_bytes, uint64_t *working_set) {
+    *private_bytes=*working_set=0;
+#ifdef _WIN32
+    PROCESS_MEMORY_COUNTERS_EX counters={.cb=sizeof(counters)};
+    if (K32GetProcessMemoryInfo(GetCurrentProcess(),(PROCESS_MEMORY_COUNTERS *)&counters,sizeof(counters))) {
+        *private_bytes=counters.PrivateUsage;
+        *working_set=counters.WorkingSetSize;
+    }
+#endif
+}
