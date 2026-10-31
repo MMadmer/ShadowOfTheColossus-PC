@@ -1172,12 +1172,12 @@ TEXTS = {
         '一般',
         '일반',
     ),
-    'Acima de 30 FPS, algumas cenas podem se comportar de forma diferente.': (
-        'Por encima de 30 FPS, algunas escenas pueden comportarse de forma distinta.',
-        'Выше 30 FPS некоторые сцены могут работать иначе.',
-        '高于 30 FPS 时，部分场景的表现可能有所不同。',
-        '30 FPS を超えると、一部のシーンの挙動が変わる場合があります。',
-        '30 FPS를 넘으면 일부 장면이 다르게 동작할 수 있습니다.',
+    'Acima de 30 FPS, algumas cenas podem se comportar de forma diferente (por exemplo, a luta contra Avion); acima de 60 FPS, o vídeo de abertura pode fechar o jogo.': (
+        'Por encima de 30 FPS, algunas escenas pueden comportarse de forma diferente (por ejemplo, el combate contra Avion); por encima de 60 FPS, el vídeo de apertura puede cerrar el juego.',
+        'При частоте выше 30 FPS некоторые сцены могут работать иначе (например, бой с Авионом); при частоте выше 60 FPS вступительный ролик может привести к закрытию игры.',
+        '高于 30 FPS 时，部分场景的表现可能有所不同（例如与 Avion 的战斗）；高于 60 FPS 时，开场影片可能导致游戏关闭。',
+        '30 FPS を超えると、一部のシーン（例：アヴィオンとの戦い）の挙動が変わる場合があります。60 FPS を超えると、オープニングムービーでゲームが終了する場合があります。',
+        '30 FPS를 넘으면 일부 장면(예: 아비온과의 전투)이 다르게 동작할 수 있으며, 60 FPS를 넘으면 오프닝 영상에서 게임이 종료될 수 있습니다.',
     ),
     'Geração de quadros': (
         'Generación de fotogramas',
@@ -1193,12 +1193,12 @@ TEXTS = {
         'フレーム倍率',
         '프레임 배수',
     ),
-    'NVIDIA DLSS-G; x3 e x4 em placas GeForce RTX 50.': (
-        'NVIDIA DLSS-G; x3 y x4 en tarjetas GeForce RTX serie 50.',
-        'NVIDIA DLSS-G; x3 и x4 на видеокартах GeForce RTX 50.',
-        'NVIDIA DLSS-G；x3 和 x4 适用于 GeForce RTX 50 系列显卡。',
-        'NVIDIA DLSS-G。x3 と x4 は GeForce RTX 50 シリーズで利用できます。',
-        'NVIDIA DLSS-G; x3 및 x4는 GeForce RTX 50 시리즈에서 사용할 수 있습니다.',
+    'NVIDIA DLSS-G; x3 a x6 e Dinâmico em placas GeForce RTX 50.': (
+        'NVIDIA DLSS-G; x3 a x6 y Dinámico en tarjetas GeForce RTX serie 50.',
+        'NVIDIA DLSS-G; x3–x6 и «Динамический» на видеокартах GeForce RTX 50.',
+        'NVIDIA DLSS-G；GeForce RTX 50 系列显卡支持 x3 至 x6 和动态模式。',
+        'NVIDIA DLSS-G。x3～x6 とダイナミックは GeForce RTX 50 シリーズで使用できます。',
+        'NVIDIA DLSS-G. x3~x6 및 동적 모드는 GeForce RTX 50 시리즈에서 사용할 수 있습니다.',
     ),
     'Recurso experimental; só tem efeito com o limite de 30 FPS.': (
         'Función experimental; solo tiene efecto con el límite de 30 FPS.',
@@ -1312,12 +1312,12 @@ TEXTS = {
         '完全な水面反射',
         '완전한 물 반사',
     ),
-    'Desativar melhora o desempenho; não é usado em placas AMD.': (
-        'Desactivarlo mejora el rendimiento; no se usa en tarjetas AMD.',
-        'Отключение повышает производительность; на видеокартах AMD не используется.',
-        '关闭可提升性能；AMD 显卡上不使用此功能。',
-        'オフにするとパフォーマンスが向上します（AMD のグラフィックカードでは使用されません）。',
-        '끄면 성능이 향상되며, AMD 그래픽 카드에서는 사용되지 않습니다.',
+    'Desativar melhora o desempenho; não é usado em placas AMD e Intel.': (
+        'Desactivarlo mejora el rendimiento; no se usa en tarjetas AMD e Intel.',
+        'Отключение повышает производительность; на видеокартах AMD и Intel не используется.',
+        '关闭可提升性能；AMD 和 Intel 显卡上不使用此功能。',
+        'オフにするとパフォーマンスが向上します（AMD および Intel のグラフィックカードでは使用されません）。',
+        '끄면 성능이 향상되며, AMD 및 Intel 그래픽 카드에서는 사용되지 않습니다.',
     ),
     'Otimização de envio à GPU': (
         'Optimización del envío a la GPU',
@@ -2578,6 +2578,13 @@ TEXTS = {
         'shadPS4 的 savedata/{} 文件夹',
         'shadPS4 の savedata/{} フォルダー',
         'shadPS4의 savedata/{} 폴더',
+    ),
+    'Dinâmico': (
+        'Dinámico',
+        'Динамический',
+        '动态',
+        'ダイナミック',
+        '동적',
     ),
 }
 

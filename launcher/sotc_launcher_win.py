@@ -507,9 +507,10 @@ FRAMEGEN = [('off', ('Desligada', 'Off')),
             ('fsr', ('AMD FSR 3.1', 'AMD FSR 3.1'))]
 # Without DLSS-G (a card known not to be an RTX 40/50): automatic means FSR 3.1.
 FRAMEGEN_FSR = [FRAMEGEN[0], FRAMEGEN[1], FRAMEGEN[3]]
-# DLSS-G frames shown per game frame (SOTC_DLSSG_MULT): x3 and x4 need an RTX 50 (multi frame
-# generation; the game keeps x2 where the card does less).
-DLSSG_MULT = [('2', ('x2', 'x2')), ('3', ('x3', 'x3')), ('4', ('x4', 'x4'))]
+# DLSS-G frames shown per game frame (SOTC_DLSSG_MULT): x3 to x6 and Dynamic MFG need an RTX 50
+# (multi frame generation; the game keeps what the card and driver do).
+DLSSG_MULT = [('2', ('x2', 'x2')), ('3', ('x3', 'x3')), ('4', ('x4', 'x4')), ('5', ('x5', 'x5')),
+              ('6', ('x6', 'x6')), ('dynamic', ('Dinâmico', 'Dynamic'))]
 SHARPNESS = [('0', ('Alta', 'High')), ('250', ('Média (padrão)', 'Medium (default)')), ('600', ('Baixa', 'Low')),
              ('off', ('Desligada', 'Off'))]
 MOUSE_SENS = [('0.5', ('0,5 (lenta)', '0.5 (slow)')), ('0.75', ('0,75', '0.75')), ('1.0', ('1,0 (padrão)', '1.0 (default)')),
@@ -1573,16 +1574,18 @@ class Launcher:
         self.section(f, _('Geral', 'General'), top=4)
         self.check(f, 'af16', _('Filtragem anisotrópica 16x', '16x anisotropic filtering'))
         self.row(f, _('Limite de FPS', 'Frame rate limit'), self.choice(f, 'fps_mode', FPS_MODES),
-                 _('Acima de 30 FPS, algumas cenas podem se comportar de forma diferente.',
-                   'Above 30 FPS, some scenes may behave differently.'))
+                 _('Acima de 30 FPS, algumas cenas podem se comportar de forma diferente (por exemplo, a luta '
+                   'contra Avion); acima de 60 FPS, o vídeo de abertura pode fechar o jogo.',
+                   'Above 30 FPS, some scenes may behave differently (for example, the fight with Avion); '
+                   'above 60 FPS, the opening movie may close the game.'))
         self.framegen_boxes.append(self.choice(f, 'framegen', FRAMEGEN))
         self.row(f, _('Geração de quadros', 'Frame generation'), self.framegen_boxes[-1],
                  _('Recurso experimental; só tem efeito com o limite de 30 FPS.',
                    'Experimental feature; effective only with the 30 FPS limit.'))
         self.mult_box = self.choice(f, 'dlssg_mult', DLSSG_MULT)
         self.row(f, _('Multiplicador de quadros', 'Frame multiplier'), self.mult_box,
-                 _('NVIDIA DLSS-G; x3 e x4 em placas GeForce RTX 50.',
-                   'NVIDIA DLSS-G; x3 and x4 on GeForce RTX 50 series cards.'))
+                 _('NVIDIA DLSS-G; x3 a x6 e Dinâmico em placas GeForce RTX 50.',
+                   'NVIDIA DLSS-G; x3 to x6 and Dynamic on GeForce RTX 50 series cards.'))
         self.row(f, _('Campo de visão', 'Field of view'), self.choice(f, 'fov', FOV),
                  _('Também se aplica às cenas.', 'Also applies to cutscenes.'))
         self.window_icon_row(f)
@@ -1611,8 +1614,8 @@ class Launcher:
                                                'Multithreaded rendering (recommended)'),
                    _('Desative se o jogo travar.', 'Turn off if the game freezes.'))
         self.check(f, 'perf_dma', _('Reflexos completos da água', 'Full water reflections'),
-                   _('Desativar melhora o desempenho; não é usado em placas AMD.',
-                     'Turning it off improves performance; not used on AMD graphics cards.'))
+                   _('Desativar melhora o desempenho; não é usado em placas AMD e Intel.',
+                     'Turning it off improves performance; not used on AMD and Intel graphics cards.'))
         self.row(f, _('Otimização de envio à GPU', 'GPU submission optimization'), self.choice(f, 'gpu_submit', GPU_SUBMIT),
                  _('Experimental em placas AMD e Intel; se a tela ficar preta, selecione "Automático".',
                    'Experimental on AMD and Intel graphics cards; if the screen turns black, select "Automatic".'))

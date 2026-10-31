@@ -28,7 +28,7 @@ from sotc_modes import GAMES
 # The supported releases, EU first.
 GAME_IDS = tuple(GAMES)
 PKG_MAGIC = b'\x7fCNT'
-CONTENT_TYPE_ADDON = 0x1b
+CONTENT_TYPE_ADDON = (0x1b, 0x1c)  # add-on content, additional license
 ENTRY_ENCRYPTED = 0x80000000
 # The package entries written into sce_sys (shadPS4 pkg_type.cpp); trophies below.
 ENTRY_NAMES = {
@@ -85,7 +85,7 @@ def read_package(path):
     if not serial:
         return None
     category = str(values.get('CATEGORY', ''))
-    if content_type == CONTENT_TYPE_ADDON or category.startswith('ac'):
+    if content_type in CONTENT_TYPE_ADDON or category.startswith('ac'):
         kind = 'dlc'
     elif category == 'gp':
         kind = 'update'

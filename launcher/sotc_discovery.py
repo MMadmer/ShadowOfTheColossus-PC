@@ -81,15 +81,16 @@ def _walk_dirs(root, depth):
 
 
 def is_dlc_pkg(path, serial):
-    """True for an add-on package of the game serial not installed (header: content type 0x1b, a
-    content ID of that title). The runtime lists these without extracting them."""
+    """True for an add-on package of the game serial not installed (header: content type 0x1b, or
+    0x1c for an additional license, and a content ID of that title). The runtime lists these
+    without extracting them."""
     try:
         with open(path, 'rb') as f:
             header = f.read(0x80)
     except OSError:
         return False
-    return (len(header) == 0x80 and header[:4] == b'\x7fCNT' and header[0x74:0x78] == b'\0\0\0\x1b'
-            and serial.encode() in header[0x40:0x64])
+    return (len(header) == 0x80 and header[:4] == b'\x7fCNT'
+            and header[0x74:0x78] in (b'\0\0\0\x1b', b'\0\0\0\x1c') and serial.encode() in header[0x40:0x64])
 
 
 def _dlc_entries(folder, serial):
