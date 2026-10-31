@@ -54,28 +54,33 @@ class GpuChoiceTests(unittest.TestCase):
         self.assertFalse(launcher.gpu_has_dlss_g('NVIDIA RTX A4000'))
 
     def test_dlss_modes(self):
-        for mode, render in (('quality', 'res720'), ('balanced', 'res630'), ('performance', 'res540'),
-                             ('ultra', 'res360')):
+        # The render size is the output divided by the mode's factor; DLAA renders at the output.
+        for mode, render in (('dlaa', '1920x1080'), ('quality', '1280x720'), ('balanced', '1152x648'),
+                             ('performance', '968x544'), ('ultra', '640x360')):
             env = self.env(dlss=mode, render_res='res900', gpu_name=RTX_3070)
-            self.assertEqual(env['SOTC_DLSS'], mode)
-            self.assertEqual(env['SOTC_MODES'].split(','), ['af16', render])
+            self.assertEqual(env['SOTC_UPSCALER'], 'dlss')
+            self.assertEqual(env['SOTC_RENDER_RES'], render, mode)
+            self.assertEqual(env['BB_FSR1'], '1')  # menus and the fallback without DLSS
+            self.assertEqual(env['SOTC_MODES'].split(','), ['af16', 'grassbuf'])
+        self.assertEqual(self.env(dlss='quality', output_res='2560x1080', gpu_name=RTX_3070)['SOTC_RENDER_RES'],
+                         '1704x720')
 
     def test_dlss_off_keeps_render_resolution(self):
         env = self.env(dlss='off', render_res='res900')
-        self.assertNotIn('SOTC_DLSS', env)
-        self.assertEqual(env['SOTC_MODES'], 'af16,res900')
+        self.assertNotIn('SOTC_UPSCALER', env)
+        self.assertEqual(env['SOTC_MODES'], 'af16,res900,grassbuf')
 
-    def test_dlss_needs_16_9_rtx_and_no_pro_mode(self):
-        self.assertEqual(self.env(dlss='quality', output_res='2560x1440', gpu_name=RTX_3070)['SOTC_DLSS'], 'quality')
-        self.assertEqual(self.env(dlss='quality', gpu_name='')['SOTC_DLSS'], 'quality')  # card not known yet
-        for settings, reason in (({'output_res': '2560x1080'}, 'output'), ({'output_res': '1920x1200'}, 'output'),
-                                 ({'neo': True}, 'neo'), ({'gpu_name': GTX_1050}, 'gpu'),
-                                 ({'gpu_name': RX_6600}, 'gpu')):
-            s = {'dlss': 'quality', 'gpu_name': RTX_3070, **settings}
-            self.assertEqual(launcher.dlss_blocked({**launcher.APP_DEFAULTS, **s}), reason)
-            env = self.env(**s)
-            self.assertNotIn('SOTC_DLSS', env, settings)
-            self.assertNotIn('res720', env['SOTC_MODES'], settings)
+    def test_dlss_needs_rtx_only(self):
+        self.assertEqual(self.env(dlss='quality', gpu_name='')['SOTC_UPSCALER'], 'dlss')  # card not known yet
+        # Any aspect and the PS4 Pro mode (from the Pro's own render size) take DLSS.
+        self.assertEqual(self.env(dlss='quality', output_res='2560x1080', gpu_name=RTX_3070)['SOTC_UPSCALER'], 'dlss')
+        neo = self.env(dlss='quality', neo=True, gpu_name=RTX_3070)
+        self.assertEqual(neo['SOTC_UPSCALER'], 'dlss')
+        self.assertNotIn('SOTC_RENDER_RES', neo)
+        for settings in ({'gpu_name': GTX_1050}, {'gpu_name': RX_6600}):
+            s = {'dlss': 'quality', **settings}
+            self.assertEqual(launcher.dlss_blocked({**launcher.APP_DEFAULTS, **s}), 'gpu')
+            self.assertNotIn('SOTC_UPSCALER', self.env(**s), settings)
 
     def test_frame_generation_by_card(self):
         self.assertEqual(self.env(framegen='dlss', gpu_name=RTX_4070)['SOTC_FRAMEGEN'], 'dlss')

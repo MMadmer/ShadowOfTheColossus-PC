@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""Shadow of the Colossus (CUSA08809, EU 1.01) on PC: prepares the game image and starts it.
+"""Shadow of the Colossus (CUSA08809 EU 1.01 or CUSA08034 US 1.00) on PC: prepares the game image
+and starts it.
 
     python sotc.py                      (or double-click SotC.bat)
 
 Settings (environment variables, or sotc.ini beside this script as NAME=value lines):
-    SOTC_GAME_DIR     the dumped game folder (the one with eboot.bin); default ../CUSA08809
+    SOTC_GAME_DIR     the dumped game folder (the one with eboot.bin); default ../CUSA08809,
+                      else ../CUSA08034
     SOTC_SYS_MODULES  optional: folder with YOUR OWN console's decrypted libSceNgs2.sprx and
                       libSceUlt.sprx (shadPS4's user/sys_modules), used instead of the port's own
                       sound library. These files are Sony firmware: they are never distributed
@@ -14,7 +16,8 @@ Settings (environment variables, or sotc.ini beside this script as NAME=value li
     SOTC_UPDATE_DIR   optional: the game update; by default <game>-UPDATE or <game>-patch next to
                       the dump (as shadPS4); its files take the place of the base game's
     SOTC_DLC_DIR      optional: the game's DLC (one folder per add-on with sce_sys/param.sfo,
-                      or shadPS4's addcont folder holding CUSA08809)
+                      or shadPS4's addcont folder holding CUSA08809 / CUSA08034); only DLC of the
+                      game's own region is listed
     SOTC_MODES        optional, comma-separated: af16 (16x anisotropic filtering),
                       fps60 (removes the 30 FPS cap; experimental, vblank at 120 Hz),
                       fps60game (the game's own 60 FPS target, as the PS4 Pro Performance mode;
@@ -27,8 +30,7 @@ Settings (environment variables, or sotc.ini beside this script as NAME=value li
     SOTC_PROBE_COMPAT 1 starts bb-probe-compat.exe (x86-64-v2), 0 bb-probe.exe (x86-64-v3); by
                       default the one the CPU runs
     SOTC_RENDER_RES   optional: the game renders at WxH instead of 1920x1080 (e.g. 2560x1080 for
-                      21:9, a wider view); the output follows its aspect; PS4 mode only; at most 1080
-                      lines tall and 4.2 million pixels, larger sizes are scaled down
+                      21:9, a wider view); the output follows its aspect; PS4 mode only
     SOTC_CVARS        engine settings, NAME=VALUE separated by spaces (e.g. r_motionBlurEnable=0)
     SOTC_FOV          optional: the cameras' field of view in percent of the original (80 to 150)
     BB_GAMEPAD        the gamepad to use (its name or part of it), when several are connected
@@ -142,32 +144,6 @@ def find_probe():
     fail(f'{names[-1]} not found: build it with build.sh (MSYS2 CLANG64 on Windows) or use a packaged build.')
 
 
-# Above about 4.2 million rendered pixels the fine detail textures (ground, cloth) shimmer, flicker
-# and then disappear (2736x1536 is fine, 3008x1696 shimmers, 3840x2160 has none); cause unknown.
-# The game itself never renders more than 1080 lines in PS4 mode, so the render height stays at
-# most 1080 (3840x1080 for 32:9 is tested fine) and the pixel limit covers wider aspects.
-MAX_RENDER_HEIGHT = 1080
-MAX_RENDER_PIXELS = 4_200_000
-
-
-def cap_render(size):
-    """SOTC_RENDER_RES WxH, scaled down (same aspect, multiples of 8) to MAX_RENDER_HEIGHT lines
-    and MAX_RENDER_PIXELS."""
-    try:
-        w, h = map(int, size.split('x'))
-    except ValueError:
-        return size  # sotc_modes.py reports it
-    if w <= 0 or h <= 0:
-        return size  # sotc_modes.py reports it
-    scale = min(1.0, MAX_RENDER_HEIGHT / h, (MAX_RENDER_PIXELS / (w * h)) ** 0.5)
-    if scale == 1.0:
-        return size
-    capped = f'{int(w * scale) // 8 * 8}x{int(h * scale) // 8 * 8}'
-    print(f'sotc: render size {size} is above {MAX_RENDER_HEIGHT} lines or {MAX_RENDER_PIXELS:,} pixels '
-          f'(fine textures disappear), rendering at {capped}', file=sys.stderr)
-    return capped
-
-
 def run_script(name, *args):
     # Inside the packaged SotC.exe (PyInstaller) the executable runs the scripts itself.
     script = ['--script'] if getattr(sys, 'frozen', False) else []
@@ -244,9 +220,13 @@ def main():
     os.chdir(PORT)
     out = PORT / 'out'
     out.mkdir(exist_ok=True)
-    game = Path(env.get('SOTC_GAME_DIR', PORT.parent / 'CUSA08809')).resolve()
+    # The EU dump (CUSA08809) next to the port, else the US one (CUSA08034).
+    default = next((PORT.parent / g for g in ('CUSA08809', 'CUSA08034') if (PORT.parent / g / 'eboot.bin').is_file()),
+                   PORT.parent / 'CUSA08809')
+    game = Path(env.get('SOTC_GAME_DIR', default)).resolve()
     if not (game / 'eboot.bin').is_file():
-        fail(f'No eboot.bin in {game}: set SOTC_GAME_DIR (environment or sotc.ini).')
+        fail(f'No eboot.bin in {game}: set SOTC_GAME_DIR (environment or sotc.ini) to the CUSA08809 (EU) '
+             'or CUSA08034 (US) dump.')
 
     modules = []
     sys_modules = env.get('SOTC_SYS_MODULES')
@@ -291,7 +271,7 @@ def main():
         cvars = 'doIndexBufferCulling=0 doSunShadowIndexBufferCulling=0'
     if env.get('SOTC_NOTE'):
         print(f"sotc: {env['SOTC_NOTE']}", file=sys.stderr)
-    render = cap_render(env.get('SOTC_RENDER_RES', '').strip())
+    render = env.get('SOTC_RENDER_RES', '').strip()
     if render == '1920x1080':
         # A 16:9 output above 1080p renders at 1080p as before: no patches, no extra memory.
         render = ''

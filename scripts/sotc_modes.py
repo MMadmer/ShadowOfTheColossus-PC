@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""sotc: game modes and engine settings for Shadow of the Colossus EU 1.01 (CUSA08809).
+"""sotc: game modes and engine settings for Shadow of the Colossus EU 1.01 (CUSA08809) and US 1.00
+(CUSA08034), the same eboot build.
 
     python scripts/sotc_modes.py GAME --out out --modes af16,fps60 --cvars "r_motionBlurEnable=0 ..."
 
@@ -27,11 +28,16 @@ Writes two files for the loader:
 The original bytes are checked first: another game version gets neither file's changes.
 """
 import argparse
+import os
 import re
 from pathlib import Path
 import struct
-from prepare import parse_self
+from prepare import parse_self, sfo
 
+# The supported releases: title ID -> (region, version shown). The EU 1.01 update has no eboot
+# (only Arabic text), so both run the same eboot, byte for byte in code and data.
+GAMES = {'CUSA08809': ('EU', '01.01'), 'CUSA08034': ('US', '01.00')}
+SUPPORTED = 'EU 1.01 / US 1.00'
 BASE = 0x400000
 # The lea that loads the string the game appends to its command line ("+VSyncWindow=10%").
 CMDLINE_LEA = 0x009367b9
@@ -41,6 +47,17 @@ MODES = {
     'fps60': [
         # the frame limiter's import stub (sceVideoOutSetFlipRate) returns 0
         (0x01390090, bytes.fromhex('ff25a20567'), bytes.fromhex('31c0c3')),
+    ],
+    # Room for 4x the grass, for the longer grass distances: the virtual geometry buffers (80-byte
+    # blades and their index list) hold 0x18000; the grass compute drops every blade past that, the
+    # farthest patches first: a band of grass pops in and out ahead once the grass distance is raised.
+    'grassbuf': [
+        (0x004d92b9, bytes.fromhex('b900800100'), bytes.fromhex('b900000600')),
+        (0x004d92e5, bytes.fromhex('b900800100'), bytes.fromhex('b900000600')),
+        # the patch chunks (up to 64 blades each) the grass compute fills: 0x8000 of 16 bytes
+        (0x004d928d, bytes.fromhex('b900800000'), bytes.fromhex('b900000200')),
+        # the weed blades (80 bytes): 0x24000
+        (0x004d9311, bytes.fromhex('b900400200'), bytes.fromhex('b900000900')),
     ],
     # The engine's own 60 FPS target, the one of the PS4 Pro Performance mode: TargetFramesPerSeconds
     # 1 (60 FPS) where the game sets 2 (30 FPS), i.e. the graphics mode code on a PS4 (0x70a6d0) and
@@ -88,11 +105,22 @@ CVAR_MODES = {
 # Render size (PS4 mode; the PS4 Pro values next to them stay): (address, kind, original).
 # 'W'/'H' an integer immediate (the last 4 bytes of the instruction at address), 'w'/'h' a float
 # (the PS4 entry of a [PS4, Pro] table), 'w2'/'h2' half of it, 'a' the aspect float W/H,
-# 'P' the render target pool (322.5 MiB at 1080p, scaled by the pixel count).
+# 'P' the render target pool (322.5 MiB at 1080p, scaled by the pixel count), 'v' the width of a
+# 1080 line canvas of the render's aspect (1080 * W/H).
+# Page allocator (0x41a1e0): it carves a new chunk only when the free-page tally at pool+0x74 is
+# 0, and the tally drifts above the bitmap's real free count. With the bitmap empty and the tally
+# not 0, the scan found no bit and read bitmap[-1] (crash at 0x41a371). On a failed scan: tally 0,
+# then carve a chunk (0x41a1f1, needs eax 0) and scan again.
+POOL_FIX = (0x41a321, bytes.fromhex('eb34666666662e0f1f840000000000'),
+            bytes.fromhex('41c7467400000000' '31c0' 'e9c1feffff'))
+# Above this many rendered pixels the larger render target pool pushes the game's free system
+# memory figure under texturePoolReserveSystemMemMiBs (220), and the texture streamer drops every
+# texture to mip 3 every second or so (fine textures flicker). Reserve 0 there; it needs POOL_FIX.
+LOW_MEM_PIXELS = 4_200_000
 RENDER_SITES = [
-    # display init (0x495a90): the aspect of the display object, back buffer, display targets,
-    # scene size
-    (0x00495b3e, 'a', 'c74304398ee33f'),
+    # display init (0x495a90): back buffer, display targets, scene size. The display object's
+    # aspect (0x495b3e, 16/9) stays: the HUD lays out its health bar with it, and a wider value
+    # left a grey stub on the bar in 21:9 (#301, user test 26 Oct; the scene is unchanged).
     (0x00495bec, 'H', 'b938040000'), (0x00495bf7, 'W', 'b880070000'),
     (0x00495c91, 'W', 'ba80070000'), (0x00495c96, 'H', 'b938040000'),
     (0x00495d34, 'W', 'ba80070000'), (0x00495d39, 'H', 'b938040000'),
@@ -123,13 +151,19 @@ RENDER_SITES = [
     (0x01667f94, 'w2', '00007044'), (0x01667f9c, 'h2', '00000744'),
     # the default camera's aspect (16/9)
     (0x0166633c, 'a', '398ee33f'),
+    # HUD gauges: {0, 0, 1920.0, h} rectangles the stamina bar's fill is laid out in, in units of a
+    # 1080 line canvas ('v': 1080 * W/H, not the render width: with DLSS the render is smaller and
+    # the bar broke again). Left at 1920 the yellow bar stopped short of the grip circle in 21:9
+    # and filled the wrong way (#301, found with SOTC_RENDER_EXTRA and the user's tests, 26 Oct).
+    (0x008e2cf1, 'v', 'c78550feffff0000f044'),
+    (0x00920309, 'v', 'c78560feffff0000f044'),
 ]
 RT_POOL = 0x14280000
 # The camera's "FOV Adjustment" tweak (debug menu Shadow Camera, 0.1 to 3): a factor on the vertical
 # field of view in degrees, 1.0 in the game's data. The lenses read it whenever they build their
 # projections (0x5925f0, 0x593080), so culling and shadows follow the wider view.
 FOV_ADJUST = (0x031ca404, bytes.fromhex('0000803f'))
-# EU 1.01: the command line lea and the fps60 site.
+# EU 1.01 / US 1.00: the command line lea, the fps60 site and the render size sites.
 VERSION_CHECKS = [(CMDLINE_LEA, bytes.fromhex('488d352debad00')), (0x01390090, bytes.fromhex('ff25a20567')),
                   RENDER_WIDTH, RENDER_HEIGHT]
 CVAR = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*(=[-+.0-9A-Za-z_%]+)?$')  # NAME=VALUE or a flag such as nointro
@@ -140,6 +174,29 @@ def image_bytes(elf, ph, vaddr, length):
         if p['type'] in (1, 0x61000010) and p['vaddr'] <= vaddr and vaddr + length <= p['vaddr'] + p['filesz']:
             offset = p['offset'] + vaddr - p['vaddr']
             return bytes(elf[offset:offset + length])
+    return None
+
+
+def title_id(game):
+    """TITLE_ID of the game folder's sce_sys/param.sfo, '' without one."""
+    try:
+        return str(sfo((Path(game) / 'sce_sys' / 'param.sfo').read_bytes()).get('TITLE_ID', ''))
+    except (OSError, ValueError):
+        return ''
+
+
+def game_serial(game):
+    """The supported title ID of a game folder; CUSA08809 (EU) when it can't be read."""
+    serial = title_id(game)
+    return serial if serial in GAMES else next(iter(GAMES))
+
+
+def save_template(root, serial):
+    """The save folder of the game serial in root (<root>/<serial>), else the other release's
+    (EU and US run the same build, so their saves are expected to load in either); None."""
+    for candidate in (serial, *GAMES):
+        if (Path(root) / candidate).is_dir():
+            return Path(root) / candidate
     return None
 
 
@@ -166,14 +223,36 @@ def render_patches(elf, ph, size):
         print(f'Render size {size}: {w}x{h} (row pitch 1280 avoided)')
     values = {'W': struct.pack('<I', w), 'H': struct.pack('<I', h), 'w': struct.pack('<f', w),
               'h': struct.pack('<f', h), 'w2': struct.pack('<f', w / 2), 'h2': struct.pack('<f', h / 2),
-              'a': struct.pack('<f', w / h), 'P': struct.pack('<I', render_pool(w, h))}
+              'a': struct.pack('<f', w / h), 'P': struct.pack('<I', render_pool(w, h)),
+              'v': struct.pack('<f', 1080 * w / h)}
     writes = []
-    for address, kind, original in RENDER_SITES:
+    # SOTC_RENDER_KEEP=<addr>,<addr>: sites left at the 1920x1080 value (finding the HUD's sites,
+    # #301: health and stamina bars stretched in 21:9).
+    keep = {int(a, 16) for a in os.environ.get('SOTC_RENDER_KEEP', '').replace(' ', ',').split(',') if a}
+    sites = list(RENDER_SITES)
+    if os.environ.get('SOTC_WIDE_ASPECT') == '1':  # the display object's aspect too (pre-#301)
+        sites.append((0x00495b3e, 'a', 'c74304398ee33f'))
+    for address, kind, original in sites:
         original = bytes.fromhex(original)
         if image_bytes(elf, ph, address - BASE, len(original)) != original:
             raise SystemExit(f'render size: unexpected bytes at {address:#x}')
+        if address in keep:
+            print(f'Render size: {address:#x} kept at 1920x1080')
+            continue
         data = values[kind]
         writes.append((address - BASE + len(original) - len(data), data))
+    # SOTC_RENDER_EXTRA=<addr>,<addr>: more 4-byte floats of 1920/960/1080/540 to scale (finding
+    # the stamina bar's site, #301).
+    extra = {1920.0: 'w', 960.0: 'w2', 1080.0: 'h', 540.0: 'h2'}
+    for a in os.environ.get('SOTC_RENDER_EXTRA', '').replace(' ', ',').split(','):
+        if not a:
+            continue
+        address = int(a, 16)
+        current = struct.unpack('<f', image_bytes(elf, ph, address - BASE, 4))[0]
+        if current not in extra:
+            raise SystemExit(f'render size: {address:#x} holds {current}, not 1920/960/1080/540')
+        writes.append((address - BASE, values[extra[current]]))
+        print(f'Render size: {address:#x} {current:g} scaled too')
     return writes
 
 
@@ -190,11 +269,13 @@ def main():
     supported = is_supported(elf, ph)
     render = args.render if args.render != '1920x1080' else ''
     writes, cvars = [], []
+    if supported and image_bytes(elf, ph, POOL_FIX[0] - BASE, len(POOL_FIX[1])) == POOL_FIX[1]:
+        writes.append((POOL_FIX[0] - BASE, POOL_FIX[2]))
     for mode in filter(None, (m.strip().lower() for m in args.modes.split(','))):
         if mode not in MODES and mode not in CVAR_MODES:
             raise SystemExit(f'unknown mode {mode!r} (known: {", ".join([*MODES, *CVAR_MODES])})')
         if not supported:
-            print(f'Mode {mode}: this eboot is not EU 1.01, not applied')
+            print(f'Mode {mode}: this eboot is not {SUPPORTED}, not applied')
             continue
         # A render size patches the same scene size sites as res<height>.
         if render and re.fullmatch(r'res\d+', mode):
@@ -207,8 +288,11 @@ def main():
         if supported:
             writes += render_patches(elf, ph, render)
             print(f'Render size {render}: on')
+            w, h = map(int, render.split('x'))
+            if w * h > LOW_MEM_PIXELS and (POOL_FIX[0] - BASE, POOL_FIX[2]) in writes:
+                cvars.append('texturePoolReserveSystemMemMiBs=0')
         else:
-            print(f'Render size {render}: this eboot is not EU 1.01, not applied')
+            print(f'Render size {render}: this eboot is not {SUPPORTED}, not applied')
     if args.fov != 100:
         if not 80 <= args.fov <= 150:
             raise SystemExit(f'field of view {args.fov}%: 80 to 150')
@@ -216,7 +300,23 @@ def main():
             writes.append((FOV_ADJUST[0] - BASE, struct.pack('<f', args.fov / 100)))
             print(f'Field of view {args.fov}%: on')
         else:
-            print(f'Field of view {args.fov}%: this eboot is not EU 1.01, not applied')
+            print(f'Field of view {args.fov}%: this eboot is not {SUPPORTED}, not applied')
+    # sotc: PS4 Pro mode too (SOTC_NEO=1): its larger render targets push the game's free system
+    # memory figure under the reserve as well, and with Maximum textures the streamer's constant
+    # drops showed as colour garbage after loads (user, 26 Oct: 1 hour without a crash or
+    # garbage outside two areas with it). SOTC_POOL_RESERVE=0/1 forces the reserve off/on.
+    pool_fix = (POOL_FIX[0] - BASE, POOL_FIX[2]) in writes
+    reserve = os.environ.get('SOTC_POOL_RESERVE', '')
+    reserve_off = 'texturePoolReserveSystemMemMiBs=0' in cvars
+    if pool_fix and not reserve_off and reserve != '1' and (
+            reserve == '0' or os.environ.get('SOTC_NEO') == '1'):
+        cvars.append('texturePoolReserveSystemMemMiBs=0')
+        reserve_off = True
+    elif reserve_off and reserve == '1':
+        cvars.remove('texturePoolReserveSystemMemMiBs=0')
+        reserve_off = False
+    if reserve_off:
+        print('Texture pool reserve: 0 (page allocator fix on)')
     for item in args.cvars.split():
         item = item.lstrip('+')
         if not CVAR.match(item):

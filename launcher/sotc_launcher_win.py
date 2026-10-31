@@ -42,9 +42,12 @@ CONFIG_FILE = CONFIG_DIR / 'launcher_settings.json'
 # The settings file in use: the port's, or the shared one while the port folder cannot be written
 # (Program Files). The game writes the in-game menu's changes into it.
 settings_in_use = CONFIG_FILE
+# The supported releases (title ID -> region, version) share one eboot build; scripts/ is on
+# sys.path above. The EU one (CUSA08809) is the default game folder.
+from sotc_modes import GAMES  # noqa: E402
 GAME_ID, GAME_VERSION = 'CUSA08809', '01.01'
 SYS_MODULES = ('libSceUlt.sprx', 'libSceNgs2.sprx')
-VERSION = '1.1.3'
+VERSION = '1.1.4'
 MAX_LOG_LINES = 6000
 NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 
@@ -163,13 +166,16 @@ APP_DEFAULTS = {'ui_language': '', 'game_dir': str(PORT_DIR.parent / GAME_ID), '
                 'user_dir': '', 'af16': True, 'textures': 'high', 'skip_intro': 'off', 'hdr': False, 'window_icon_file': '', 'fps60': False,
                 'fps_mode': '30', 'window_mode': 'windowed',
                 'present_mode': 'Mailbox', 'language': '', 'player_name': '', 'show_fps': False,
-                'readbacks': '', 'extra_env': '', 'close_on_play': False, 'gamepad': '', 'pad_glyphs': '',
+                'readbacks': '', 'extra_env': '', 'debug_menu': False, 'debug_watch': False, 'rb_hot': False,
+                'close_on_play': False, 'gamepad': '', 'pad_glyphs': '',
                 'output_res': '1920x1080', 'render_res': '', 'upscaler': 'fsr1', 'sharpness': '250', 'mouse': True,
                 'mouse_sens': '1.0', 'mouse_invert': False, 'neo': False, 'fx_vignette': True,
                 'fx_fog': True, 'fx_ssao': True, 'engine_cvars': '', 'perf_culling': True,
-                'perf_record_thread': True, 'perf_dma': True, 'gpu_submit': 'auto', 'vram_use': 'normal', 'volume': '100', 'shadow_reuse': '0', 'library_dirs': [], 'keys': {},
+                'perf_record_thread': True, 'perf_dma': True, 'gpu_submit': 'auto', 'vram_use': 'normal', 'volume': '100', 'shadow_reuse': '0',
+                'grass_shadows': '2', 'grass_distance': '1', 'grass_height': '1', 'weed_distance': '1', 'weed_height': '1',
+                'grass_fade': '1', 'grass_detail': '0.25', 'library_dirs': [], 'keys': {},
                 'auto_setup': True, 'dlc_dir': '', 'framegen': 'off', 'dlssg_mult': '2',
-                'check_updates': True, 'skip_version': '', 'dlss': 'off', 'vibration': '100',
+                'check_updates': True, 'skip_version': '', 'dlss': 'off', 'dlss_compare': False, 'vibration': '100',
                 'mouse_buttons': {}, 'gpu_name': '', 'fov': '100'}
 # Keyboard bindings (src/runtime_pad.c): PS4 input, its default SDL key name, label.
 KEY_INPUTS = [
@@ -226,6 +232,38 @@ SHADOW_REUSE = [('0', ('Desligado', 'Off')),
 # The cameras' field of view (SOTC_FOV, scripts/sotc_modes.py --fov), cutscenes included.
 FOV = [('100', ('100% (original)', '100% (original)')), ('110', ('110%', '110%')),
        ('120', ('120%', '120%')), ('130', ('130%', '130%'))]
+# Sun shadow cascades the grass casts shadows in (r_virtualGeometryNumShadowCascades): the PS4
+# value 2 ends them at 8 m, a band of grass darkens ~10 m ahead while riding; 3 reaches 24 m (4 would
+# reach 100 m, but there a blade is far below a shadow-map texel: no visible gain, only cost); 1 = 2.6 m.
+GRASS_SHADOWS = [('1', ('Perto (até ~3 m)', 'Near (to ~3 m)')),
+                 ('2', ('Como no PS4 (até ~8 m)', 'As on PS4 (to ~8 m)')),
+                 ('3', ('Longe (até ~24 m)', 'Far (to ~24 m)'))]
+# Grass and weed view distance: the grass shaders thin the grass out in distance bands; these
+# multiply the band distances (more grass far away, blades the same height).
+VEG_DISTANCE = [('1', ('Como no PS4', 'As on PS4')),
+                ('2', ('2x mais longe', '2x farther')),
+                ('3', ('3x mais longe', '3x farther')),
+                ('5', ('5x mais longe', '5x farther'))]
+# The weeds take much larger multipliers without bands (10x tested): denser fields, like early autumn.
+WEED_DISTANCE = VEG_DISTANCE + [('10', ('10x mais longe', '10x farther'))]
+VEG_HEIGHT = [('0.75', ('75%', '75%')),
+              ('1', ('Como no PS4', 'As on PS4')),
+              ('1.5', ('150%', '150%')),
+              ('2', ('200%', '200%'))]
+# Fade (r_virtualGeometryFadeMultiplier) does not change the height: away from 1 it thins the grass,
+# and 0.3 also drops its shadows.
+GRASS_FADE = [('0.5', ('0.5', '0.5')),
+              ('0.75', ('0.75', '0.75')),
+              ('1', ('Como no PS4', 'As on PS4')),
+              ('2', ('2', '2')),
+              ('3', ('3', '3'))]
+# Grass detail: scales the distance at which a grass patch gets its full blade count (the shader's LOD
+# scale; smaller = full grass farther out). On PS4 the grass near the camera fills in late, and its
+# shadow pops in with it; 0.01 distorts.
+GRASS_DETAIL = [('1', ('Como no PS4', 'As on PS4')),
+                ('0.25', ('Alto', 'High')),
+                ('0.15', ('Mais alto', 'Higher')),
+                ('0.1', ('Muito alto', 'Very high'))]
 VOLUME = [('100', ('100% (original)', '100% (original)')), ('150', ('150%', '150%')),
           ('200', ('200%', '200%')), ('300', ('300%', '300%'))]
 # Controller rumble strength (SOTC_VIBRATION, src/runtime_pad.c).
@@ -345,17 +383,18 @@ def weak_gpu_render_res(gpu_line):
     return ''
 
 
-# NVIDIA DLSS Super Resolution (SOTC_DLSS): the game renders at the mode's size (a res<height>
-# mode, as RENDER_RES) and DLSS rebuilds the 1080p display image; the game checks the support again
-# at start (Streamline) and shows the plain image without it.
+# NVIDIA DLSS Super Resolution (bb-probe: SOTC_UPSCALER=dlss): the game renders at the output size
+# divided by the mode's factor (SOTC_RENDER_RES, dlss_render) and DLSS rebuilds the output image,
+# also in PS4 Pro mode (from the Pro's own render size) and at any aspect. The game checks the
+# support again at start (Streamline) and upscales with FSR 1 without it.
 DLSS_MODES = [('off', ('Desligado', 'Off')),
-              ('dlaa', ('DLAA (1920 × 1080, nativo)', 'DLAA (1920 × 1080, native)')),
-              ('quality', ('DLSS Qualidade (1296 × 729)', 'DLSS Quality (1296 × 729)')),
-              ('balanced', ('DLSS Equilibrado (1120 × 630)', 'DLSS Balanced (1120 × 630)')),
-              ('performance', ('DLSS Desempenho (960 × 540)', 'DLSS Performance (960 × 540)')),
-              ('ultra', ('DLSS Ultra Desempenho (640 × 360)', 'DLSS Ultra Performance (640 × 360)'))]
-# DLAA (#34): DLSS anti-aliasing at the native 1080p, no render resolution patch.
-DLSS_RENDER = {'dlaa': '', 'quality': 'res720', 'balanced': 'res630', 'performance': 'res540', 'ultra': 'res360'}
+              ('dlaa', ('DLAA (resolução nativa)', 'DLAA (native resolution)')),
+              ('quality', ('DLSS Qualidade (1,5×)', 'DLSS Quality (1.5×)')),
+              ('balanced', ('DLSS Equilibrado (1,72×)', 'DLSS Balanced (1.72×)')),
+              ('performance', ('DLSS Desempenho (2×)', 'DLSS Performance (2×)')),
+              ('ultra', ('DLSS Ultra Desempenho (3×)', 'DLSS Ultra Performance (3×)'))]
+# DLAA (#34): DLSS anti-aliasing at the output size.
+DLSS_FACTORS = {'dlaa': 1.0, 'quality': 1.5, 'balanced': 1.724, 'performance': 2.0, 'ultra': 3.0}
 
 
 # The game's memory (9152 MiB of direct memory and 1 GiB of flexible memory, committed at start)
@@ -395,31 +434,17 @@ def gpu_has_mfg(gpu_name):
     return bool(re.search(r'RTX\s*50\d\d', str(gpu_name), re.I))
 
 
-def is_16_9(size):
-    """True for a WxH of the 16:9 shape (within 2%)."""
-    try:
-        w, h = map(int, str(size).split('x'))
-    except ValueError:
-        return False
-    return h > 0 and abs(w * 9 - h * 16) <= h * 16 * 0.02
-
-
 def dlss_blocked(s, gpu_name=None):
-    """Why DLSS cannot apply with settings s: 'gpu' (not an RTX card; an unknown card is not
-    held against it), 'output' (not 16:9: those render at the output size, SOTC_RENDER_RES),
-    'neo' (the PS4 Pro path keeps its own sizes), or ''."""
+    """Why DLSS cannot apply with settings s: 'gpu' (not an RTX card; an unknown card is not held
+    against it), or ''."""
     gpu_name = s.get('gpu_name', '') if gpu_name is None else gpu_name
-    if gpu_name and not gpu_has_dlss(gpu_name):
-        return 'gpu'
-    if not is_16_9(s.get('output_res') or '1920x1080'):
-        return 'output'
-    return 'neo' if s.get('neo') else ''
+    return 'gpu' if gpu_name and not gpu_has_dlss(gpu_name) else ''
 
 
 def dlss_mode(s):
     """The DLSS mode the game gets ('quality', ...), or '' (off or not possible)."""
     mode = s.get('dlss')
-    return mode if mode in DLSS_RENDER and not dlss_blocked(s) else ''
+    return mode if mode in DLSS_FACTORS and not dlss_blocked(s) else ''
 
 
 # Button icons in the game (SOTC_PAD_GLYPHS, gpu texture_cache/sotc_pad_glyphs.cpp).
@@ -440,7 +465,7 @@ FPS_MODES = [('30', ('30 FPS (como no PS4)', '30 FPS (as on PS4)')),
 # not offered in PS4 Pro mode).
 TEXTURES = [('off', ('Desligada', 'Off')),
             ('high', ('Alta (estável)', 'High (stable)')),
-            ('max', ('Máxima (nítida, pode fechar no modo Pro)', 'Maximum (sharp, may close in Pro mode)'))]
+            ('max', ('Máxima (nítida, experimental no modo Pro)', 'Maximum (sharp, experimental in PS4 Pro mode)'))]
 # Frame generation (bb-probe: SOTC_FRAMEGEN; F8 in game switches off / DLSS-G / FSR 3.1).
 # Automatic: DLSS-G on an RTX 40/50, else FSR 3.1.
 FRAMEGEN = [('off', ('Desligada', 'Off')),
@@ -487,30 +512,32 @@ def load_json(path, default):
         return default
 
 
-_EBOOT_VERSIONS = {}
+_EBOOT_SUPPORTED = {}
 
 
-def eboot_version(eboot):
-    """'01.01' when the eboot holds the EU 1.01 code the modes patch (dumps often keep the base
-    game's param.sfo next to the updated eboot), else None. Cached per file state."""
+def eboot_supported(eboot):
+    """True when the eboot holds the code the modes patch (EU 1.01 and US 1.00 are the same
+    build; dumps often keep the base game's param.sfo next to the updated eboot). Cached per file
+    state."""
     try:
         stat = eboot.stat()
     except OSError:
-        return None
+        return False
     key = (str(eboot), stat.st_size, stat.st_mtime_ns)
-    if key not in _EBOOT_VERSIONS:
+    if key not in _EBOOT_SUPPORTED:
         try:
             from prepare import parse_self
             from sotc_modes import is_supported
             elf, _h, ph, _s, _m = parse_self(eboot.read_bytes())
-            _EBOOT_VERSIONS[key] = GAME_VERSION if is_supported(elf, ph) else None
+            _EBOOT_SUPPORTED[key] = is_supported(elf, ph)
         except (OSError, ValueError, ImportError):
-            _EBOOT_VERSIONS[key] = None
-    return _EBOOT_VERSIONS[key]
+            _EBOOT_SUPPORTED[key] = False
+    return _EBOOT_SUPPORTED[key]
 
 
 def game_info(folder):
-    """(title id, game version) of a game folder, or None without eboot.bin."""
+    """(title id, game version) of a game folder, or None without eboot.bin. A supported release
+    shows its version (EU 01.01, US 01.00) whatever its param.sfo says."""
     folder = Path(folder or '.')
     if not (folder / 'eboot.bin').is_file():
         return None
@@ -520,7 +547,26 @@ def game_info(folder):
         title, version = values.get('TITLE_ID', '?'), values.get('APP_VER', '?')
     except (OSError, ValueError, ImportError):
         title, version = '?', '?'
-    return title, eboot_version(folder / 'eboot.bin') or version
+    if title in GAMES and eboot_supported(folder / 'eboot.bin'):
+        version = GAMES[title][1]
+    return title, version
+
+
+def game_supported(folder):
+    """True for a supported release (EU or US) whose eboot the modes patch."""
+    info = game_info(folder)
+    return bool(info) and info[0] in GAMES and eboot_supported(Path(folder) / 'eboot.bin')
+
+
+def game_serial(folder):
+    """The title ID of the game folder, for its saves and DLC; CUSA08809 (EU) when unknown."""
+    info = game_info(folder) if folder else None
+    return info[0] if info and info[0] in GAMES else GAME_ID
+
+
+def supported_games():
+    """'CUSA08809 01.01, CUSA08034 01.00' for messages."""
+    return ', '.join(f'{serial} {version}' for serial, (_region, version) in GAMES.items())
 
 
 # The game's archives in a CUSA08809 (EU) dump and their sizes: an incomplete copy (a download or
@@ -547,8 +593,9 @@ def damaged_archives(folder):
 
 
 def user_dir(s):
-    """The data folder (saves in savedata/1/CUSA08809 below it). A folder picked one level too
-    deep (savedata itself, or a save folder) is taken back up to the data folder."""
+    """The data folder (saves in savedata/1/<title id> below it: CUSA08809 EU, CUSA08034 US). A
+    folder picked one level too deep (savedata itself, or a save folder) is taken back up to the
+    data folder."""
     folder = Path(s.get('user_dir') or PORT_DIR / 'user')
     parts = [p.lower() for p in folder.parts]
     if 'savedata' in parts:
@@ -600,7 +647,7 @@ def start_event_log(log_dir, settings, env):
         _('Windows {} | jogo: {}', 'Windows {} | game: {}').format(platform.version(), settings.get('game_dir') or '?'),
         _('Saída: {} | Upscaler: {} | Nitidez: {} | DLSS: {}', 'Output: {} | Upscaler: {} | Sharpening: {} | DLSS: {}').format(
             words(OUTPUTS, 'output_res', '1920x1080'), words(UPSCALERS, 'upscaler', 'fsr1'),
-            words(SHARPNESS, 'sharpness', '250'), env.get('SOTC_DLSS') or 'off'),
+            words(SHARPNESS, 'sharpness', '250'), (dlss_mode(settings) or 'off') if env.get('SOTC_UPSCALER') else 'off'),
         _('FPS: {} | Texturas: {} | Filtro 16x: {} | Modo PS4 Pro: {} | Campo de visão: {}',
           'FPS: {} | Textures: {} | 16x filtering: {} | PS4 Pro mode: {} | Field of view: {}').format(
             words(FPS_MODES, 'fps_mode', '30'), words(TEXTURES, 'textures', 'high'), on_off(settings.get('af16')),
@@ -802,14 +849,13 @@ def game_environment(s):
     modes = ['af16'] if s.get('af16') else []
     if fps_mode != '30':
         modes.append('fps60game')
-    # DLSS renders at its mode's size in place of the render resolution choice.
-    dlss = dlss_mode(s)
-    if dlss:
-        if DLSS_RENDER[dlss]:
-            modes.append(DLSS_RENDER[dlss])
-        env['SOTC_DLSS'] = dlss
-    elif s.get('render_res') in {key for key, _t in RENDER_RES if key}:
+    # DLSS renders at the output size divided by its mode's factor (SOTC_RENDER_RES below) in place of
+    # the render resolution choice.
+    if not dlss_mode(s) and s.get('render_res') in {key for key, _t in RENDER_RES if key}:
         modes.append(s['render_res'])
+    # At this resolution the grass overflows the game's grass buffers: the farthest grass then pops
+    # in and out in patches, in a band ahead with longer grass distances. grassbuf makes them 4x larger.
+    modes.append('grassbuf')
     env['SOTC_MODES'] = ','.join(modes)
     env['SOTC_FPS_CAP'] = '30' if fps_mode == '30' else 'off'
     env['SOTC_FPS_LIMIT'] = '60' if fps_mode == '60' else '0'
@@ -844,8 +890,19 @@ def game_environment(s):
         cvars.append('skipSplash=1')
     if s.get('skip_intro') == 'all':
         env['SOTC_SKIP_MOVIE'] = '1'
+    grass = str(s.get('grass_shadows') or '2')
+    if grass in ('1', '3'):
+        # Every mode's copy: the game takes the one of its graphics mode (PS4 Pro Cinematic has 3).
+        cvars += [f'r_virtualGeometryNumShadowCascades{mode}={grass}'
+                  for mode in ('', '_BasePS4', '_Perf', '_Cinematic')]
+    fade = str(s.get('grass_fade') or '1')
+    if fade in ('0.5', '0.75', '2', '3'):
+        cvars.append(f'r_virtualGeometryFadeMultiplier={fade}')
     cvars += str(s.get('engine_cvars', '')).split()
     env['SOTC_CVARS'] = ' '.join(cvars)
+    # Multipliers for the grass shaders' view distances and blade height (vk_rasterizer.cpp).
+    env['SOTC_GRASS'] = ' '.join(str(s.get(k) or '1') for k in
+                                 ('grass_distance', 'grass_height', 'weed_distance', 'weed_height', 'grass_detail'))
     env['SOTC_RECORD_THREAD'] = '1' if s.get('perf_record_thread', True) else '0'
     if not s.get('perf_dma', True):
         env['BB_DIRECT_MEMORY_ACCESS'] = '0'
@@ -876,19 +933,30 @@ def game_environment(s):
     textures = s.get('textures') or 'high'
     if textures != 'off':
         env.setdefault('SOTC_LOD_LINGER', '1')
-    if textures == 'max' and env['SOTC_NEO'] == '1':
+    # sotc: "Maximum" in PS4 Pro mode exhausted the game's page pool within minutes at the Shrine
+    # (0x1a371, 22 Oct) until tabnul's page allocator fix (PR #288, sotc_modes.py POOL_FIX): an
+    # hour without a crash with it (26 Oct). Experimental there; SOTC_MAX_IN_PRO=0 brings back High.
+    if 'SOTC_MAX_IN_PRO=0' in str(s.get('extra_env', '')) and textures == 'max' and env['SOTC_NEO'] == '1':
         textures = 'high'
         env['SOTC_NOTE'] = 'Texture quality Maximum is not used in PS4 Pro mode: High'
     if textures == 'max':
         env.setdefault('SOTC_LOD_POOL_LOW', '0')
     env['SOTC_UI_LANG'] = s.get('ui_language') or windows_language()  # overlay and F7/F8 texts
-    # The game renders at the output size (sotc.py scales it down above about 4.2 million pixels; the
-    # upscaler takes it to the output). 720p renders at 1080p, as on PS4; the PS4 Pro path keeps its
-    # own sizes.
+    # The game renders at the output size. 720p renders at 1080p, as on PS4; the PS4 Pro path keeps
+    # its own sizes.
     output = env['SOTC_OUTPUT_RES']
-    if output not in ('1280x720', '1920x1080') and env['SOTC_NEO'] == '0':
+    dlss = dlss_mode(s)
+    if dlss and env['SOTC_NEO'] == '0':
+        env['SOTC_RENDER_RES'] = dlss_render(output, dlss)
+    elif output not in ('1280x720', '1920x1080') and env['SOTC_NEO'] == '0':
         env['SOTC_RENDER_RES'] = output
-    env['BB_FSR1'] = '1' if s.get('upscaler', 'fsr1') == 'fsr1' else '0'
+    # DLSS: FSR 1 stays the upscaler of frames without the game's scene (menus) and the fallback
+    # without an RTX card or the NVIDIA DLLs.
+    env['BB_FSR1'] = '1' if dlss or s.get('upscaler', 'fsr1') == 'fsr1' else '0'
+    if dlss:
+        env['SOTC_UPSCALER'] = 'dlss'
+        if s.get('dlss_compare'):
+            env['SOTC_DLSS_COMPARE'] = '1'
     if s.get('sharpness') == 'off':
         env['BB_RCAS'] = '0'
     else:
@@ -897,6 +965,16 @@ def game_environment(s):
     env['SOTC_MOUSE'] = '1' if s.get('mouse', True) else '0'
     env['SOTC_MOUSE_SENS'] = str(s.get('mouse_sens') or '1.0')
     env['SOTC_MOUSE_INVERT'] = '1' if s.get('mouse_invert') else '0'
+    # Hot readbacks (buffer_cache.cpp GatherDownloads): ~25% more FPS at the Shrine; off by
+    # default since they put rainbow garbage and crashes on reused memory before the late check.
+    if s.get('rb_hot'):
+        env['SOTC_RB_HOT'] = '1'
+    # Bluepoint's debug menu (+RetailBuild=0 served by the port; the game files are not touched).
+    if s.get('debug_menu'):
+        env['SOTC_DEBUG_MENU'] = '1'
+    # The texture memory watch (events.log lines "Vigia: ..."), for bug reports.
+    if s.get('debug_watch'):
+        env['SOTC_POOL_WATCH'] = '1'
     if str(s.get('gamepad', '')).strip():
         env['BB_GAMEPAD'] = str(s['gamepad']).strip()
     if s.get('pad_glyphs') in ('xbox', 'ps', 'keyboard'):
@@ -912,6 +990,22 @@ def game_environment(s):
     return env
 
 
+def dlss_render(output, mode):
+    """The render size for DLSS mode at output WxH: multiples of 8, at least 640x360 (DLAA: the
+    output itself). The exact aspect when a size within 6% of the factor has it: the presenter
+    keeps the render's aspect, so 2552x1064 for 3840x1600 gave a 3838 wide output. Render widths
+    of 1153 to 1280 are widened by sotc_modes.py (row pitch 1280)."""
+    try:
+        w, h = map(int, output.split('x'))
+    except ValueError:
+        return output
+    target = h / DLSS_FACTORS.get(mode, 1.5)
+    exact = [rh for rh in range(360, h + 1, 8) if rh * w % (h * 8) == 0 and abs(rh - target) <= target * 0.06]
+    rh = min(exact, key=lambda rh: abs(rh - target)) if exact else max(360, round(target / 8) * 8)
+    rw = max(640, round(rh * w / h / 8) * 8)
+    return f'{rw}x{rh}'
+
+
 def is_wide(size):
     """True for a WxH wider than 16:9 (by more than 2%)."""
     try:
@@ -921,13 +1015,14 @@ def is_wide(size):
     return w * 9 > h * 16 * 1.02
 
 
-def shadps4_saves():
-    """Save folders of shadPS4 installations next to the port or in the usual places."""
+def shadps4_saves(serial):
+    """Save folders of the game serial in shadPS4 installations next to the port or in the usual
+    places."""
     roots = [PORT_DIR.parent, Path.home(), Path(os.environ.get('APPDATA', Path.home()))]
     found = []
     for root in roots:
-        for pattern in ('*/user/home/*/savedata/' + GAME_ID, '*/*/user/home/*/savedata/' + GAME_ID,
-                        'shadPS4/savedata/*/' + GAME_ID):
+        for pattern in ('*/user/home/*/savedata/' + serial, '*/*/user/home/*/savedata/' + serial,
+                        'shadPS4/savedata/*/' + serial):
             try:
                 found += [p for p in root.glob(pattern) if p.is_dir()]
             except OSError:
@@ -1217,7 +1312,7 @@ class Launcher:
         self.nav, self.current_page = {}, None
         for name, title in (('play', _('Jogar', 'Play')), ('game', _('Jogo e saves', 'Game & saves')),
                             ('graphics', _('Gráficos', 'Graphics')), ('controls', _('Controles', 'Controls')),
-                            ('advanced', _('Avançado', 'Advanced'))):
+                            ('advanced', _('Avançado', 'Advanced')), ('debug', _('Depuração', 'Debug'))):
             item = tk.Label(side, text='    ' + title, bg=BG, fg=TEXT, anchor='w', font=(ui_font(), 11),
                             pady=10, cursor='hand2')
             item.pack(fill='x')
@@ -1254,6 +1349,7 @@ class Launcher:
         self.build_graphics()
         self.build_controls()
         self.build_advanced()
+        self.build_debug()
         self.build_log()
         self.root.bind_all('<MouseWheel>', self.wheel)
         for key in ('dlss', 'output_res', 'neo'):
@@ -1402,7 +1498,8 @@ class Launcher:
         self.library_label.grid(row=self.next_row(f), column=0, columnspan=2, sticky='w', pady=(4, 0))
         self.section(f, _('Jogo', 'Game'))
         self.folder(f, 'game_dir', _('Pasta do jogo', 'Game folder'), _('Pasta com eboot.bin', 'Folder with eboot.bin'),
-                    _('Requer a versão europeia 1.01 (CUSA08809).', 'Requires the European version 1.01 (CUSA08809).'),
+                    _('Requer a versão europeia 1.01 (CUSA08809) ou a americana 1.00 (CUSA08034).',
+                      'Requires the European version 1.01 (CUSA08809) or the US version 1.00 (CUSA08034).'),
                     on_change=self.game_changed)
         self.section(f, _('Som', 'Sound'))
         self.folder(f, 'sys_modules', _('Módulos de som', 'Sound modules'),
@@ -1480,6 +1577,20 @@ class Launcher:
         self.row(f, _('Uso de memória de vídeo', 'Video memory usage'), self.choice(f, 'vram_use', VRAM_USE),
                  _('Se ocorrer erro de falta de memória, escolha um nível abaixo.',
                    'If an out-of-memory error occurs, select a lower level.'))
+        self.section(f, _('Grama', 'Grass'))
+        self.row(f, _('Sombras da grama', 'Grass shadows'), self.choice(f, 'grass_shadows', GRASS_SHADOWS),
+                 _('"Longe" reduz o FPS. Aplica-se ao iniciar o jogo.',
+                   '"Far" lowers the FPS. Applies when the game starts.'))
+        self.row(f, _('Distância da grama', 'Grass distance'), self.choice(f, 'grass_distance', VEG_DISTANCE),
+                 _('Também no menu do jogo (F1).', 'Also in the in-game menu (F1).'))
+        self.row(f, _('Altura da grama', 'Grass height'), self.choice(f, 'grass_height', VEG_HEIGHT))
+        self.row(f, _('Distância do mato', 'Weed distance'), self.choice(f, 'weed_distance', WEED_DISTANCE))
+        self.row(f, _('Altura do mato', 'Weed height'), self.choice(f, 'weed_height', VEG_HEIGHT))
+        self.row(f, _('Detalhe da grama', 'Grass detail'), self.choice(f, 'grass_detail', GRASS_DETAIL),
+                 _('A que distância a grama é desenhada por completo.', 'How far out the grass is drawn complete.'))
+        self.row(f, _('Esmaecimento da grama', 'Grass fade'), self.choice(f, 'grass_fade', GRASS_FADE),
+                 _('Valores diferentes de 1 deixam a grama mais rala. Aplica-se ao iniciar o jogo.',
+                   'Values other than 1 make the grass sparser. Applies when the game starts.'))
         self.section(f, _('Efeitos', 'Effects'))
         for key, title, _off in EFFECTS:
             self.check(f, key, _(*title))
@@ -1593,6 +1704,33 @@ class Launcher:
         window.grab_set()
         window.focus_force()
 
+    def build_debug(self):
+        f = self.scrolled_page('debug', _('Depuração', 'Debug'),
+                               _('Ferramentas de teste. Aplicam-se na próxima abertura do jogo.',
+                                 'Test tools. They apply the next time the game starts.'))
+        self.section(f, _('Menu de depuração do jogo', "The game's debug menu"), top=4)
+        self.check(f, 'debug_menu', _('Menu de depuração (F6 ou Start+Select no jogo)',
+                                      'Debug menu (F6 or Start+Select in game)'),
+                   _('O menu de testes da Bluepoint. O jogo pode ficar menos estável com ele ativado.',
+                     "Bluepoint's test menu. The game may be less stable with it enabled."))
+        self.section(f, _('Desempenho', 'Performance'))
+        self.check(f, 'rb_hot', _('Leituras rápidas da GPU (experimental)', 'Fast GPU readbacks (experimental)'),
+                   _('Mais FPS, mas podem surgir texturas com cores erradas.',
+                     'Higher FPS, but textures with wrong colours may appear.'))
+        self.section(f, _('Diagnóstico', 'Diagnostics'))
+        self.check(f, 'debug_watch', _('Vigia da memória de texturas', 'Texture memory watch'),
+                   _('Registra em user/events.log a memória de texturas reaproveitada pelo jogo ainda em uso.',
+                     'Writes to user/events.log when the game reuses memory of textures still in use.'))
+        self.check(f, 'dlss_compare', _('Comparar DLSS com FSR 1 (F9)', 'Compare DLSS with FSR 1 (F9)'),
+                   _('Com o NVIDIA DLSS ativado: F9 alterna entre DLSS e FSR 1.',
+                     'With NVIDIA DLSS enabled: F9 switches between DLSS and FSR 1.'))
+        self.section(f, _('Teclas no jogo', 'In-game keys'))
+        for key, text in (('F5', _('Salva as texturas do quadro atual em user/log/texcap_N.',
+                                    'Saves the textures of the current frame to user/log/texcap_N.')),
+                          ('F9', _('Recarrega as texturas da memória do jogo.',
+                                   'Reloads the textures from game memory.'))):
+            self.row(f, key, self.ttk.Label(f, text=text))
+
     def build_advanced(self):
         ttk = self.ttk
         f = self.scrolled_page('advanced', _('Avançado', 'Advanced'),
@@ -1648,25 +1786,26 @@ class Launcher:
         info = game_info(self.var('game_dir').get())
         if not info:
             game = _('✗ Jogo não encontrado na pasta escolhida', '✗ Game not found in the selected folder')
-        elif info[0] == GAME_ID and (bad := damaged_archives(self.var('game_dir').get())):
+        elif info[0] in GAMES and (bad := damaged_archives(self.var('game_dir').get())):
             game = _('⚠ Arquivos do jogo danificados ou incompletos: {}. Copie o jogo de novo.',
                      '⚠ Game files damaged or incomplete: {}. Copy the game again.').format(', '.join(bad))
-        elif info == (GAME_ID, GAME_VERSION):
+        elif game_supported(self.var('game_dir').get()):
             game = _('✓ {} versão {}', '✓ {} version {}').format(*info)
         else:
-            game = _('⚠ {} versão {}: alguns recursos exigem {} {}',
-                     '⚠ {} version {}: some features require {} {}').format(*info, GAME_ID, GAME_VERSION)
+            game = _('⚠ {} versão {}: alguns recursos exigem {}',
+                     '⚠ {} version {}: some features require {}').format(*info, supported_games())
         modules = Path(self.var('sys_modules').get() or '.')
         if self.var('sys_modules').get() and all((modules / m).is_file() for m in SYS_MODULES):
             sound = _('✓ Som: módulos do seu console', '✓ Sound: your console\'s modules')
         else:
             sound = _('✓ Som: integrado', '✓ Sound: built-in')
         user = user_dir({'user_dir': self.var('user_dir').get()})
-        saves = user / 'savedata' / '1' / GAME_ID
+        serial = game_serial(self.var('game_dir').get())
+        saves = user / 'savedata' / '1' / serial
         save = (_('✓ Saves em {}', '✓ Saves in {}').format(saves) if saves.is_dir() and any(saves.iterdir())
                 else _('• Ainda não há saves', '• No saves yet'))
         from sotc_discovery import dlc_count
-        count = dlc_count(self.var('dlc_dir').get())
+        count = dlc_count(self.var('dlc_dir').get(), serial)
         dlc = (_('✓ DLC: {} instalada(s)', '✓ DLC: {} installed').format(count) if count
                else _('• Sem DLC', '• No DLC'))
         # A running game holds its own commit: the row keeps what it showed before the start.
@@ -1779,8 +1918,6 @@ class Launcher:
         self.dlss_box.configure(state='disabled' if blocked else 'readonly')
         self.dlss_note.configure(text={
             'gpu': _('Requer uma placa de vídeo NVIDIA GeForce RTX.', 'Requires an NVIDIA GeForce RTX graphics card.'),
-            'output': _('Disponível apenas com saída 16:9.', 'Available only with a 16:9 output.'),
-            'neo': _('Indisponível com o modo PS4 Pro.', 'Not available with PS4 Pro mode.'),
         }.get(blocked, ''))
         active = bool(dlss_mode(self.upscaling_state()))
         for box in self.render_boxes:
@@ -1803,16 +1940,19 @@ class Launcher:
             settings_in_use = LEGACY_CONFIG_FILE
 
     def import_save(self):
-        found = shadps4_saves()
+        serial = game_serial(self.var('game_dir').get())
+        found = shadps4_saves(serial)
         initial = str(found[0]) if found else str(PORT_DIR.parent)
-        chosen = self.filedialog.askdirectory(title=_('Pasta savedata/CUSA08809 do shadPS4', "shadPS4's savedata/CUSA08809 folder"),
+        chosen = self.filedialog.askdirectory(title=_('Pasta savedata/{} do shadPS4', "shadPS4's savedata/{} folder").format(serial),
                                               initialdir=initial)
         if not chosen:
             return
         source = Path(chosen)
-        if source.name != GAME_ID and (source / GAME_ID).is_dir():
-            source = source / GAME_ID
-        target = user_dir({'user_dir': self.var('user_dir').get()}) / 'savedata' / '1' / GAME_ID
+        # A savedata folder: its subfolder of this game, else of the other release (EU and US
+        # saves are of the same game build). The save goes to this game's folder.
+        if source.name not in GAMES:
+            source = next((source / s for s in (serial, *GAMES) if (source / s).is_dir()), source)
+        target = user_dir({'user_dir': self.var('user_dir').get()}) / 'savedata' / '1' / serial
         # sotc: one save folder picked (it holds sce_sys/param.sfo): import it as one save. The
         # runtime creates the port's metadata for saves that come without it.
         single = (source / 'sce_sys' / 'param.sfo').is_file()
@@ -1977,8 +2117,8 @@ class Launcher:
             return
         if not game:
             self.messagebox.showerror('Shadow of the Colossus', _(
-                'O jogo (CUSA08809) não foi encontrado em\n{}\n\nSelecione a pasta do jogo.',
-                'The game (CUSA08809) was not found in\n{}\n\nSelect the game folder.').format(chosen))
+                'O jogo (CUSA08809 ou CUSA08034) não foi encontrado em\n{}\n\nSelecione a pasta do jogo.',
+                'The game (CUSA08809 or CUSA08034) was not found in\n{}\n\nSelect the game folder.').format(chosen))
             return
         self.configure_from_game(game, chosen)
 
@@ -1992,6 +2132,7 @@ class Launcher:
         def work():
             from sotc_discovery import find_dlc_root, find_update, dlc_count, scan, SYS_MODULES as modules
             dlc_root = ''
+            serial = game_serial(game)
             try:
                 from sotc_pkg import find_packages, targets, unpack
                 packages = [p for p in find_packages(chosen or Path(game).parent, 2) if p['kind'] == 'dlc']
@@ -2003,12 +2144,12 @@ class Launcher:
                 dlc_root = ''
             result = {'game': game, 'dlc': dlc_root or find_dlc_root(game, chosen), 'update': find_update(game),
                       'sound': None, 'save': None}
-            result['dlc_count'] = dlc_count(result['dlc'])
+            result['dlc_count'] = dlc_count(result['dlc'], serial)
             # The console's modules are used only when chosen in Game & saves: the port's own
             # sound library plays every sound.
             sound_ready = self.app.get('sys_modules') and all(
                 (Path(self.app['sys_modules']) / m).is_file() for m in modules)
-            saves = user / 'savedata' / '1' / GAME_ID
+            saves = user / 'savedata' / '1' / serial
             has_saves = saves.is_dir() and any(saves.iterdir())
             found = {'sys_modules': [], 'saves': []}
             if not has_saves:
@@ -2020,7 +2161,8 @@ class Launcher:
                 result['sound'] = self.app['sys_modules']
             if not has_saves:
                 own = user.resolve()
-                outside = [p for p in found['saves'] if not Path(p).resolve().is_relative_to(own)]
+                outside = [p for p in found['saves']
+                           if Path(p).name == serial and not Path(p).resolve().is_relative_to(own)]
                 if outside:
                     try:
                         saves.parent.mkdir(parents=True, exist_ok=True)
@@ -2159,7 +2301,7 @@ class Launcher:
         return bool(folder) and all((Path(folder) / m).is_file() for m in SYS_MODULES)
 
     def saves_folder(self):
-        return user_dir({'user_dir': self.var('user_dir').get()}) / 'savedata' / '1' / GAME_ID
+        return user_dir({'user_dir': self.var('user_dir').get()}) / 'savedata' / '1' / game_serial(self.var('game_dir').get())
 
     def has_saves(self):
         saves = self.saves_folder()
@@ -2192,16 +2334,18 @@ class Launcher:
             if parent not in folders:
                 folders.append(parent)
         if found['games'] and not game_info(self.var('game_dir').get()):
-            best = min(found['games'],
-                       key=lambda g: eboot_version(Path(g['path']) / 'eboot.bin') != GAME_VERSION)
+            best = min(found['games'], key=lambda g: not game_supported(g['path']))
             self.var('game_dir').set(best['path'])
             done.append(_('jogo em {}', 'game in {}').format(best['path']))
-        if not self.var('dlc_dir').get() and found.get('dlc'):
-            self.var('dlc_dir').set(found['dlc'][0])
-            done.append(_('DLC em {}', 'DLC in {}').format(found['dlc'][0]))
+        serial = game_serial(self.var('game_dir').get())
+        dlc = next((path for path, dlc_serial in found.get('dlc', []) if dlc_serial == serial), None)
+        if not self.var('dlc_dir').get() and dlc:
+            self.var('dlc_dir').set(dlc)
+            done.append(_('DLC em {}', 'DLC in {}').format(dlc))
         if not self.has_saves():
             own = user_dir({'user_dir': self.var('user_dir').get()}).resolve()
-            outside = [p for p in found['saves'] if not Path(p).resolve().is_relative_to(own)]
+            outside = [p for p in found['saves']
+                       if Path(p).name == serial and not Path(p).resolve().is_relative_to(own)]
             if outside and self.messagebox.askyesno('Shadow of the Colossus', _(
                     'Foi encontrado um save do jogo em\n{}\nImportar?',
                     'A game save was found in\n{}\nImport it?').format(outside[0])):
@@ -2235,8 +2379,8 @@ class Launcher:
             return
         self.collect()
         if not game_info(self.app['game_dir']):
-            self.messagebox.showerror('Shadow of the Colossus', _('Selecione a pasta do jogo (CUSA08809).',
-                                                                  'Select the game folder (CUSA08809).'))
+            self.messagebox.showerror('Shadow of the Colossus', _('Selecione a pasta do jogo (CUSA08809 ou CUSA08034).',
+                                                                  'Select the game folder (CUSA08809 or CUSA08034).'))
             self.show('game')
             return
         self.set_log('')
@@ -2294,7 +2438,8 @@ class Launcher:
 
     # Quick settings the in-game menu may have changed (it writes them to the settings file).
     LIVE_KEYS = ('fps_mode', 'framegen', 'dlssg_mult', 'textures', 'shadow_reuse', 'volume', 'upscaler',
-                 'sharpness', 'fx_vignette', 'fx_fog', 'fx_ssao', 'perf_dma')
+                 'sharpness', 'fx_vignette', 'fx_fog', 'fx_ssao', 'perf_dma', 'vibration', 'grass_distance',
+                 'grass_height', 'weed_distance', 'weed_height', 'grass_detail', 'grass_shadows', 'grass_fade')
 
     def reload_live_settings(self):
         saved = load_json(settings_in_use, {})

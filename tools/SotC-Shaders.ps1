@@ -6,7 +6,7 @@
 #   SotC-Play.bat    : starts the game normally and shows the same live status, so a pause is
 #                      shown as "COMPILING" (first time a shader is seen) instead of a mystery.
 #
-# How it works: the port saves every pipeline it builds (user\cache\CUSA08809[_nodma...]\*.key) and
+# How it works: the port saves every pipeline it builds (user\cache\<CUSA08809 EU or CUSA08034 US>[_nodma...]\*.key) and
 # rebuilds all of them at startup ("Preloaded N pipelines"); Intel's driver keeps the compiled
 # code in %USERPROFILE%\AppData\LocalLow\Intel\ShaderCache, so known shaders load fast. Only
 # shaders never seen before compile during play, and on Intel Arc that can take minutes each.
@@ -41,11 +41,11 @@ $settings = (ReadSettings) | ConvertFrom-Json
 # The game's log and caches live in the data folder the launcher passes (user_dir).
 $UserDir = if ($settings.user_dir) { $settings.user_dir } else { Join-Path $Port 'user' }
 $Log = Join-Path $UserDir 'last_run.log'
-# The cache folder name also depends on the GPU (_noi64) and the PS4 Pro mode (_neo): the most
-# recently written CUSA08809* folder is the one in use.
+# The cache folder name depends on the release (CUSA08809 EU, CUSA08034 US), the GPU (_noi64) and
+# the PS4 Pro mode (_neo): the most recently written one is the one in use.
 function CacheDir {
-    $dir = Get-ChildItem (Join-Path $UserDir 'cache') -Directory -Filter 'CUSA08809*' -ErrorAction SilentlyContinue |
-        Where-Object { $_.Extension -ne '.incompatible' } |
+    $dir = Get-ChildItem (Join-Path $UserDir 'cache') -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match '^CUSA0(8809|8034)' -and $_.Extension -ne '.incompatible' } |
         Sort-Object LastWriteTime -Descending | Select-Object -First 1
     if ($dir) { return $dir.FullName }
     $name = if ($settings.perf_dma -eq $false) { 'CUSA08809_nodma' } else { 'CUSA08809' }

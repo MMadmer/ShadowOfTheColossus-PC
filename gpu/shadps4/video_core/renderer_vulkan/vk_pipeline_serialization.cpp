@@ -19,11 +19,13 @@
 namespace Serialization {
 /* You should increment versions below once corresponding serialization scheme is changed. */
 // Above both lines before the upstream merge: generation changed, so old caches are dropped.
-static constexpr u32 ShaderBinaryVersion = 36u;
 // sotc: 33 = the draw thread merge (SRT walker faults read zero instead of patching); 35 = the
 // shader info keeps the fragment inputs, interpolation and vertex outputs (barycentric GS); 36 =
-// invariant position on barycentric-emulation pipelines (PR #258: ground-level texture/depth
-// mismatch between the pipeline with the geometry shader and the one without).
+// invariant position on barycentric-emulation pipelines (PR #258). Upstream: 34 = the LOD
+// feedback (sotc_lod_stats.h; binaries built with SOTC_LOD_FEEDBACK=0 are another version), 38 =
+// early fragment tests on the LOD feedback shaders (emit_spirv.cpp). 39/136 = the fork with
+// upstream 0.70 (both sets of changes).
+static const u32 ShaderBinaryVersion = Shader::LodFeedbackEnabled() ? 39u : 136u;
 static constexpr u32 ShaderMetaVersion = 21u;
 static constexpr u32 PipelineKeyVersion = 3u;
 } // namespace Serialization

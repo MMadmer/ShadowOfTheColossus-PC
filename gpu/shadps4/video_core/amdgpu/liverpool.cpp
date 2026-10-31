@@ -212,6 +212,8 @@ void Liverpool::BackLoop(std::stop_token stoken) {
     RaiseGpuThreadPriority();
     g_gpu_thread = 2;
     Shader::g_info_slot = 1;
+    SotcStats::t_draw_thread = true;
+    SotcStats::RegisterSplitThread(SotcStats::SplitThreadDraw);
 #ifdef __linux__
     back_tid = gettid();
 #endif
@@ -222,6 +224,7 @@ void Liverpool::BackLoop(std::stop_token stoken) {
         }
         if (back_head.load(std::memory_order_acquire) == tail) {
             const u64 idle_start = SotcStats::NowNs();
+            const SotcStats::SplitTimer idle_split{SotcStats::SplitIdle};
             struct IdleTime {
                 u64 start;
                 ~IdleTime() {
@@ -230,13 +233,16 @@ void Liverpool::BackLoop(std::stop_token stoken) {
                 }
             } idle_time{idle_start};
             bool ready = false;
-            for (u32 spin = 0; spin < SpinLimit(); ++spin) {
-                if (back_head.load(std::memory_order_acquire) != tail ||
-                    num_commands.load(std::memory_order_acquire)) {
-                    ready = true;
-                    break;
+            {
+                const SotcStats::SplitTimer spin_split{SotcStats::SplitIdleSpin};
+                for (u32 spin = 0; spin < SpinLimit(); ++spin) {
+                    if (back_head.load(std::memory_order_acquire) != tail ||
+                        num_commands.load(std::memory_order_acquire)) {
+                        ready = true;
+                        break;
+                    }
+                    CpuRelax();
                 }
-                CpuRelax();
             }
             if (!ready) {
                 std::unique_lock lk{back_mutex};
@@ -252,7 +258,15 @@ void Liverpool::BackLoop(std::stop_token stoken) {
         }
         BackOp& op = back_ring[tail % BackRingSize];
         const bool wrote = op.writes_memory;
-        ExecuteBackOp(op);
+        {
+            using enum BackOp::Kind;
+            const SotcStats::SplitTimer op_split{
+                op.kind == Draw           ? SotcStats::SplitDraw
+                : op.kind == DrawIndirect ? SotcStats::SplitIndirect
+                : op.kind == Func         ? SotcStats::SplitFunc
+                                          : SotcStats::SplitDispatch};
+            ExecuteBackOp(op);
+        }
         op.func = {};
         ++tail;
         back_tail.store(tail, std::memory_order_seq_cst);
@@ -369,6 +383,12 @@ void Liverpool::BackPublish(bool writes_memory) {
     const u64 head = back_head.load(std::memory_order_relaxed) + 1;
     back_ring[(head - 1) % BackRingSize].writes_memory = writes_memory;
     back_head.store(head, std::memory_order_seq_cst);
+    if (SotcStats::kDrawSplit) { // only the command processor publishes
+        const u64 depth = head - back_tail.load(std::memory_order_relaxed);
+        if (depth > SotcStats::split_queue_max.load(std::memory_order_relaxed)) {
+            SotcStats::split_queue_max.store(depth, std::memory_order_relaxed);
+        }
+    }
     if (writes_memory) {
         back_write_seq = head;
     }
@@ -605,6 +625,7 @@ void Liverpool::ProcessCommands() {
                     command_queue.pop();
                     --num_commands;
                 }
+                const SotcStats::SplitTimer command_split{SotcStats::SplitCommands};
                 callback();
             }
             return;
@@ -639,6 +660,7 @@ void Liverpool::Process(std::stop_token stoken) {
     RaiseGpuThreadPriority();
     gpu_id = std::this_thread::get_id();
     g_gpu_thread = 1;
+    SotcStats::RegisterSplitThread(SotcStats::SplitThreadCp);
 #ifdef __linux__
     gpu_tid = gettid();
 #endif

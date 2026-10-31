@@ -61,6 +61,10 @@ private:
     void SeedFromPack();
     void IndexAdd(std::string&& file_name);
     bool TakePrefetched(const std::filesystem::path& path, std::vector<u8>& data);
+    /// sotc: after FinishPreload, Load of a file this never saw at Prefetch or Save time returns
+    /// nothing without touching the disk: every new shader's collision check opened a missing
+    /// file on the command processor, ~28 ms each on Windows. The index of Exists (on_disk).
+    bool MayExist(const std::filesystem::path& path);
 
     std::jthread io_worker{};
     std::filesystem::path cache_path{};
@@ -71,7 +75,8 @@ private:
     std::map<std::string, std::vector<u8>> prefetched{};
     bool prefetch_active{};
     std::mutex index_mutex{};
-    std::unordered_set<std::string> on_disk{}; ///< sotc: file names of the loose cache blobs
+    std::unordered_set<std::string> on_disk{}; ///< sotc: file names of the cache blobs
+    bool index_valid{}; ///< sotc: on_disk was listed (a failed listing: MayExist says yes)
 };
 
 } // namespace Storage

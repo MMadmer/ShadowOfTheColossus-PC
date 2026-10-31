@@ -190,7 +190,7 @@ static u32 PerLoopIterationBudget() {
         if (const char* value = std::getenv("SHADPS4_LOOP_LIMIT_PER_LOOP")) {
             return static_cast<u32>(std::strtoul(value, nullptr, 0));
         }
-        return Common::ElfInfo::Instance().GameSerial() == "CUSA08809" ? (1U << 13) : 0U;
+        return Common::ElfInfo::Instance().IsSotc() ? (1U << 13) : 0U;
     }();
     return budget;
 }
@@ -539,8 +539,11 @@ void DefineEntryPoint(const Info& info, EmitContext& ctx, Id main) {
             ctx.AddExecutionMode(main, spv::ExecutionMode::DepthReplacing);
         }
         // Only for shaders whose side effects depend on it: storage writes, and nothing early
-        // tests would change (discard, or a depth, stencil ref or sample mask export).
-        if (ctx.runtime_info.hw.fs.early_fragment_tests && info.has_storage_images &&
+        // tests would change (discard, or a depth, stencil ref or sample mask export). sotc: the
+        // LOD feedback atomic is a storage write too, and without the mode it turned early depth
+        // testing off for every measured shader (occluded pixels shaded: ~7 FPS, 27 Oct).
+        if (ctx.runtime_info.hw.fs.early_fragment_tests &&
+            (info.has_storage_images || info.uses_lod_feedback) &&
             !info.has_discard && !info.stores.GetAny(IR::Attribute::Depth) &&
             !info.stores.Get(IR::Attribute::StencilRef) &&
             !info.stores.Get(IR::Attribute::SampleMask)) {

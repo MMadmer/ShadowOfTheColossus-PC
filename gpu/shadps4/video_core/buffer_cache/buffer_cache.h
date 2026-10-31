@@ -115,6 +115,9 @@ public:
 
     /// Attempts to obtain a buffer without modifying the cache contents.
     [[nodiscard]] std::pair<const Buffer*, u64> ObtainBufferForImage(VAddr device_addr, u32 size);
+    /// sotc: guest memory in a staging buffer, whatever the GPU copy holds (F9 diagnostic).
+    [[nodiscard]] std::pair<const Buffer*, u64> ObtainGuestCopyForImage(VAddr device_addr,
+                                                                       u32 size);
 
     /// Return true when a region is modified from the CPU
     [[nodiscard]] bool IsRegionCpuModified(VAddr addr, size_t size);
@@ -201,7 +204,10 @@ private:
 
     /// sotc: the range [first, second) of the arena that a readback of [device_addr, +size)
     /// downloads and unmarks as GPU-modified: 512 KiB around it, smaller with SOTC_RB_NARROW.
-    std::pair<VAddr, VAddr> ReadbackWindow(const Buffer* arena, VAddr device_addr, u64 size);
+    /// sotc: stream: a larger window for a guest thread reading GPU-written memory in sequence
+    /// (SOTC_RB_STREAM, ReadMemory), 0 for the usual one.
+    std::pair<VAddr, VAddr> ReadbackWindow(const Buffer* arena, VAddr device_addr, u64 size,
+                                           u64 stream = 0);
 
     /// One range to read back: its GPU-modified parts, as copies from the arena.
     struct ReadbackItem {
@@ -211,6 +217,8 @@ private:
         boost::container::small_vector<vk::BufferCopy, 4> copies;
         /// The GPU-modified ranges downloaded; they stay in the set until SubtractDownloaded.
         boost::container::small_vector<std::pair<VAddr, u64>, 4> gpu_ranges;
+        /// sotc: brought along by the hot readbacks (SOTC_RB_HOT), not asked for.
+        bool hot = false;
     };
     /// Collects what a readback of [device_addr, +size) and the hot readbacks must copy. Returns
     /// the bytes to download. sotc: the ranges stay in the GPU-modified set until the caller
@@ -234,6 +242,7 @@ private:
     struct AsyncReadback {
         VAddr device_addr{};
         u64 size{};
+        u64 stream{}; ///< sotc: ReadbackWindow's stream size (SOTC_RB_STREAM), 0 none
         bool is_write{};
         bool waiting{};
         bool dirty{};

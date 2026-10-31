@@ -120,6 +120,8 @@ public:
     u64 Flush();
     void Finish();
     void OnSubmit();
+    /// sotc: copies the LOD feedback buffer to the host and clears it (sotc_lod_stats.h)
+    void SotcLodFeedbackCycle();
     void OnFence();
 
     PipelineCache& GetPipelineCache() {
@@ -187,6 +189,9 @@ private:
     void BindIndexBuffer(u32 index_offset = 0);
 
     void ResetBindings(bool is_compute);
+    void CaptureTextures();
+    static bool TaaOff(); ///< sotc: DLSS on or SOTC_TAA_OFF=1, vk_rasterizer.cpp
+    u32 CompositeUiIndex(); ///< sotc: which of the composite's two images is the UI layer
     void MaybeDumpImages(u64 pgm_hash);
     void FlushPeriodic();
     u64 commands_tick{};
@@ -207,6 +212,16 @@ private:
     VideoCore::PageManager page_manager;
     VideoCore::BufferCache buffer_cache;
     VideoCore::TextureCache texture_cache;
+    // sotc: the finest mip per texture counter bank written by fragment shaders (device local),
+    // and the host copies read when the GPU reaches them (one per area in flight).
+    static constexpr u32 SotcLodFeedbackBytes = 256 * sizeof(u32); ///< + the gate word
+    static constexpr u32 SotcLodFeedbackAreas = 4;
+    u32 sotc_lod_cycles{};
+    std::unique_ptr<VideoCore::Buffer> sotc_lod_feedback;
+    std::unique_ptr<VideoCore::Buffer> sotc_lod_download;
+    std::array<std::atomic<bool>, SotcLodFeedbackAreas> sotc_lod_pending{};
+    u32 sotc_lod_area{};
+    std::chrono::steady_clock::time_point sotc_lod_last{};
     AmdGpu::Liverpool* liverpool;
     Core::MemoryManager* memory;
     boost::icl::interval_set<VAddr> mapped_ranges;
@@ -271,6 +286,11 @@ private:
                                                             const Shader::ImageResource& resource);
     bool attachment_feedback_loop{};
     bool needs_barrier{};
+    /// sotc: SOTC_DEPTH_RO. The depth buffer of this draw is sampled (depth aspect) while its
+    /// stencil is written: one layout serves both.
+    bool DepthSampledAsAttachment(VideoCore::ImageId image_id, const VideoCore::Image& image,
+                                  const VideoCore::TextureCache::ImageDesc& desc,
+                                  bool compute) const;
 
     /// sotc: binding reuse. About two thirds of the binds repeat the previous one (same pipeline,
     /// user data and flat buffers: instanced passes). Its descriptors are kept and only the cheap
@@ -336,25 +356,15 @@ private:
     std::array<HudlessUiCopy, 4> hudless_ui{};
     u32 hudless_ui_next{};
     s32 hudless_ui_taken{-1}; ///< the copy of the last TakeHudless, -1 none
-    /// sotc: SOTC_DLSS_PROBE (vk_rasterizer.cpp).
-    void ProbeGbuffer(const AmdGpu::Regs& regs);
-    void ProbeSceneLayout(const Shader::Info& stage);
-    u64 probe_frame{~0ull};
-    VideoCore::ImageId probe_mvec{};
     std::unordered_map<VAddr, HudlessImage> hudless_images; ///< by video out address
     HudlessImage hudless_clear;  ///< 1x1, all zero: the UI layer of the redraw
     s32 hudless_ui_info{-1};     ///< this draw: image_infos index of the UI texture, -1 none
-    /// sotc: this draw is the composite DLSS SR upscales the scene of: image_infos index of the
-    /// scene, -1 none; the scene and the size of the UI layer (the output).
-    s32 sr_scene_info{-1};
-    VideoCore::ImageId sr_scene_id{};
-    u32 sr_out_width{}, sr_out_height{};
+    /// sotc: this bind's BindTextures found the composite DLSS SR takes (Dlssg::NoteComposite):
+    /// the bind is not kept for reuse, which would miss it.
+    bool sr_composite{};
     VAddr hudless_vo{};          ///< this draw: the video out image it renders to, 0 none
     vk::Format hudless_vo_format{};
     u32 hudless_vo_width{}, hudless_vo_height{};
-    /// sotc: video out images drawn to (BeginRendering): DLSS SR only for a composite into one.
-    std::array<VAddr, 8> vo_targets{};
-    u32 vo_target_next{};
     /// sotc: descriptor state of the previous graphics draw (SOTC_FAST_BIND). Valid only while
     /// the same command buffer, pipeline, push data and resource generations are current.
     struct FastBindState {
@@ -370,6 +380,23 @@ private:
     };
     FastBindState fast_bind{};
     bool fast_bind_hit{};
+
+    /// sotc: DLSS super resolution draws the game's UI layer at the output size: each draw into
+    /// it (Dlssg::UiTarget) is drawn again into ui_shadow with its viewport and scissor scaled,
+    /// and the composite hands that to the presenter (Dlssg::NoteUiShadow). BeginUiShadow
+    /// starts the redraw of this draw, EndUiShadow restores the dynamic state.
+    bool BeginUiShadow(const GraphicsPipeline* pipeline, const RenderState& state);
+    void EndUiShadow();
+    void NoteUiShadow(); ///< at the composite: hands the shadow over, starts the next frame's
+    HudlessImage ui_shadow; ///< R8G8B8A8: rt_view sRGB, read_view UNORM
+    u32 ui_shadow_draws{};  ///< since the last composite
+    bool ui_shadow_broken{}; ///< a draw into the UI layer was not redrawn since then
+    bool ui_shadow_hit{};    ///< this draw renders into the UI layer
+    vk::Format ui_shadow_format{};
+    u32 ui_shadow_src_width{}, ui_shadow_src_height{}; ///< this draw: the UI layer size
+    u32 ui_shadow_width{}, ui_shadow_height{};         ///< this draw: the output size
+    Viewports ui_shadow_viewports;
+    Scissors ui_shadow_scissors;
 };
 
 } // namespace Vulkan

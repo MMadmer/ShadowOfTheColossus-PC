@@ -124,7 +124,9 @@ private:
     Frontend::WindowSDL& window;
     Instance instance;
     HostPasses::FsrPass fsr_pass;
-    HostPasses::FsrPass hudless_fsr_pass; ///< sotc: FSR 1 of the HUD-less frame (its own images)
+    /// sotc: the same FSR 1 for the frame without the HUD (frame generation), with its own images:
+    /// fsr_pass's ring holds the game frame's.
+    HostPasses::FsrPass fsr_pass_hudless;
     HostPasses::FsrPass::Settings fsr_settings{};
     HostPasses::PostProcessingPass::Settings pp_settings{};
     HostPasses::PostProcessingPass pp_pass;
