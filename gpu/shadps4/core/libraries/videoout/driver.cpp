@@ -1300,12 +1300,15 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
                     }
                 }
             } else {
+                // sotc: the release time, taken before the synchronous present: measured after it,
+                // every flip went out a present later than the game's rate asked.
+                const auto flip_start = Clock::now();
                 Flip(request);
                 last_flip_vblank = vblank_status.count;
                 flipped = true;
                 // sotc: the game's production rate from the submit intervals, clamped so that a
                 // load stall does not poison it.
-                last_flip_time = Clock::now();
+                last_flip_time = flip_start;
                 const auto delta = std::clamp<std::chrono::nanoseconds>(
                     std::chrono::duration_cast<std::chrono::nanoseconds>(request.arrival -
                                                                          prev_arrival),
