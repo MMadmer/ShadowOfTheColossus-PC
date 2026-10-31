@@ -39,6 +39,16 @@ class IniTests(unittest.TestCase):
             self.assertEqual(ini.read_text(encoding='utf-8'), 'SOTC_MODES=\n')
 
 
+class CvarTests(unittest.TestCase):
+    def test_extra_cvars_after_the_settings(self):
+        culling = 'doIndexBufferCulling=0 doSunShadowIndexBufferCulling=0'
+        self.assertEqual(sotc.engine_cvars({}), culling)
+        self.assertEqual(sotc.engine_cvars({'SOTC_CVARS': ''}), '')
+        self.assertEqual(sotc.engine_cvars({'SOTC_CVARS': 'fog_enable=0', 'SOTC_EXTRA_CVARS': ' nointro '}),
+                         'fog_enable=0 nointro')
+        self.assertEqual(sotc.engine_cvars({'SOTC_EXTRA_CVARS': 'nointro'}), culling + ' nointro')
+
+
 class CrashEventTests(unittest.TestCase):
     LINE = ('Windows Application Error (event 1000) at 2026-10-28 19:02:11 UTC: bb-probe.exe, module ntdll.dll '
             '10.0.26100.9711, exception 0xc0000409, offset 0x5c955')

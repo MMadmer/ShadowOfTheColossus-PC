@@ -166,7 +166,9 @@ FOV_ADJUST = (0x031ca404, bytes.fromhex('0000803f'))
 # EU 1.01 / US 1.00: the command line lea, the fps60 site and the render size sites.
 VERSION_CHECKS = [(CMDLINE_LEA, bytes.fromhex('488d352debad00')), (0x01390090, bytes.fromhex('ff25a20567')),
                   RENDER_WIDTH, RENDER_HEIGHT]
-CVAR = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*(=[-+.0-9A-Za-z_%]+)?$')  # NAME=VALUE or a flag such as nointro
+# NAME=VALUE, NAME(ARGS) or a flag such as nointro. A vector value takes the parentheses form: a
+# value after '=' cannot hold commas (tabnul, PR #345).
+CVAR = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*((=[-+.0-9A-Za-z_%]+)|(\([-+.0-9A-Za-z_,% ]*\)))?$')
 
 
 def image_bytes(elf, ph, vaddr, length):
@@ -266,7 +268,7 @@ def main():
     parser.add_argument('game', type=Path)
     parser.add_argument('--out', type=Path, default=Path(__file__).resolve().parent.parent / 'out')
     parser.add_argument('--modes', default='', help='comma-separated: ' + ', '.join([*MODES, *CVAR_MODES]))
-    parser.add_argument('--cvars', default='', help='engine cvars NAME=VALUE separated by spaces')
+    parser.add_argument('--cvars', default='', help='engine cvars NAME=VALUE or NAME(ARGS) separated by spaces')
     parser.add_argument('--render', default='', help='render size WxH instead of 1920x1080, e.g. 3840x1600')
     parser.add_argument('--fov', type=int, default=100, help='field of view in percent of the original (80 to 150)')
     args = parser.parse_args()
@@ -325,7 +327,7 @@ def main():
     for item in args.cvars.split():
         item = item.lstrip('+')
         if not CVAR.match(item):
-            raise SystemExit(f'bad cvar {item!r} (NAME=VALUE or NAME)')
+            raise SystemExit(f'bad cvar {item!r} (NAME=VALUE, NAME(ARGS) or NAME)')
         cvars.append(item)
     blob = struct.pack('<8sQQ', b'BBPATCH2', BASE, len(writes))
     for offset, data in writes:

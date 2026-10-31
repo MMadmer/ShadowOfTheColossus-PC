@@ -32,7 +32,9 @@ start makes it from sotc.ini.example):
                       default the one the CPU runs
     SOTC_RENDER_RES   optional: the game renders at WxH instead of 1920x1080 (e.g. 2560x1080 for
                       21:9, a wider view); the output follows its aspect; PS4 mode only
-    SOTC_CVARS        engine settings, NAME=VALUE separated by spaces (e.g. r_motionBlurEnable=0)
+    SOTC_CVARS        engine settings, NAME=VALUE or NAME(ARGS) separated by spaces (e.g.
+                      r_motionBlurEnable=0)
+    SOTC_EXTRA_CVARS  more engine settings after SOTC_CVARS, for one run (tools)
     SOTC_FOV          optional: the cameras' field of view in percent of the original (80 to 150)
     BB_GAMEPAD        the gamepad to use (its name or part of it), when several are connected
     key.<input>=Keys, pad.<input>=buttons   remap the controls (README.md, Controles)
@@ -331,6 +333,16 @@ def merged_source(game, update, out):
     return merged
 
 
+def engine_cvars(env):
+    """The engine cvars for sotc_modes.py: SOTC_CVARS (the launcher's settings) or, without it,
+    the culling settings of Pink-shadPS4 (same image, fewer GPU waits), then SOTC_EXTRA_CVARS,
+    which tools add for one run without touching the settings (tabnul, PR #345)."""
+    cvars = env.get('SOTC_CVARS')
+    if cvars is None:
+        cvars = 'doIndexBufferCulling=0 doSunShadowIndexBufferCulling=0'
+    return ' '.join(filter(None, (cvars.strip(), env.get('SOTC_EXTRA_CVARS', '').strip())))
+
+
 def main():
     load_ini()
     env = os.environ
@@ -382,10 +394,7 @@ def main():
         stamp.write_text(wanted + '\n')
 
     modes = env.get('SOTC_MODES', '')
-    cvars = env.get('SOTC_CVARS')
-    if cvars is None:
-        # Without the launcher: the culling settings of Pink-shadPS4 (same image, fewer GPU waits).
-        cvars = 'doIndexBufferCulling=0 doSunShadowIndexBufferCulling=0'
+    cvars = engine_cvars(env)
     if env.get('SOTC_NOTE'):
         print(f"sotc: {env['SOTC_NOTE']}", file=sys.stderr)
     render = env.get('SOTC_RENDER_RES', '').strip()
