@@ -272,7 +272,19 @@ static bool ExecuteReplicateShaderHLE(const Shader::Info& info,
         buffer_cache.IsRegionGpuModified(src.base_address, src_count * 4)) {
         return false;
     }
-    const u32* source = std::bit_cast<const u32*>(src.base_address);
+    // sotc: the source is read through the backing view, as the table below: a read of its guest
+    // address could fault on a page the GPU tracking protects, and the draw thread looped in that
+    // fault inside the table compare until the game stood still while loading (1.2.0). Without
+    // a backing view the shader runs on the GPU.
+    VAddr src_run_start = 0;
+    u64 src_run_size = 0;
+    const u8* src_run =
+        Core::Memory::Instance()->GetBackingRun(src.base_address, &src_run_start, &src_run_size);
+    if (!src_run || src.base_address + src_count * 4 > src_run_start + src_run_size) {
+        return false;
+    }
+    const u32* source =
+        reinterpret_cast<const u32*>(src_run + (src.base_address - src_run_start));
     const VAddr address = dst.base_address;
     // sotc: the tables are mostly the same every frame. When no byte of the destination is GPU
     // written (so its pages are not read-protected and the backing is authoritative) and it
