@@ -1338,6 +1338,16 @@ void TextureCache::RefreshImage(Image& image) {
             }
         }
     }
+    // sotc: the MaybeCpuDirty check compares against image.hash, which only that branch used to
+    // set: after any other upload (CpuDirty, first upload) it described older contents, and a
+    // later rewrite of those older bytes was taken for "unchanged" (stale small textures). Kept
+    // equal to what is uploaded below, hashed before the copy so that a CPU write in between only
+    // costs a second upload; 0 (never equal) for images the GPU writes or that do not fit in a
+    // page, which the MaybeCpuDirty path does not use (PR #339).
+    const u64 upload_hash =
+        image.info.guest_size <= 4_KB && False(image.flags & ImageFlagBits::GpuModified)
+            ? XXH3_64bits(std::bit_cast<const u8*>(image.info.guest_address), image.info.guest_size)
+            : 0;
     const bool from_guest = std::exchange(image.sotc_upload_from_guest, false);
     if (from_guest &&
         buffer_cache.IsRegionGpuModified(image.info.guest_address, image.info.guest_size)) {
@@ -1359,17 +1369,7 @@ void TextureCache::RefreshImage(Image& image) {
         const SotcStats::SplitTimer record_split{SotcStats::SplitTexRecord};
         runtime.UploadImage(&image, buffer, image_copies);
     }
-    // sotc: the MaybeCpuDirty check compares against image.hash, which only that branch used to
-    // set: after any other upload (CpuDirty, first upload) it described older contents, and a
-    // later rewrite of those older bytes was taken for "unchanged" (stale small textures). Kept
-    // equal to what was just uploaded; 0 (never equal) for images the GPU writes or that do not
-    // fit in a page, which the MaybeCpuDirty path does not use (PR #339).
-    if (image.info.guest_size <= 4_KB && False(image.flags & ImageFlagBits::GpuModified)) {
-        image.hash = XXH3_64bits(std::bit_cast<const u8*>(image.info.guest_address),
-                                 image.info.guest_size);
-    } else {
-        image.hash = 0;
-    }
+    image.hash = upload_hash;
     SotcGlyphHook(image);
 }
 

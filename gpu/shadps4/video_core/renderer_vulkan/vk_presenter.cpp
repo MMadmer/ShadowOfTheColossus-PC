@@ -820,8 +820,11 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
     // sotc: DLSS super resolution (SOTC_UPSCALER=dlss): the game's scene before its UI, upscaled
     // to the frame's size; the post process pass puts the UI layer back over it. Frames without
     // that scene (menus, loading screens) are presented as before.
-    auto upscaled = Dlssg::Upscale(frame->id, draw_scheduler, texture_cache, runtime,
-                                   frame->width, frame->height);
+    // sotc: not with HDR output: the DLSS path re-encodes a scene it takes for SDR as PQ (wrong
+    // brightness and colours); FSR 1 upscales the HDR frame instead.
+    auto upscaled = frame->is_hdr ? Dlssg::Upscaled{}
+                                  : Dlssg::Upscale(frame->id, draw_scheduler, texture_cache,
+                                                   runtime, frame->width, frame->height);
     // sotc: a buffer flipped again right after itself (PS4 Pro mode at the 30 FPS cap flips each
     // rendered frame twice) has nothing new drawn: no composite, no DLSS inputs. That repeat went
     // out without DLSS and without the vignette (taken out of the game's tonemap to be applied

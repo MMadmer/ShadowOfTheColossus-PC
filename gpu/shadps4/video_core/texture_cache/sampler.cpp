@@ -28,6 +28,9 @@ static float UpscalerMipBias() {
         if ((!r || !*r) && !(neo && neo[0] == '1')) { // PS4 Pro: its own sizes
             r = "1920x1080";
         }
+        if (!r || !*r) {
+            return 0.0f; // sotc: PS4 Pro mode, whose render size is not known here
+        }
         if (!Vulkan::Dlssg::SuperResolutionAvailable() || !o ||
             std::sscanf(r, "%ux%u", &rw, &rh) != 2 || std::sscanf(o, "%ux%u", &ow, &oh) != 2 ||
             rh == 0 || oh <= rh) {

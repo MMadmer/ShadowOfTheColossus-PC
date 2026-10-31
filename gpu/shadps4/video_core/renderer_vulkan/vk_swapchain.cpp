@@ -248,8 +248,10 @@ void Swapchain::SetSurfaceProperties() {
     // periodic vkQueuePresentKHR stall (40-140 ms every ~11 s seen on an RTX 5090, driver 617.42)
     // with Mailbox/Immediate; it costs video memory and, with vsync (Fifo), latency.
     if (const char* env = std::getenv("SOTC_SWAP_IMAGES"); env && env[0]) {
-        image_count = std::max(static_cast<u32>(std::strtoul(env, nullptr, 10)),
-                               capabilities.minImageCount);
+        // At most 8: the frame rings of DLSS, frame generation and the HUD-less UI are sized
+        // for that many frames in flight.
+        image_count = std::clamp(static_cast<u32>(std::strtoul(env, nullptr, 10)),
+                                 capabilities.minImageCount, std::max(capabilities.minImageCount, 8u));
         std::fprintf(stderr, "GPU swapchain images: %u (SOTC_SWAP_IMAGES)\n", image_count);
     }
     if (capabilities.maxImageCount > 0) {

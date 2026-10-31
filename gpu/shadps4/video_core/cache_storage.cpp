@@ -455,7 +455,8 @@ void DataBase::Prefetch() {
         for (const auto& [name, data] : prefetched) {
             copy.emplace_back(name, data);
         }
-        std::thread{WriteCachePack, pack_path, std::move(copy)}.detach();
+        // sotc: joined by Close (and so by Reset, which renames the folder it writes into).
+        pack_writer = std::jthread{WriteCachePack, pack_path, std::move(copy)};
     }
     std::fprintf(stderr, "SOTC shader cache: %zu files, %zu from the pack, %zu read one by one\n",
                  listed, in_pack, files.size());
@@ -483,6 +484,9 @@ bool DataBase::TakePrefetched(const std::filesystem::path& path, std::vector<u8>
 }
 
 void DataBase::Close() {
+    if (pack_writer.joinable()) {
+        pack_writer.join();
+    }
     if (!IsOpened()) {
         return;
     }

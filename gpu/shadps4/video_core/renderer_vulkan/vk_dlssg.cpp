@@ -1515,9 +1515,11 @@ Upscaled Upscale(u32 frame_id, Scheduler& scheduler, VideoCore::TextureCache& te
                          errors >= 3 ? ", super resolution off" : "");
         }
     });
+    // sotc: read by the post process pass and by FSR 1's compute passes (the sharpening that runs
+    // after DLSS by default, the 2x path's upscale): both stages wait (#209's bug class).
     const auto done = barrier(sr_out.image, Layout::eGeneral, Layout::eShaderReadOnlyOptimal,
                               Stage::eAllCommands, Access::eShaderWrite | Access::eShaderRead,
-                              Stage::eFragmentShader, Access::eShaderRead);
+                              Stage::eFragmentShader | Stage::eComputeShader, Access::eShaderRead);
     cmdbuf.pipelineBarrier2(vk::DependencyInfo{
         .imageMemoryBarrierCount = 1,
         .pImageMemoryBarriers = &done,

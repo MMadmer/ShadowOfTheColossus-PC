@@ -67,6 +67,7 @@ private:
     bool MayExist(const std::filesystem::path& path);
 
     std::jthread io_worker{};
+    std::jthread pack_writer{}; ///< sotc: rewrites cache.sotcpack after Prefetch
     std::filesystem::path cache_path{};
     bool opened{};
     bool pack_rejected{}; ///< sotc: Reset set the cache aside: the shader pack is not seeded again
