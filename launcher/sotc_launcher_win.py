@@ -43,9 +43,12 @@ CONFIG_FILE = CONFIG_DIR / 'launcher_settings.json'
 # (Program Files). The game writes the in-game menu's changes into it.
 settings_in_use = CONFIG_FILE
 # The supported releases (title ID -> region, version) share one eboot build; scripts/ is on
-# sys.path above. The EU one (CUSA08809) is the default game folder.
+# sys.path above. The EU one (CUSA08809) is the default title ID.
 from sotc_modes import GAMES  # noqa: E402
-GAME_ID, GAME_VERSION = 'CUSA08809', '01.01'
+GAME_ID = next(iter(GAMES))
+# The default game folder: the EU dump next to the port folder, else the US one (as sotc.py).
+DEFAULT_GAME_DIR = next((PORT_DIR.parent / g for g in GAMES if (PORT_DIR.parent / g / 'eboot.bin').is_file()),
+                        PORT_DIR.parent / GAME_ID)
 SYS_MODULES = ('libSceUlt.sprx', 'libSceNgs2.sprx')
 VERSION = '1.1.4'
 MAX_LOG_LINES = 6000
@@ -124,6 +127,20 @@ def run_command():
     return [sys.executable, '--run'] if FROZEN else [sys.executable, str(PORT_DIR / 'sotc.py')]
 
 
+def exit_value(code):
+    """The sys.exit() value that ends this process with exit code `code` (as sotc.py's): from
+    0x80000000 up its signed 32-bit value, since older Pythons exit with -1 (0xffffffff) for a
+    larger int, which hid the NTSTATUS of crashes (#61)."""
+    code &= 0xffffffff
+    return code - (1 << 32) if code & 0x80000000 else code
+
+
+def exit_text(code):
+    """An exit code for messages: small ones in decimal, NTSTATUS values as 0xc0000409."""
+    status = code & 0xffffffff
+    return str(status) if status < 0x10000 else f'{status:#010x}'
+
+
 # ---------------------------------------------------------------------------------------------
 # Texts: Portuguese and English next to the code; Spanish, Russian, Chinese (Simplified),
 # Japanese and Korean in sotc_i18n.py, looked up by the Portuguese text. English for every other
@@ -162,7 +179,7 @@ def windows_language():
 # ---------------------------------------------------------------------------------------------
 # Settings, passed to sotc.py as environment variables.
 
-APP_DEFAULTS = {'ui_language': '', 'game_dir': str(PORT_DIR.parent / GAME_ID), 'sys_modules': '',
+APP_DEFAULTS = {'ui_language': '', 'game_dir': str(DEFAULT_GAME_DIR), 'sys_modules': '',
                 'user_dir': '', 'af16': True, 'textures': 'high', 'skip_intro': 'off', 'hdr': False, 'window_icon_file': '', 'fps60': False,
                 'fps_mode': '30', 'window_mode': 'windowed',
                 'present_mode': 'Mailbox', 'language': '', 'player_name': '', 'show_fps': False,
@@ -170,7 +187,7 @@ APP_DEFAULTS = {'ui_language': '', 'game_dir': str(PORT_DIR.parent / GAME_ID), '
                 'close_on_play': False, 'gamepad': '', 'pad_glyphs': '',
                 'output_res': '1920x1080', 'render_res': '', 'upscaler': 'fsr1', 'sharpness': '250', 'mouse': True,
                 'mouse_sens': '1.0', 'mouse_invert': False, 'neo': False, 'fx_vignette': True,
-                'fx_fog': True, 'fx_ssao': True, 'engine_cvars': '', 'perf_culling': True,
+                'fx_fog': True, 'fx_ssao': True, 'fx_shadows': True, 'engine_cvars': '', 'perf_culling': True,
                 'perf_record_thread': True, 'perf_dma': True, 'gpu_submit': 'auto', 'vram_use': 'normal', 'volume': '100', 'shadow_reuse': '0',
                 'grass_shadows': '2', 'grass_distance': '1', 'grass_height': '1', 'weed_distance': '1', 'weed_height': '1',
                 'grass_fade': '1', 'grass_detail': '0.25', 'library_dirs': [], 'keys': {},
@@ -285,10 +302,22 @@ def sdl_key_name(keysym):
     return None
 
 
+def ensure_ini(ini):
+    """sotc.ini made from the release's sotc.ini.example when missing (as sotc.py does): the zip
+    no longer carries sotc.ini, which replaced the player's when extracted over an older copy (#136)."""
+    template = ini.with_name(ini.name + '.example')
+    if not ini.exists() and template.is_file():
+        try:
+            shutil.copyfile(template, ini)
+        except OSError:
+            pass
+
+
 def write_key_bindings(keys, mouse=None, ini=None):
     """The launcher's key and mouse button bindings as key.<input>= and mouse.<input>= lines of
     sotc.ini (BB_CONFIG), replacing its earlier ones; other lines stay. An empty value unbinds."""
     ini = Path(ini or PORT_DIR / 'sotc.ini')
+    ensure_ini(ini)
     try:
         lines = ini.read_text(encoding='utf-8').splitlines()
     except OSError:
@@ -341,7 +370,11 @@ def bind_mouse_button(custom, name, button):
 EFFECTS = [('fx_vignette', ('Vinheta', 'Vignette'),
             'r_vignetteOverrideEnable=1 r_vignetteEnable=0'),
            ('fx_fog', ('Névoa atmosférica', 'Atmospheric fog'), 'fog_enable=0'),
-           ('fx_ssao', ('Oclusão ambiente (SSAO)', 'Ambient occlusion (SSAO)'), 'AO_Mode=0')]
+           ('fx_ssao', ('Oclusão ambiente (SSAO)', 'Ambient occlusion (SSAO)'), 'AO_Mode=0'),
+           # Off: no sun shadow cascades, +34% FPS at 720p on a CPU-bound PC (AjncSystem #294).
+           ('fx_shadows', ('Sombras do sol', 'Sun shadows'), 'r_enableCascadeShadows=0')]
+EFFECT_HINTS = {'fx_shadows': ('Desativar aumenta o FPS quando o processador limita o desempenho.',
+                               'Turning it off raises the FPS when the processor limits performance.')}
 # Common screen sizes: 16:9, 16:10, 21:9 (ultrawide) and 32:9 (super ultrawide).
 # 5120x2160 is left out: the game faults at start (memory), 3840x2160 runs.
 SCREENS = [('1920x1080', '16:9, 1080p'), ('2560x1440', '16:9, 1440p'), ('3840x2160', '16:9, 4K'),
@@ -569,26 +602,38 @@ def supported_games():
     return ', '.join(f'{serial} {version}' for serial, (_region, version) in GAMES.items())
 
 
-# The game's archives in a CUSA08809 (EU) dump and their sizes: an incomplete copy (a download or
-# a copy cut short) only showed as a crash at boot (#30, #56). A dump merged with the 1.01 update
-# carries the update's cachedFiles.psarc.
+# The game's archives and their sizes, the same in a CUSA08809 (EU) and a CUSA08034 (US) dump (the
+# .psarc files are byte-identical): an incomplete copy (a download or a copy cut short) only showed
+# as a crash at boot (#30, #56). The 1.01 update's cachedFiles.psarc (in the update folder, or in a
+# dump merged with it) is the larger size.
 GAME_ARCHIVES = {'cachedFiles.psarc': (37159164, 37274125), 'pak0.psarc': (364098725,),
                  'pak1.psarc': (464260479,), 'pak2.psarc': (16557548,), 'pak3.psarc': (720294074,),
                  'pakN.psarc': (12838532222,)}
 
 
-def damaged_archives(folder):
-    """The archives of a CUSA08809 game folder that are missing or of another size."""
+def damaged_archives(folder, update=None):
+    """The archives of a game folder (EU or US) that are missing or of another size, then those of
+    its update folder that are of another size, as <update folder>/<name>: the game reads them in
+    place of the base game's (#112). update: SOTC_UPDATE_DIR or the folder sotc_discovery finds
+    when not given."""
     folder = Path(folder or '.')
-    present = {p.name.lower(): p for p in folder.glob('*.psarc')}
-    bad = []
-    for name, sizes in GAME_ARCHIVES.items():
-        path = present.get(name.lower())
+    sizes = {name.lower(): (name, allowed) for name, allowed in GAME_ARCHIVES.items()}
+
+    def wrong_size(path):
         try:
-            if not path or path.stat().st_size not in sizes:
-                bad.append(name)
+            return path.stat().st_size not in sizes[path.name.lower()][1]
         except OSError:
-            bad.append(name)
+            return True
+
+    present = {p.name.lower(): p for p in folder.glob('*.psarc')}
+    bad = [name for key, (name, _s) in sizes.items() if key not in present or wrong_size(present[key])]
+    if update is None:
+        from sotc_discovery import find_update
+        update = os.environ.get('SOTC_UPDATE_DIR') or (find_update(folder) if folder.name else '')
+    if update:
+        update = Path(update)
+        bad += [str(Path(update.name, p.name)) for p in sorted(update.glob('*.psarc'))
+                if p.name.lower() in sizes and wrong_size(p)]
     return bad
 
 
@@ -1593,7 +1638,7 @@ class Launcher:
                    'Values other than 1 make the grass sparser. Applies when the game starts.'))
         self.section(f, _('Efeitos', 'Effects'))
         for key, title, _off in EFFECTS:
-            self.check(f, key, _(*title))
+            self.check(f, key, _(*title), _(*EFFECT_HINTS[key]) if key in EFFECT_HINTS else None)
         self.note(f, _('Desfoque de movimento, brilho e filtros ficam no menu do jogo (Opções > Apresentação).',
                        'Motion blur, brightness and filters are in the in-game menu (Options > Presentation).'), top=4)
         self.section(f, _('Tela', 'Display'))
@@ -2063,7 +2108,7 @@ class Launcher:
     def unpack_for_setup(self, folder):
         """The game's packages in folder (game, update, every DLC) unpacked next to them (sotc_pkg),
         then the setup goes on with the unpacked game."""
-        from sotc_pkg import find_packages, needed_bytes, targets, pkgtool_path
+        from sotc_pkg import find_packages, needed_bytes, packages_serial, targets, pkgtool_path
         packages = find_packages(folder, 2)
         if not any(p['kind'] == 'game' for p in packages):
             return False
@@ -2101,7 +2146,7 @@ class Launcher:
                                            self.messagebox.showerror('Shadow of the Colossus', _(
                                                'Não foi possível desempacotar:\n{}', 'Could not unpack:\n{}').format(message))))
                 return
-            game = places.get('game') or str(targets(folder)['game'])
+            game = places.get('game') or str(targets(folder, packages_serial(packages))['game'])
             self.ui_calls.put(lambda: self.configure_from_game(game, folder))
         threading.Thread(target=work, daemon=True).start()
         return True
@@ -2135,11 +2180,12 @@ class Launcher:
             serial = game_serial(game)
             try:
                 from sotc_pkg import find_packages, targets, unpack
-                packages = [p for p in find_packages(chosen or Path(game).parent, 2) if p['kind'] == 'dlc']
+                packages = [p for p in find_packages(chosen or Path(game).parent, 2)
+                            if p['kind'] == 'dlc' and p['serial'] == serial]
                 if packages:
                     folder = Path(game).parent
                     unpack(packages, folder, PORT_DIR)
-                    dlc_root = str(targets(folder)['dlc'])
+                    dlc_root = str(targets(folder, serial)['dlc'])
             except Exception:  # the packages stay usable as they are (the runtime reads them)
                 dlc_root = ''
             result = {'game': game, 'dlc': dlc_root or find_dlc_root(game, chosen), 'update': find_update(game),
@@ -2461,7 +2507,8 @@ class Launcher:
             for _i in range(500):
                 item = self.output.get_nowait()
                 if isinstance(item, tuple):
-                    self.append(_('\n— o jogo terminou (código {}) —\n', '\n— the game exited (code {}) —\n').format(item[0]))
+                    self.append(_('\n— o jogo terminou (código {}) —\n', '\n— the game exited (code {}) —\n').format(
+                        exit_text(item[0])))
                     self.process = None
                     self.reload_live_settings()
                     if self.job:
@@ -2575,7 +2622,7 @@ class Launcher:
             return
         if not manual and release['version'] == self.app.get('skip_version'):
             return
-        notes = release['notes'].strip()
+        notes = sotc_update.release_notes(release['notes'], LANG)
         if len(notes) > 900:
             notes = notes[:900].rsplit('\n', 1)[0] + '\n…'
         question = _('Nova versão disponível: v{new} (versão atual: v{cur}).\n\n{notes}\n\n',
@@ -2702,7 +2749,7 @@ def play_without_window(settings):
 def main():
     args = sys.argv[1:]
     if args and args[0] in ('--run', '--script'):
-        sys.exit(run_role(args))
+        sys.exit(exit_value(run_role(args)))
     # sotc: --apply-update <new folder> <port folder> <launcher pid>: the copied launcher that
     # installs an update (sotc_update.py). --update-now: check, download and install without
     # the window (scripted tests; SOTC_UPDATE_URL can point at a test release).
@@ -2728,7 +2775,7 @@ def main():
     settings = load_settings()
     set_language(settings.get('ui_language') or windows_language())
     if '--play' in args and (Path(settings['game_dir'] or '.') / 'eboot.bin').is_file():
-        sys.exit(play_without_window(settings))
+        sys.exit(exit_value(play_without_window(settings)))
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(1)
     except (AttributeError, OSError):

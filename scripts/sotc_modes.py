@@ -21,6 +21,8 @@ Writes two files for the loader:
                           stretched one); PS4 mode only, the PS4 Pro path keeps its sizes
                    --fov PERCENT (e.g. 120)  the cameras' field of view, cutscenes included
                           (AjncSystem #179)
+                   the page allocator fix (POOL_FIX, the crash at 0x41a371) is always applied;
+                   SOTC_POOL_FIX=0 leaves it out
   out/cmdline.bin  the engine command line the game appends to its own (SOTCCMD1,
                    bb-probe --sotc-cmdline): cvars of the Bluepoint engine, e.g.
                    +r_motionBlurEnable=0. Modes that are only cvars:
@@ -166,7 +168,9 @@ FOV_ADJUST = (0x031ca404, bytes.fromhex('0000803f'))
 # EU 1.01 / US 1.00: the command line lea, the fps60 site and the render size sites.
 VERSION_CHECKS = [(CMDLINE_LEA, bytes.fromhex('488d352debad00')), (0x01390090, bytes.fromhex('ff25a20567')),
                   RENDER_WIDTH, RENDER_HEIGHT]
-CVAR = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*(=[-+.0-9A-Za-z_%]+)?$')  # NAME=VALUE or a flag such as nointro
+# NAME=VALUE, NAME(ARGS) or a flag such as nointro. A vector value takes the parentheses form: a
+# value after '=' cannot hold commas (tabnul, PR #345).
+CVAR = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*((=[-+.0-9A-Za-z_%]+)|(\([-+.0-9A-Za-z_,% ]*\)))?$')
 
 
 def image_bytes(elf, ph, vaddr, length):
@@ -266,7 +270,7 @@ def main():
     parser.add_argument('game', type=Path)
     parser.add_argument('--out', type=Path, default=Path(__file__).resolve().parent.parent / 'out')
     parser.add_argument('--modes', default='', help='comma-separated: ' + ', '.join([*MODES, *CVAR_MODES]))
-    parser.add_argument('--cvars', default='', help='engine cvars NAME=VALUE separated by spaces')
+    parser.add_argument('--cvars', default='', help='engine cvars NAME=VALUE or NAME(ARGS) separated by spaces')
     parser.add_argument('--render', default='', help='render size WxH instead of 1920x1080, e.g. 3840x1600')
     parser.add_argument('--fov', type=int, default=100, help='field of view in percent of the original (80 to 150)')
     args = parser.parse_args()
@@ -274,8 +278,17 @@ def main():
     supported = is_supported(elf, ph)
     render = args.render if args.render != '1920x1080' else ''
     writes, cvars = [], []
-    if supported and image_bytes(elf, ph, POOL_FIX[0] - BASE, len(POOL_FIX[1])) == POOL_FIX[1]:
+    # SOTC_POOL_FIX=0 leaves the page allocator as the game has it (diagnostics: green or garbage
+    # textures, AjncSystem #326, #360).
+    if not supported:
+        print(f'Page allocator fix: this eboot is not {SUPPORTED}, not applied')
+    elif image_bytes(elf, ph, POOL_FIX[0] - BASE, len(POOL_FIX[1])) != POOL_FIX[1]:
+        print(f'Page allocator fix: unexpected bytes at {POOL_FIX[0]:#x}, not applied')
+    elif os.environ.get('SOTC_POOL_FIX', '1') == '0':
+        print('Page allocator fix: off (SOTC_POOL_FIX=0)')
+    else:
         writes.append((POOL_FIX[0] - BASE, POOL_FIX[2]))
+        print('Page allocator fix: on')
     for mode in filter(None, (m.strip().lower() for m in args.modes.split(','))):
         if mode not in MODES and mode not in CVAR_MODES:
             raise SystemExit(f'unknown mode {mode!r} (known: {", ".join([*MODES, *CVAR_MODES])})')
@@ -325,7 +338,7 @@ def main():
     for item in args.cvars.split():
         item = item.lstrip('+')
         if not CVAR.match(item):
-            raise SystemExit(f'bad cvar {item!r} (NAME=VALUE or NAME)')
+            raise SystemExit(f'bad cvar {item!r} (NAME=VALUE, NAME(ARGS) or NAME)')
         cvars.append(item)
     blob = struct.pack('<8sQQ', b'BBPATCH2', BASE, len(writes))
     for offset, data in writes:

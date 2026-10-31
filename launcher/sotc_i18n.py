@@ -213,6 +213,20 @@ TEXTS = {
         'アンビエントオクルージョン（SSAO）',
         '앰비언트 오클루전 (SSAO)',
     ),
+    'Sombras do sol': (
+        'Sombras del sol',
+        'Тени от солнца',
+        '太阳阴影',
+        '太陽光の影',
+        '태양 그림자',
+    ),
+    'Desativar aumenta o FPS quando o processador limita o desempenho.': (
+        'Desactivarlas aumenta los FPS cuando el procesador limita el rendimiento.',
+        'Отключение повышает FPS, если производительность ограничена процессором.',
+        '关闭后，在处理器限制性能时可提高帧率。',
+        'オフにすると、プロセッサーが性能を制限している場合に FPS が向上します。',
+        '끄면 프로세서가 성능을 제한할 때 FPS가 높아집니다.',
+    ),
     '1080p (nativa)': (
         '1080p (nativa)',
         '1080p (исходное)',

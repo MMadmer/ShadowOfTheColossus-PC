@@ -5,7 +5,8 @@ and starts it.
 
     python sotc.py                      (or double-click SotC.bat)
 
-Settings (environment variables, or sotc.ini beside this script as NAME=value lines):
+Settings (environment variables, or sotc.ini beside this script as NAME=value lines; the first
+start makes it from sotc.ini.example):
     SOTC_GAME_DIR     the dumped game folder (the one with eboot.bin); default ../CUSA08809,
                       else ../CUSA08034
     SOTC_SYS_MODULES  optional: folder with YOUR OWN console's decrypted libSceNgs2.sprx and
@@ -31,25 +32,33 @@ Settings (environment variables, or sotc.ini beside this script as NAME=value li
                       default the one the CPU runs
     SOTC_RENDER_RES   optional: the game renders at WxH instead of 1920x1080 (e.g. 2560x1080 for
                       21:9, a wider view); the output follows its aspect; PS4 mode only
-    SOTC_CVARS        engine settings, NAME=VALUE separated by spaces (e.g. r_motionBlurEnable=0)
+    SOTC_CVARS        engine settings, NAME=VALUE or NAME(ARGS) separated by spaces (e.g.
+                      r_motionBlurEnable=0)
+    SOTC_EXTRA_CVARS  more engine settings after SOTC_CVARS, for one run (tools)
     SOTC_FOV          optional: the cameras' field of view in percent of the original (80 to 150)
     BB_GAMEPAD        the gamepad to use (its name or part of it), when several are connected
     key.<input>=Keys, pad.<input>=buttons   remap the controls (README.md, Controles)
 The image is prepared again only when the game, the modules or the scripts change.
 Extra arguments go to bb-probe.exe. Run from a console, the session is also saved to
 <user>/last_run.log (the 4 before it as last_run.1.log ... last_run.4.log; a crash's log is
-copied to <user>/crashes).
+copied to <user>/crashes). An error exit prints bb-probe's exit code (the NTSTATUS, e.g.
+0xc0000409) and, for a crash Windows ended itself, its Application Error event (ID 1000).
 """
 import hashlib
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
+import time
 
 PORT = Path(__file__).resolve().parent
 SCRIPTS = PORT / 'scripts'
 SYS_MODULES = ('libSceUlt.sprx', 'libSceNgs2.sprx')
+sys.path.insert(0, str(SCRIPTS))
+# The supported title IDs (EU CUSA08809 first, US CUSA08034), the same eboot build.
+from sotc_modes import GAMES, game_serial  # noqa: E402
 
 
 def fail(message):
@@ -57,8 +66,21 @@ def fail(message):
     sys.exit(1)
 
 
+def ini_file():
+    """sotc.ini, made from the release's sotc.ini.example the first time: the zip no longer carries
+    sotc.ini itself, which replaced the player's when extracted over an older copy (#136). The
+    template itself when the port folder cannot be written."""
+    ini, template = PORT / 'sotc.ini', PORT / 'sotc.ini.example'
+    if not ini.exists() and template.is_file():
+        try:
+            shutil.copyfile(template, ini)
+        except OSError:
+            return template
+    return ini
+
+
 def load_ini():
-    ini = PORT / 'sotc.ini'
+    ini = ini_file()
     if ini.is_file():
         for line in ini.read_text(encoding='utf-8', errors='replace').splitlines():
             line = line.strip()
@@ -150,7 +172,107 @@ def run_script(name, *args):
     result = subprocess.run([sys.executable, *script, str(SCRIPTS / name), *map(str, args)], stdin=subprocess.DEVNULL,
                             creationflags=no_console())
     if result.returncode:
-        sys.exit(result.returncode)
+        sys.exit(exit_value(result.returncode))
+
+
+# Exit codes of a process Windows ended itself (a fault the port's own handler did not report).
+NTSTATUS_NAMES = {0xC0000005: 'access violation', 0xC000001D: 'illegal instruction',
+                  0xC00000FD: 'stack overflow', 0xC0000135: 'a DLL was not found',
+                  0xC0000374: 'heap corruption', 0xC0000409: 'fail-fast / stack buffer overrun'}
+PROBE_NAMES = ('bb-probe.exe', 'bb-probe-compat.exe')
+# The data of an Application Error event in the order of the older unnamed form.
+EVENT_FIELDS = ('AppName', 'AppVersion', 'AppTimeStamp', 'ModuleName', 'ModuleVersion', 'ModuleTimeStamp',
+                'ExceptionCode', 'FaultingOffset')
+
+
+def exit_value(code):
+    """The sys.exit() value that ends this process with exit code `code`. On Windows a code from
+    0x80000000 up goes as its signed 32-bit value: older Pythons exit with -1 (0xffffffff) for a
+    larger int, which hid the NTSTATUS of crashes (0xc0000409 logged as 0xffffffff, #61)."""
+    if os.name != 'nt':
+        return code
+    code &= 0xffffffff
+    return code - (1 << 32) if code & 0x80000000 else code
+
+
+def crash_event_line(xml):
+    """One line from the XML of a Windows Application Error event when it is bb-probe's, else ''.
+    Parsed with re: the packaged SotC.exe runs this script without xml.etree."""
+    data = re.findall(r"<Data(?:\s+Name=['\"](\w+)['\"])?\s*(?:/>|>([^<]*)</Data>)", xml)
+    values = {name or (EVENT_FIELDS[i] if i < len(EVENT_FIELDS) else ''): text
+              for i, (name, text) in enumerate(data)}
+    if values.get('AppName', '').lower() not in PROBE_NAMES:
+        return ''
+    when = re.search(r"SystemTime=['\"]([\d-]+)T([\d:]+)", xml)
+    offset = values.get('FaultingOffset', '').lower().removeprefix('0x').lstrip('0') or '0'
+    return (f"Windows Application Error (event 1000){f' at {when[1]} {when[2]} UTC' if when else ''}: "
+            f"{values['AppName']}, module {values.get('ModuleName', '?')} {values.get('ModuleVersion', '')}, "
+            f"exception 0x{values.get('ExceptionCode', '?').lower().removeprefix('0x')}, offset 0x{offset}")
+
+
+def crash_event(seconds):
+    """The newest Windows Application Error event (ID 1000) of bb-probe from the last `seconds`
+    as one line, or ''. Best effort: any failure gives ''."""
+    if os.name != 'nt':
+        return ''
+    try:
+        # Not ctypes.wintypes: the packaged SotC.exe has only what the launcher imports.
+        import ctypes
+        from ctypes import byref, c_uint32 as DWORD, c_void_p, c_wchar_p, POINTER
+        wevtapi = ctypes.WinDLL('wevtapi')
+        wevtapi.EvtQuery.restype = c_void_p
+        wevtapi.EvtQuery.argtypes = (c_void_p, c_wchar_p, c_wchar_p, DWORD)
+        wevtapi.EvtNext.argtypes = (c_void_p, DWORD, POINTER(c_void_p), DWORD, DWORD, POINTER(DWORD))
+        wevtapi.EvtRender.argtypes = (c_void_p, c_void_p, DWORD, DWORD, c_void_p, POINTER(DWORD), POINTER(DWORD))
+        wevtapi.EvtClose.argtypes = (c_void_p,)
+        query = ("*[System[Provider[@Name='Application Error'] and (EventID=1000) and "
+                 f"TimeCreated[timediff(@SystemTime) <= {int(seconds * 1000)}]]]")
+        # EvtQueryChannelPath | EvtQueryReverseDirection: the newest first.
+        results = wevtapi.EvtQuery(None, 'Application', query, 0x1 | 0x200)
+        if not results:
+            return ''
+        try:
+            event, returned = c_void_p(), DWORD()
+            while wevtapi.EvtNext(results, 1, byref(event), 1000, 0, byref(returned)):
+                try:
+                    # EvtRenderEventXml: the first call gives the size in bytes.
+                    used, properties = DWORD(), DWORD()
+                    wevtapi.EvtRender(None, event, 1, 0, None, byref(used), byref(properties))
+                    buffer = ctypes.create_unicode_buffer(used.value // 2 + 1)
+                    if wevtapi.EvtRender(None, event, 1, ctypes.sizeof(buffer), buffer, byref(used), byref(properties)):
+                        line = crash_event_line(buffer.value)
+                        if line:
+                            return line
+                finally:
+                    wevtapi.EvtClose(event)
+        finally:
+            wevtapi.EvtClose(results)
+    except Exception:  # noqa: BLE001 - diagnostics only, never a reason to fail
+        pass
+    return ''
+
+
+def exit_report(code, seconds):
+    """Lines for the session log after bb-probe ended with an error code: the code as Windows'
+    unsigned NTSTATUS and, for a crash Windows handled itself (a fail-fast in ntdll leaves no
+    ERROR line in the log: #61, #244, #291, #299, #309), its Application Error event, which
+    Windows may write a moment after the exit."""
+    if not code:
+        return []
+    if os.name != 'nt':
+        return [f'bb-probe exited with code {code}']
+    status = code & 0xffffffff
+    name = NTSTATUS_NAMES.get(status)
+    lines = [f'bb-probe exited with code {status:#010x}' + (f' ({name})' if name else '')]
+    if status & 0x80000000:
+        for attempt in range(4):
+            if attempt:
+                time.sleep(1)
+            event = crash_event(seconds + 10 + attempt)
+            if event:
+                lines.append(event)
+                break
+    return lines
 
 
 def fingerprint(game, modules):
@@ -164,15 +286,15 @@ def fingerprint(game, modules):
     return digest.hexdigest()
 
 
-def is_game_patch(folder):
-    """True for an update of this game: its param.sfo says TITLE_ID CUSA08809, CATEGORY gp*."""
+def is_game_patch(folder, serial):
+    """True for an update of the game serial (CUSA08809 EU or CUSA08034 US): its param.sfo says
+    that TITLE_ID and CATEGORY gp*."""
     try:
-        sys.path.insert(0, str(PORT / 'scripts'))
         from prepare import sfo
         values = sfo((folder / 'sce_sys' / 'param.sfo').read_bytes())
     except (OSError, ValueError, ImportError):
         return False
-    return values.get('TITLE_ID') == 'CUSA08809' and str(values.get('CATEGORY', '')).startswith('gp')
+    return values.get('TITLE_ID') == serial and str(values.get('CATEGORY', '')).startswith('gp')
 
 
 def game_update(game):
@@ -186,10 +308,11 @@ def game_update(game):
         folder = game.with_name(game.name + suffix)
         if folder.is_dir():
             return folder
+    serial = game_serial(game)
     for base in (game, game.parent):
         for name in ('update', 'patch'):
             folder = base / name
-            if folder.is_dir() and is_game_patch(folder):
+            if folder.is_dir() and is_game_patch(folder, serial):
                 return folder
     return None
 
@@ -214,6 +337,16 @@ def merged_source(game, update, out):
     return merged
 
 
+def engine_cvars(env):
+    """The engine cvars for sotc_modes.py: SOTC_CVARS (the launcher's settings) or, without it,
+    the culling settings of Pink-shadPS4 (same image, fewer GPU waits), then SOTC_EXTRA_CVARS,
+    which tools add for one run without touching the settings (tabnul, PR #345)."""
+    cvars = env.get('SOTC_CVARS')
+    if cvars is None:
+        cvars = 'doIndexBufferCulling=0 doSunShadowIndexBufferCulling=0'
+    return ' '.join(filter(None, (cvars.strip(), env.get('SOTC_EXTRA_CVARS', '').strip())))
+
+
 def main():
     load_ini()
     env = os.environ
@@ -221,8 +354,8 @@ def main():
     out = PORT / 'out'
     out.mkdir(exist_ok=True)
     # The EU dump (CUSA08809) next to the port, else the US one (CUSA08034).
-    default = next((PORT.parent / g for g in ('CUSA08809', 'CUSA08034') if (PORT.parent / g / 'eboot.bin').is_file()),
-                   PORT.parent / 'CUSA08809')
+    default = next((PORT.parent / g for g in GAMES if (PORT.parent / g / 'eboot.bin').is_file()),
+                   PORT.parent / next(iter(GAMES)))
     game = Path(env.get('SOTC_GAME_DIR', default)).resolve()
     if not (game / 'eboot.bin').is_file():
         fail(f'No eboot.bin in {game}: set SOTC_GAME_DIR (environment or sotc.ini) to the CUSA08809 (EU) '
@@ -265,10 +398,7 @@ def main():
         stamp.write_text(wanted + '\n')
 
     modes = env.get('SOTC_MODES', '')
-    cvars = env.get('SOTC_CVARS')
-    if cvars is None:
-        # Without the launcher: the culling settings of Pink-shadPS4 (same image, fewer GPU waits).
-        cvars = 'doIndexBufferCulling=0 doSunShadowIndexBufferCulling=0'
+    cvars = engine_cvars(env)
     if env.get('SOTC_NOTE'):
         print(f"sotc: {env['SOTC_NOTE']}", file=sys.stderr)
     render = env.get('SOTC_RENDER_RES', '').strip()
@@ -331,8 +461,12 @@ def main():
         command = json.loads(env['SOTC_WRAP']) + command
     # In a console the session also goes to user/last_run.log (as the launcher does; the launcher
     # reads this script's output into its own log, so a pipe means it is not written here).
+    started = time.time()
     if not sys.stdout.isatty():
-        return subprocess.run(command, stdin=subprocess.DEVNULL, creationflags=no_console()).returncode
+        code = subprocess.run(command, stdin=subprocess.DEVNULL, creationflags=no_console()).returncode
+        for line in exit_report(code, time.time() - started):
+            print(line, flush=True)
+        return code
     with open_session_log(user) as log:
         game = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT)
@@ -343,6 +477,9 @@ def main():
                 log.write(line)
         finally:
             code = game.wait()
+        for line in exit_report(code, time.time() - started):
+            print(line, flush=True)
+            log.write(f'{line}\n'.encode())
     keep_crash_log(user, code)
     return code
 
@@ -369,7 +506,6 @@ def keep_crash_log(user, code):
     user/crashes/<date>_<time>_<code>.log (the last 20, and the last 5 minidumps, are kept)."""
     if code == 0:
         return
-    import time
     crashes = user / 'crashes'
     try:
         crashes.mkdir(parents=True, exist_ok=True)
@@ -385,6 +521,6 @@ def keep_crash_log(user, code):
 
 if __name__ == '__main__':
     try:
-        sys.exit(main())
+        sys.exit(exit_value(main()))
     except KeyboardInterrupt:
         sys.exit(130)

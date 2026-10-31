@@ -15,6 +15,9 @@ range, from the same zip), each checked against its SHA-256, into <port>/update/
 failure (no range support, an older release without the manifest, a hash mismatch) falls back to
 the whole zip. Files the installed manifest lists and the new one no longer does are removed.
 
+HTTPS is verified against the Windows certificate store (ssl_context: truststore or certifi too,
+when either is installed; #359).
+
 The files are replaced by a copy of the running launcher (SotC.exe and _internal/ copied to
 <port>/update/applier/), started with --apply-update once the launcher has closed, so no file in
 use is overwritten. It copies the new files over the port folder, never touching user/ (saves,
@@ -29,6 +32,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import ssl
 import subprocess
 import sys
 import time
@@ -55,10 +59,36 @@ def version_key(text):
     return tuple(int(n) for n in re.findall(r'\d+', text or ''))
 
 
+_ssl_context = None
+
+
+def ssl_context():
+    """The context every HTTPS request is verified with. Python's OpenSSL only sees the roots
+    already in the Windows store and cannot make Windows fetch a missing one, so a fresh system
+    failed with CERTIFICATE_VERIFY_FAILED, "unable to get issuer certificate" (#359). truststore,
+    when installed, has Windows itself verify the chain; otherwise the Windows store's roots, plus
+    certifi's when installed. Neither module is required."""
+    global _ssl_context
+    if _ssl_context is None:
+        try:
+            import truststore
+            _ssl_context = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        except Exception:  # not installed, or not usable with this Python
+            # create_default_context() loads the Windows ROOT and CA stores (load_default_certs).
+            context = ssl.create_default_context()
+            try:
+                import certifi
+                context.load_verify_locations(cafile=certifi.where())
+            except Exception:  # not installed, or its CA file missing from a frozen build
+                pass
+            _ssl_context = context
+    return _ssl_context
+
+
 def _open(url, timeout):
     request = urllib.request.Request(url, headers={'Accept': 'application/vnd.github+json',
                                                    'User-Agent': USER_AGENT})
-    return urllib.request.urlopen(request, timeout=timeout)
+    return urllib.request.urlopen(request, timeout=timeout, context=ssl_context())
 
 
 def latest_release(timeout=10):
@@ -74,6 +104,45 @@ def latest_release(timeout=10):
             'notes': data.get('body') or '', 'page': data.get('html_url') or '',
             'url': asset['browser_download_url'], 'size': int(asset.get('size') or 0),
             'sha256': digest[7:].lower() if digest.startswith('sha256:') else ''}
+
+
+# Names and codes that mark a language's part of a release body (release_notes).
+NOTE_LANGUAGES = {
+    'en': ('en', 'english', 'inglês'),
+    'pt': ('pt', 'pt-br', 'português', 'portuguese'),
+    'es': ('es', 'español', 'spanish', 'espanhol'),
+    'ru': ('ru', 'русский', 'russian'),
+    'zh': ('zh', 'cn', '中文', '简体中文', 'chinese'),
+    'ja': ('ja', 'jp', '日本語', 'japanese'),
+    'ko': ('ko', 'kr', '한국어', 'korean'),
+}
+_NOTE_NAMES = {name: code for code, names in NOTE_LANGUAGES.items() for name in names}
+# A heading ("## English") or a bold tag at a line start ("**RU:** text").
+_NOTE_MARK = re.compile(r'^(?:#{1,6}[ \t]*(?P<head>[^\n#]+?)[ \t]*#*[ \t]*$|\*\*(?P<tag>[^*\n]+)\*\*:?[ \t]*)', re.M)
+_NOTE_RULE = re.compile(r'(?:(?:^|\n)[ \t]*(?:-{3,}|\*{3,}|_{3,})[ \t]*)+$')
+
+
+def release_notes(body, lang):
+    """The part of a release body in the launcher language lang ('en', 'ru', ...; #321): a marker
+    naming a language (a heading such as "## English", or "**RU:**" at a line start, as the fork's
+    notes have) starts its part, which runs to the next marker. Without a part in lang: the text
+    before the first marker, else the English part, else the first one; a body without markers
+    whole."""
+    body = (body or '').replace('\r\n', '\n')
+    marks = []
+    for match in _NOTE_MARK.finditer(body):
+        code = _NOTE_NAMES.get((match['head'] or match['tag']).strip().rstrip(':').strip().casefold())
+        if code:
+            marks.append((match.start(), match.end(), code))
+    parts = [(code, body[end:marks[i + 1][0] if i + 1 < len(marks) else len(body)])
+             for i, (_start, end, code) in enumerate(marks)]
+    lead = body[:marks[0][0]] if marks else body
+    for text in (*(t for c, t in parts if c == lang), lead, *(t for c, t in parts if c == 'en'),
+                 *(t for _c, t in parts)):
+        text = _NOTE_RULE.sub('', text.strip()).strip()
+        if text:
+            return text
+    return ''
 
 
 def is_newer(release, current):
@@ -155,7 +224,7 @@ def _range(url, start, end, timeout=60):
     """A response with bytes [start, end) of url; the server must answer with that range."""
     request = urllib.request.Request(url, headers={'User-Agent': USER_AGENT,
                                                    'Range': f'bytes={start}-{end - 1}'})
-    response = urllib.request.urlopen(request, timeout=timeout)
+    response = urllib.request.urlopen(request, timeout=timeout, context=ssl_context())
     if response.status != 206:
         response.close()
         raise ValueError('the server does not send byte ranges')

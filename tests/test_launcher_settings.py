@@ -1,7 +1,9 @@
 """Launcher settings: DLSS and frame generation by graphics card, vibration, mouse button bindings
-in sotc.ini, and the update folder search."""
+in sotc.ini, exit codes, and the update folder search."""
 from paths import ROOT
+import os
 import struct
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -88,6 +90,16 @@ class GpuChoiceTests(unittest.TestCase):
         self.assertEqual(self.env(framegen='dlss', gpu_name='')['SOTC_FRAMEGEN'], 'dlss')
         self.assertEqual(self.env(framegen='fsr', gpu_name=RX_6600)['SOTC_FRAMEGEN'], 'fsr')
 
+    def test_sun_shadows(self):
+        # Off: no sun shadow cascades (+34% FPS on a CPU-bound PC, AjncSystem #294).
+        self.assertNotIn('r_enableCascadeShadows', self.env()['SOTC_CVARS'])
+        self.assertIn('r_enableCascadeShadows=0', self.env(fx_shadows=False)['SOTC_CVARS'].split())
+        from sotc_i18n import TEXTS
+        for _key, (pt, _en), _off in launcher.EFFECTS:
+            self.assertIn(pt, TEXTS)
+        for pt, _en in launcher.EFFECT_HINTS.values():
+            self.assertIn(pt, TEXTS)
+
     def test_vibration(self):
         self.assertEqual(self.env()['SOTC_VIBRATION'], '100')
         self.assertEqual(self.env(vibration='0')['SOTC_VIBRATION'], '0')
@@ -126,6 +138,36 @@ class MouseBindingTests(unittest.TestCase):
                               '# mouse buttons (launcher)', 'mouse.cross=left', 'mouse.r1='])
             launcher.write_key_bindings({}, {}, ini)
             self.assertEqual(ini.read_text(encoding='utf-8').splitlines(), ['pad.circle=b'])
+
+    def test_ini_from_template(self):
+        # The release ships sotc.ini.example (#136): the first bindings keep its lines.
+        with tempfile.TemporaryDirectory() as tmp:
+            ini = Path(tmp) / 'sotc.ini'
+            (Path(tmp) / 'sotc.ini.example').write_text('# settings\nSOTC_MODES=af16\n', encoding='utf-8')
+            launcher.write_key_bindings({'cross': 'V'}, {}, ini)
+            self.assertEqual(ini.read_text(encoding='utf-8').splitlines(),
+                             ['# settings', 'SOTC_MODES=af16', '# key bindings (launcher)', 'key.cross=V'])
+            (Path(tmp) / 'sotc.ini.example').write_text('SOTC_MODES=fps60\n', encoding='utf-8')
+            launcher.write_key_bindings({}, {}, ini)
+            self.assertEqual(ini.read_text(encoding='utf-8').splitlines(), ['# settings', 'SOTC_MODES=af16'])
+
+
+@unittest.skipIf(launcher is None or os.name != 'nt', 'launcher not importable, or not Windows')
+class ExitCodeTests(unittest.TestCase):
+    def test_text(self):
+        self.assertEqual(launcher.exit_text(0), '0')
+        self.assertEqual(launcher.exit_text(3), '3')
+        self.assertEqual(launcher.exit_text(0xC0000409), '0xc0000409')
+        self.assertEqual(launcher.exit_text(-0x3FFFFBF7), '0xc0000409')
+
+    def test_script_role_keeps_the_ntstatus(self):
+        # SotC.exe --run / --script relays sotc.py's code: 0xC0000409 came out as 0xffffffff (#61).
+        with tempfile.TemporaryDirectory() as tmp:
+            script = Path(tmp) / 'crash.py'
+            script.write_text('import sys\nsys.exit(0xC0000409)\n', encoding='utf-8')
+            result = subprocess.run([sys.executable, str(ROOT / 'launcher' / 'sotc_launcher_win.py'), '--script',
+                                     str(script)], capture_output=True)
+        self.assertEqual(result.returncode, 0xC0000409)
 
 
 class FindUpdateTests(unittest.TestCase):

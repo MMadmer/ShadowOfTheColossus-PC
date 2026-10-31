@@ -1,6 +1,8 @@
 """The supported releases: EU CUSA08809 1.01 and US CUSA08034 1.00, the same eboot build."""
 from paths import ROOT
+import os
 from pathlib import Path
+import re
 import struct
 import sys
 import tempfile
@@ -9,12 +11,18 @@ from unittest.mock import patch
 import sotc_cpu
 import sotc_modes
 
+import importlib.util  # noqa: E402
+
 sys.path.insert(0, str(ROOT / 'launcher'))
 import sotc_discovery  # noqa: E402
+import sotc_pkg  # noqa: E402
 try:
     import sotc_launcher_win as launcher  # noqa: E402
 except ImportError:  # no Tkinter
     launcher = None
+_spec = importlib.util.spec_from_file_location('sotc_main', ROOT / 'sotc.py')
+sotc_main = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(sotc_main)
 
 EU, US = 'CUSA08809', 'CUSA08034'
 
@@ -56,6 +64,26 @@ def make_pkg(path, content_id):
     header[0x40:0x40 + len(content_id)] = content_id.encode()
     header[0x74:0x78] = b'\0\0\0\x1b'
     Path(path).write_bytes(bytes(header))
+
+
+def make_full_pkg(path, content_id, category, title_id):
+    """A package as sotc_pkg.read_package reads it: header, one entry (param.sfo), no PFS."""
+    sfo = sfo_bytes({'CATEGORY': category, 'TITLE_ID': title_id, 'APP_VER': '01.00'})
+    header = bytearray(0x430)
+    header[:4] = b'\x7fCNT'
+    struct.pack_into('>I', header, 0x10, 1)
+    struct.pack_into('>I', header, 0x18, 0x430)
+    header[0x40:0x40 + len(content_id)] = content_id.encode()
+    struct.pack_into('>I', header, 0x74, 0x1b if category == 'ac' else 0x1a)
+    entry = struct.pack('>6I8x', 0x1000, 0, 0, 0, 0x430 + 32, len(sfo))
+    Path(path).write_bytes(bytes(header) + entry + sfo)
+
+
+def make_patch(folder, title_id):
+    """An update folder: param.sfo with the title ID and CATEGORY gp."""
+    (Path(folder) / 'sce_sys').mkdir(parents=True)
+    (Path(folder) / 'sce_sys' / 'param.sfo').write_bytes(sfo_bytes({'CATEGORY': 'gp', 'TITLE_ID': title_id}))
+    return Path(folder)
 
 
 class GamesTests(unittest.TestCase):
@@ -131,6 +159,40 @@ class DiscoveryTests(unittest.TestCase):
             self.assertEqual(sotc_discovery.find_dlc_root(game), str(Path(tmp) / 'dlc-us'))
 
 
+class SotcPyTests(unittest.TestCase):
+    def test_update_folder_of_the_same_release(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {}, clear=False):
+            os.environ.pop('SOTC_UPDATE_DIR', None)
+            us = make_game(Path(tmp) / 'us' / 'game', US)
+            make_patch(us / 'update', EU)
+            self.assertIsNone(sotc_main.game_update(us))
+            us_patch = make_patch(us.parent / 'patch', US)
+            self.assertEqual(sotc_main.game_update(us), us_patch)
+            eu = make_game(Path(tmp) / 'eu' / 'game', EU)
+            eu_patch = make_patch(eu / 'update', EU)
+            self.assertEqual(sotc_main.game_update(eu), eu_patch)
+
+
+class PackageTests(unittest.TestCase):
+    def test_packages_of_either_release(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            make_full_pkg(root / 'game.pkg', 'UP9000-CUSA08034_00-SHADOWOFTHECOLOS', 'gd', US)
+            make_full_pkg(root / 'patch.pkg', 'UP9000-CUSA08034_00-SHADOWOFTHECOLOS', 'gp', US)
+            make_full_pkg(root / 'bow.pkg', 'EP9000-CUSA08809_00-ANCIENTBOW000001', 'ac', EU)
+            make_full_pkg(root / 'other.pkg', 'UP0000-CUSA00001_00-OTHERGAME0000000', 'gd', 'CUSA00001')
+            packages = sorted(sotc_pkg.find_packages(root), key=lambda p: p['path'])
+            self.assertEqual([(Path(p['path']).name, p['serial'], p['kind']) for p in packages],
+                             [('bow.pkg', EU, 'dlc'), ('game.pkg', US, 'game'), ('patch.pkg', US, 'update')])
+            self.assertEqual(sotc_pkg.packages_serial(packages), US)
+            self.assertEqual(sotc_pkg.packages_serial(packages[:1]), EU)
+            self.assertEqual(sotc_pkg.targets(root, US)['update'], root / 'CUSA08034-UPDATE')
+            # Unpacked for the game's release; the other region's DLC is left out, as the runtime does.
+            places = sotc_pkg.unpack(packages, root, ROOT)
+            self.assertEqual(places, {'game': str(root / US), 'update': str(root / 'CUSA08034-UPDATE')})
+            self.assertTrue((root / US / 'sce_sys' / 'param.sfo').is_file())
+
+
 class SerialGateTests(unittest.TestCase):
     """Every SotC workaround must apply to both releases. A serial literal anywhere else turns one
     on for a single release: the early-Z decal fix stayed EU only that way, in a file grep skipped
@@ -151,6 +213,14 @@ class SerialGateTests(unittest.TestCase):
                  for path in self.sources(self.FOLDERS, ('.c', '.h', '.cpp', '.hpp', '.inc'))
                  if b'"CUSA' in path.read_bytes()}
         self.assertEqual(sorted(found - self.ALLOWED), [])
+
+    def test_python_serials_only_in_games(self):
+        # The launcher and the scripts take the releases from sotc_modes.GAMES: a quoted serial
+        # elsewhere (an update or a .pkg check) accepted the EU release only.
+        found = {path.relative_to(ROOT).as_posix()
+                 for path in [*self.sources(('launcher', 'scripts'), ('.py',)), ROOT / 'sotc.py']
+                 if re.search(rb'[\'"]CUSA\d{5}[\'"]', path.read_bytes())}
+        self.assertEqual(sorted(found - {'scripts/sotc_modes.py'}), [])
 
     def test_no_nul_bytes(self):
         found = [path.relative_to(ROOT).as_posix()
@@ -175,6 +245,27 @@ class LauncherTests(unittest.TestCase):
                 self.assertFalse(launcher.game_supported(us))
             self.assertEqual(launcher.game_serial(Path(tmp) / 'missing'), EU)
             self.assertEqual(launcher.supported_games(), 'CUSA08809 01.01, CUSA08034 01.00')
+
+    def test_damaged_archives_of_both_releases_and_the_update(self):
+        sizes = {'cachedFiles.psarc': (3, 5), 'pak0.psarc': (4,)}
+        with tempfile.TemporaryDirectory() as tmp, patch.object(launcher, 'GAME_ARCHIVES', sizes), \
+                patch.dict('os.environ', {}, clear=False):
+            os.environ.pop('SOTC_UPDATE_DIR', None)
+            for serial in (EU, US):
+                game = make_game(Path(tmp) / serial, serial)
+                (game / 'cachedFiles.psarc').write_bytes(b'abc')
+                self.assertEqual(launcher.damaged_archives(game), ['pak0.psarc'])
+                (game / 'pak0.psarc').write_bytes(b'abcd')
+                self.assertEqual(launcher.damaged_archives(game), [])
+                # The update's archive is read in place of the base game's (#112).
+                update = Path(tmp) / f'{serial}-UPDATE'
+                update.mkdir()
+                (update / 'cachedFiles.psarc').write_bytes(b'abcde')
+                (update / 'other.psarc').write_bytes(b'x')
+                self.assertEqual(launcher.damaged_archives(game), [])
+                (update / 'cachedFiles.psarc').write_bytes(b'ab')
+                self.assertEqual(launcher.damaged_archives(game), [str(Path(update.name, 'cachedFiles.psarc'))])
+                self.assertEqual(launcher.damaged_archives(game, update=''), [])
 
 
 if __name__ == '__main__':

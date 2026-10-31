@@ -1,11 +1,12 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """sotc: the player's own PS4 packages (.pkg dumps: the game, its update, its DLC) unpacked into
-the folders the port runs from, next to the packages:
+the folders the port runs from, next to the packages, named by the title ID (CUSA08809 EU or
+CUSA08034 US; the game package's when there is one, and only packages of that release are used):
 
-    <folder>/CUSA08809          the game (eboot.bin, sce_sys/param.sfo, ...)
-    <folder>/CUSA08809-UPDATE   the update (found next to the game, as shadPS4 does)
-    <folder>/CUSA08809-DLC      one folder per add-on (sce_sys/param.sfo, its files if it has any):
-                                the launcher's DLC folder (SOTC_DLC_DIR)
+    <folder>/<title id>          the game (eboot.bin, sce_sys/param.sfo, ...)
+    <folder>/<title id>-UPDATE   the update (found next to the game, as shadPS4 does)
+    <folder>/<title id>-DLC      one folder per add-on (sce_sys/param.sfo, its files if it has any):
+                                 the launcher's DLC folder (SOTC_DLC_DIR)
 
 The package entries the port reads (param.sfo, playgo-chunk, icons, ...) are written by this
 module; the file system image (PFS) is extracted by PkgTool (LibOrbisPkg, LGPL-3.0, shipped in
@@ -22,7 +23,10 @@ import tempfile
 import threading
 import time
 
-GAME_ID = 'CUSA08809'
+from sotc_modes import GAMES
+
+# The supported releases, EU first.
+GAME_IDS = tuple(GAMES)
 PKG_MAGIC = b'\x7fCNT'
 CONTENT_TYPE_ADDON = 0x1b
 ENTRY_ENCRYPTED = 0x80000000
@@ -45,8 +49,9 @@ def entry_name(entry_id):
 
 
 def read_package(path):
-    """{'path', 'content_id', 'category', 'title', 'version', 'kind' (game/update/dlc), 'pfs_size',
-    'entries'} of a package of the game, or None (not a package, another game)."""
+    """{'path', 'content_id', 'serial', 'category', 'title', 'version', 'kind' (game/update/dlc),
+    'pfs_size', 'entries'} of a package of the game (either release), or None (not a package,
+    another game)."""
     try:
         with open(path, 'rb') as f:
             header = f.read(0x430)
@@ -76,7 +81,8 @@ def read_package(path):
         values = sfo(sfo_data) if sfo_data else {}
     except (ImportError, ValueError):
         values = {}
-    if GAME_ID not in content_id and values.get('TITLE_ID') != GAME_ID:
+    serial = next((s for s in GAME_IDS if s in content_id or values.get('TITLE_ID') == s), None)
+    if not serial:
         return None
     category = str(values.get('CATEGORY', ''))
     if content_type == CONTENT_TYPE_ADDON or category.startswith('ac'):
@@ -86,7 +92,7 @@ def read_package(path):
     else:
         kind = 'game'
     return {
-        'path': str(path), 'content_id': content_id, 'category': category, 'kind': kind,
+        'path': str(path), 'content_id': content_id, 'serial': serial, 'category': category, 'kind': kind,
         'title': str(values.get('TITLE', '')).replace('�', '').strip(),
         'version': str(values.get('APP_VER') or values.get('VERSION') or ''),
         'pfs_size': struct.unpack_from('>Q', header, 0x418)[0], 'entries': entries,
@@ -113,10 +119,16 @@ def find_packages(folder, depth=2):
     return found
 
 
-def targets(folder):
-    """Where unpack() puts the game, its update and the DLC for packages in folder."""
+def packages_serial(packages):
+    """The title ID packages are unpacked for: the game package's, else the first package's."""
+    first = next((p for p in packages if p['kind'] == 'game'), packages[0] if packages else None)
+    return first['serial'] if first else GAME_IDS[0]
+
+
+def targets(folder, serial=GAME_IDS[0]):
+    """Where unpack() puts the game serial, its update and the DLC for packages in folder."""
     folder = Path(folder)
-    return {'game': folder / GAME_ID, 'update': folder / f'{GAME_ID}-UPDATE', 'dlc': folder / f'{GAME_ID}-DLC'}
+    return {'game': folder / serial, 'update': folder / f'{serial}-UPDATE', 'dlc': folder / f'{serial}-DLC'}
 
 
 def _dlc_folder(info, root):
@@ -232,9 +244,10 @@ def pkgtool_path(port_dir):
 
 def needed_bytes(packages, folder):
     """Bytes the packages not unpacked yet will take in folder."""
-    places = targets(folder)
+    serial = packages_serial(packages)
+    places = targets(folder, serial)
     total = 0
-    for info in packages:
+    for info in (p for p in packages if p['serial'] == serial):
         dest = _dlc_folder(info, places['dlc']) if info['kind'] == 'dlc' else places[info['kind']]
         if not _unpacked(info, dest):
             total += info['pfs_size']
@@ -242,9 +255,12 @@ def needed_bytes(packages, folder):
 
 
 def unpack(packages, folder, port_dir, progress=None):
-    """Unpacks the packages (read_package records) into folder; returns targets(folder) with the
-    paths that exist. progress(done_bytes, total_bytes) is called from this thread."""
-    places = targets(folder)
+    """Unpacks the packages (read_package records) of one release into folder; returns its
+    targets() with the paths that exist. progress(done_bytes, total_bytes) is called from this
+    thread."""
+    serial = packages_serial(packages)
+    packages = [p for p in packages if p['serial'] == serial]
+    places = targets(folder, serial)
     pkgtool = pkgtool_path(port_dir)
     # The newest update wins; every DLC is kept.
     games = [p for p in packages if p['kind'] == 'game']
