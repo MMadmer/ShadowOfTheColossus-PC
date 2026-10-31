@@ -59,12 +59,15 @@ AjncSystem**. The shader cache is rebuilt on the first start.
   turns** (it also looked like a flickering, see-through window). FSR 3 blended the two game frames
   without lining them up, and near the screen edges, where one frame has the pixel off screen, it
   switched hard to the other frame; two game frames differ (clouds, light), so a rectangle with a
-  hard edge followed the camera. The port now builds the generated frame along the game's motion
-  vectors where they agree (the sky's from the camera's motion) and fades each frame out smoothly
-  near the edges; FSR 3's own pixels stay at the edges of moving objects (`SOTC_FG_REPROJECT=0`
-  turns this off). The copies of the interface layer that put the HUD back over generated frames
-  now cover every queued frame, and each frame uses its own. `SOTC_FG_HUD_PASS=0` lets FSR 3
-  compose the interface itself (as in Dead Air Refined).
+  hard edge followed the camera, and objects (Wander, Agro, pillars) were doubled. The port now
+  builds the generated frame from the game's motion vectors: each pixel is the point of the
+  current frame that lands there half way (the nearest one where a pillar hides the sky), taken
+  from both frames at its own place in each (the sky moves with the camera); where the previous
+  frame showed something else there the current one is used alone, and each frame fades out
+  smoothly near the screen edges (`SOTC_FG_REPROJECT=0` turns this off). The copies of the
+  interface layer that put the HUD back over generated frames now cover every queued frame, and
+  each frame uses its own. `SOTC_FG_HUD_PASS=0` lets FSR 3 compose the interface itself (as in
+  Dead Air Refined).
 - **The game could stop while loading a save** (behind the loading screen, about one load in six
   in tests): the draw thread looped in a memory fault while comparing a table the game fills every
   frame. The table's source is now read through the backing memory view, as the table itself.
@@ -1111,12 +1114,15 @@ HiddenUserHere, Lukto02, Oussama268, InkAurora, NathanMBR, Gabriel-TwoBits и Aj
   было мутным** (это также выглядело как мерцающее полупрозрачное окно). FSR 3 смешивал два кадра
   игры, не совмещая их, а у краёв экрана, где точки одного из кадров выходят за край, резко
   переключался на другой кадр; соседние кадры различаются (облака, свет), поэтому за камерой шёл
-  прямоугольник с резкой границей. Теперь порт строит промежуточный кадр по векторам движения игры
-  там, где они согласованы (для неба — по движению камеры), и у краёв плавно уменьшает долю каждого
-  кадра; на границах движущихся объектов остаются пиксели FSR 3 (`SOTC_FG_REPROJECT=0` отключает
-  это). Копий слоя интерфейса, по которым HUD возвращается на сгенерированные кадры, теперь хватает
-  на все кадры в очереди, и каждый кадр использует свою. `SOTC_FG_HUD_PASS=0` позволяет FSR 3
-  собирать интерфейс самостоятельно (как в Dead Air Refined).
+  прямоугольник с резкой границей, а объекты (Вандер, Агро, колонны) двоились. Теперь порт строит
+  промежуточный кадр по векторам движения игры: каждый пиксель — это точка текущего кадра, которая
+  оказывается в нём на полпути (ближайшая, если, например, колонна закрывает небо), взятая из обоих
+  кадров в её собственном положении в каждом из них (небо смещается вместе с камерой); если в
+  предыдущем кадре на этом месте было другое, используется только текущий кадр, а у краёв экрана
+  доля каждого кадра плавно уменьшается (`SOTC_FG_REPROJECT=0` отключает это). Копий слоя
+  интерфейса, по которым HUD возвращается на сгенерированные кадры, теперь хватает на все кадры в
+  очереди, и каждый кадр использует свою. `SOTC_FG_HUD_PASS=0` позволяет FSR 3 собирать интерфейс
+  самостоятельно (как в Dead Air Refined).
 - **Игра могла зависнуть при загрузке сохранения** (за экраном загрузки, в тестах примерно при
   каждой шестой загрузке): поток отрисовки зацикливался на ошибке доступа к памяти, сравнивая
   таблицу, которую игра заполняет каждый кадр. Источник таблицы теперь читается через основное
