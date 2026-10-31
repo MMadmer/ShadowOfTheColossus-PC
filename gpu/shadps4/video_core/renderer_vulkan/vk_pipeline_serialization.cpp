@@ -648,6 +648,7 @@ bool PipelineCache::SaveDriverCache() {
         return true;
     }
     std::scoped_lock lock{driver_cache_mutex};
+    const auto cache_lock = OwnPipelineCache(instance);
     const auto device = instance.GetDevice();
     // The size first: nothing is copied while the driver added nothing. Pipeline workers may
     // add to the cache between the two calls (eIncomplete): asked again.

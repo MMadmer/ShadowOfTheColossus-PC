@@ -8,6 +8,7 @@
 #include <deque>
 #include <mutex>
 #include <optional>
+#include <shared_mutex>
 #include <thread>
 #include <unordered_set>
 #include <variant>
@@ -91,6 +92,13 @@ struct DrawIndirectParams {
     u16 vertex_sgpr_offset;
     u32 instance_sgpr_offset;
 };
+
+/// sotc: Intel's driver crashed in vkGetPipelineCacheData while pipeline workers were creating
+/// pipelines in the same cache (null reads in igvk64.dll on the save tick, #199, #211, #217).
+/// There pipeline creation shares this lock and the driver cache save holds it alone; elsewhere
+/// the lock is empty. SOTC_DRIVER_CACHE_LOCK=1/0 forces it on or off.
+std::shared_lock<std::shared_mutex> SharePipelineCache(const Instance& instance);
+std::unique_lock<std::shared_mutex> OwnPipelineCache(const Instance& instance);
 
 class PipelineCache {
 public:

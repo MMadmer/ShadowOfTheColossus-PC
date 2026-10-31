@@ -11,6 +11,7 @@
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
 #include "video_core/renderer_vulkan/vk_graphics_pipeline.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
+#include "video_core/renderer_vulkan/vk_pipeline_cache.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_shader_util.h"
 
@@ -464,8 +465,10 @@ GraphicsPipeline::GraphicsPipeline(
         .layout = *pipeline_layout,
     };
 
-    auto [pipeline_result, pipe] =
-        device.createGraphicsPipelineUnique(pipeline_cache, pipeline_info);
+    auto [pipeline_result, pipe] = [&] {
+        const auto cache_lock = SharePipelineCache(instance);
+        return device.createGraphicsPipelineUnique(pipeline_cache, pipeline_info);
+    }();
     if (pipeline_result != vk::Result::eSuccess && preloading) {
         // sotc: the driver can refuse a pipeline rebuilt from the cache (ErrorUnknown on AMD).
         // Left without a handle, the preload drops it and the game compiles it when it is drawn.

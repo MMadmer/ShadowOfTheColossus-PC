@@ -7,6 +7,7 @@
 #include "shader_recompiler/info.h"
 #include "video_core/renderer_vulkan/vk_compute_pipeline.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
+#include "video_core/renderer_vulkan/vk_pipeline_cache.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/sotc_stats.h"
 
@@ -123,8 +124,10 @@ void ComputePipeline::CreatePipeline() {
         .stage = shader_ci,
         .layout = *pipeline_layout,
     };
-    auto [pipeline_result, pipe] =
-        instance.GetDevice().createComputePipelineUnique(cache, compute_pipeline_ci);
+    auto [pipeline_result, pipe] = [&] {
+        const auto cache_lock = SharePipelineCache(instance);
+        return instance.GetDevice().createComputePipelineUnique(cache, compute_pipeline_ci);
+    }();
     if (pipeline_result != vk::Result::eSuccess && from_cache) {
         // sotc: as for graphics pipelines, a cached one the driver refuses is dropped.
         LOG_WARNING(Render_Vulkan, "Cached compute pipeline {} failed to build: {}", GetDebugString(),

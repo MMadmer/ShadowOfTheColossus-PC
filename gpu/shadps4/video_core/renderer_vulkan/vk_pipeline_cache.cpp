@@ -38,6 +38,26 @@ namespace Vulkan {
 // sotc: the pipeline cache in use (PipelineCache::SaveDriverCacheNow).
 static std::atomic<PipelineCache*> current_cache{nullptr};
 
+static std::shared_mutex pipeline_cache_lock;
+
+static bool PipelineCacheLockOn(const Instance& instance) {
+    static const bool on = [&instance] {
+        const char* v = std::getenv("SOTC_DRIVER_CACHE_LOCK");
+        return v ? v[0] == '1' : instance.GetVendorID() == 0x8086;
+    }();
+    return on;
+}
+
+std::shared_lock<std::shared_mutex> SharePipelineCache(const Instance& instance) {
+    return PipelineCacheLockOn(instance) ? std::shared_lock{pipeline_cache_lock}
+                                         : std::shared_lock<std::shared_mutex>{};
+}
+
+std::unique_lock<std::shared_mutex> OwnPipelineCache(const Instance& instance) {
+    return PipelineCacheLockOn(instance) ? std::unique_lock{pipeline_cache_lock}
+                                         : std::unique_lock<std::shared_mutex>{};
+}
+
 using Shader::HwStage;
 using Shader::Output;
 using Shader::SwStage;
@@ -460,8 +480,10 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
         // workers, 3.4 s with 12; one worker, the old default on 4 threads: 18 s).
         const char* workers = std::getenv("SOTC_PIPELINE_WORKERS");
         const int threads = static_cast<int>(std::thread::hardware_concurrency());
+        // sotc: 4 at most on Intel, whose driver stalled ~15 s with 12 compiling at once (#199).
+        const int most = instance.GetVendorID() == 0x8086 ? 4 : 12;
         const unsigned count = static_cast<unsigned>(
-            workers ? std::clamp(std::atoi(workers), 1, 16) : std::clamp(threads - 4, 2, 12));
+            workers ? std::clamp(std::atoi(workers), 1, 16) : std::clamp(threads - 4, 2, most));
         for (unsigned i = 0; i < count; ++i) {
             async_workers.emplace_back([this](std::stop_token token) { AsyncPipelineWorker(token); });
         }
