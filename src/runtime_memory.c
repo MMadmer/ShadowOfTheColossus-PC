@@ -1348,7 +1348,7 @@ uint64_t runtime_memory_generation(void) {
     return __atomic_load_n(&table_generation,__ATOMIC_ACQUIRE);
 }
 /* sotc: the whole backing view (direct then flexible memory) and its size, for the GPU to import
- * it in place (SOTC_PC_MEMORY, docs/sotc/MODELO-MEMORIA-PC.md); NULL before the pool exists. */
+ * it in place (SOTC_PC_MEMORY, docs/sotc/PC-MEMORY-MODEL.md); NULL before the pool exists. */
 const unsigned char *runtime_memory_backing_view(uint64_t *size) {
     if (size) *size=backing_base ? POOL_SIZE+FLEX_SPAN : 0;
     return backing_base;

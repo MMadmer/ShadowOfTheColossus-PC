@@ -1,148 +1,148 @@
-# Shadow of the Colossus — PC (port nativo)
+# Shadow of the Colossus — PC (native port)
 
-Port nativo do **Shadow of the Colossus** de PS4 (CUSA08809, versão EU 1.01, ou CUSA08034,
-versão US 1.00) para Windows.
-O código do jogo roda direto na CPU. Isto não é um emulador completo: há um carregador e as
-funções de sistema de que o jogo precisa. A GPU usa o núcleo de vídeo Vulkan do fork
-shadPS4 SotC. A base é o [bloodborne_pc](https://github.com/Supermedo/bloodborne_pc) (GPL-2.0).
+Native port of the PS4 **Shadow of the Colossus** (CUSA08809, EU version 1.01, or CUSA08034,
+US version 1.00) to Windows.
+The game's code runs directly on the CPU. This is not a full emulator: there is a loader and the
+system functions the game needs. The GPU uses the Vulkan video core of the shadPS4 SotC fork.
+It is based on [bloodborne_pc](https://github.com/Supermedo/bloodborne_pc) (GPL-2.0).
 
-Este pacote **não contém o jogo nem firmware da Sony**. Você precisa ter os seus.
+This package **contains neither the game nor Sony firmware**. You need to have your own.
 
-## Requisitos
+## Requirements
 
-- Windows 10/11 64-bit e GPU com Vulkan 1.3.
-- Python não é necessário para o `SotC.exe`; só o `SotC.bat` precisa de
+- Windows 10/11 64-bit and a GPU with Vulkan 1.3.
+- Python is not required for `SotC.exe`; only `SotC.bat` needs
   [Python 3](https://www.python.org/downloads/).
-- O **seu dump** do jogo CUSA08809 (europeu 1.01) ou CUSA08034 (americano 1.00) (pasta com
-  `eboot.bin`, `sce_module`, `sce_sys`...).
-- Opcional: `libSceNgs2.sprx` e `libSceUlt.sprx` do **seu próprio console**, decriptados, para o
-  som usar a biblioteca do console em vez da do port. São os mesmos arquivos da pasta
-  `user/sys_modules` do shadPS4; num PS4 com GoldHEN ficam em `/system/common/lib/`.
+- **Your own dump** of the game CUSA08809 (European 1.01) or CUSA08034 (American 1.00) (a folder
+  with `eboot.bin`, `sce_module`, `sce_sys`...).
+- Optional: `libSceNgs2.sprx` and `libSceUlt.sprx` from **your own console**, decrypted, so that
+  the sound uses the console's library instead of the port's. They are the same files as in the
+  `user/sys_modules` folder of shadPS4; on a PS4 with GoldHEN they are in `/system/common/lib/`.
 
-## Como jogar
+## How to play
 
-1. Abra `SotC.exe`, o lançador.
-2. Na primeira vez ele **procura sozinho** nos discos do PC:
-   - a pasta do jogo (CUSA08809 ou CUSA08034);
-   - um save do jogo no shadPS4, que ele oferece importar;
-   - as DLCs do jogo (pasta `addcont` do shadPS4 ou uma pasta com uma subpasta por DLC).
-3. Confira em **Jogo e saves**. A **biblioteca de jogos** funciona como no shadPS4: adicione as
-   pastas onde ficam os seus jogos e escolha o jogo na lista (duplo clique). **Procurar no PC**
-   repete a busca automática.
-4. Clique em **JOGAR**.
+1. Open `SotC.exe`, the launcher.
+2. The first time, it **searches on its own** across the PC's drives for:
+   - the game folder (CUSA08809 or CUSA08034);
+   - a game save in shadPS4, which it offers to import;
+   - the game's DLCs (the shadPS4 `addcont` folder or a folder with one subfolder per DLC).
+3. Check them under **Game & saves**. The **game library** works as in shadPS4: add the folders
+   where your games are and choose the game from the list (double-click). **Search this PC**
+   repeats the automatic search.
+4. Click **PLAY**.
 
-A tela **Jogar** confere tudo antes: a versão do jogo, os módulos de som, os saves e a placa de vídeo.
-Na primeira vez a imagem do jogo é preparada, o que leva alguns segundos. Isso só se repete
-quando o jogo ou os módulos mudam. Os saves e o cache de shaders ficam em `user/`.
+The **Play** screen checks everything first: the game version, the sound modules, the saves and
+the graphics card. The first time, the game image is prepared, which takes a few seconds. This is
+repeated only when the game or the modules change. Saves and the shader cache are kept in `user/`.
 
-Sem o lançador, `SotC.bat` faz o mesmo lendo `sotc.ini`. `SotC.exe --play` abre o jogo direto
-com as últimas opções do lançador, o que serve para atalhos e para o Steam.
+Without the launcher, `SotC.bat` does the same by reading `sotc.ini`. `SotC.exe --play` starts the
+game directly with the launcher's last options, which is useful for shortcuts and for Steam.
 
-## Imagem e desempenho
+## Image and performance
 
-Tudo isto está no lançador, na página **Imagem e FPS** (e os principais em **Jogar**):
+All of this is in the launcher, on the **Image & FPS** page (and the main ones on **Play**):
 
-- **Saída** 720p, 1080p, 1440p ou 4K. O jogo renderiza em 1080p, como no PS4, e a imagem é
-  ampliada para a saída com **FSR 1** + nitidez (RCAS) ou bilinear. A janela nunca passa de 90%
-  da tela; a tela cheia usa o monitor inteiro.
-- **60 FPS** (experimental): tira o limite de 30 FPS do jogo (patch GoldHEN de illusion), com
-  vblank a 120 Hz. Mediu 38 FPS no campo aberto e ~25 no templo.
-- **Reutilização de binds** (desligada por padrão desde a 0.60.6; `SOTC_FAST_BIND=1` liga): pula
-  a remontagem dos descritores quando o desenho seguinte usa o mesmo pipeline, recursos e
-  uniforms. Medido no Santuário: ~25 → 30 FPS. Na 0.60.5 deixava pontos pretos em grade no chão de
-  areia; a correção aguarda teste.
-- **Texturas nítidas**: filtro anisotrópico 16x, quase sem custo.
-- **Modo PS4 Pro**: o jogo se vê num PS4 Pro e oferece no próprio menu (Opções > Apresentação)
-  o Modo Grafismo **Cinematográfico** (1440p, mais detalhe) ou **Desempenho**. É mais pesado:
-  ~25 FPS no campo aberto.
-- **Efeitos**: vinheta, névoa atmosférica e oclusão ambiente (SSAO) podem ser desligados.
-  O motion blur, o brilho e os filtros ficam no menu do próprio jogo.
-- **Cvars do motor** (Avançado): variáveis do motor Bluepoint, `NOME=valor`, para quem quer
-  experimentar.
+- **Output** 720p, 1080p, 1440p or 4K. The game renders at 1080p, as on the PS4, and the image is
+  upscaled to the output with **FSR 1** + sharpening (RCAS) or bilinear. The window never exceeds
+  90% of the screen; fullscreen uses the whole monitor.
+- **60 FPS** (experimental): removes the game's 30 FPS limit (GoldHEN patch by illusion), with
+  vblank at 120 Hz. It measured 38 FPS in the open field and ~25 in the temple.
+- **Bind reuse** (off by default since 0.60.6; `SOTC_FAST_BIND=1` turns it on): skips rebuilding
+  the descriptors when the next draw uses the same pipeline, resources and uniforms. Measured at
+  the Shrine: ~25 → 30 FPS. In 0.60.5 it left black dots in a grid on the sand ground; the fix is
+  awaiting testing.
+- **Sharp textures**: 16x anisotropic filtering, almost free.
+- **PS4 Pro mode**: the game sees itself on a PS4 Pro and offers in its own menu (Options >
+  Presentation) the **Cinematic** Graphics Mode (1440p, more detail) or **Performance**. It is
+  heavier: ~25 FPS in the open field.
+- **Effects**: vignette, atmospheric fog and ambient occlusion (SSAO) can be turned off.
+  Motion blur, brightness and filters are in the game's own menu.
+- **Engine cvars** (Advanced): Bluepoint engine variables, `NAME=value`, for those who want to
+  experiment.
 
-Os modos de patch valem para a versão EU 1.01 e para a US 1.00 (o executável é o mesmo); em
-outra versão eles não são aplicados. Cada versão tem os seus saves (`user/savedata/1/CUSA08809`
-ou `CUSA08034`) e só usa DLCs da mesma região.
+The patch modes apply to EU version 1.01 and to US 1.00 (the executable is the same); on another
+version they are not applied. Each version has its own saves (`user/savedata/1/CUSA08809` or
+`CUSA08034`) and uses only DLCs from the same region.
 
-## Controles
+## Controls
 
-**Mouse:** clique na janela do jogo para capturar o mouse, que passa a girar a câmera; Esc ou
-trocar de janela solta o mouse. Botão esquerdo = R1 (agarrar), direito = □ (atacar),
-meio = L1. Sensibilidade e inversão ficam em **Controles** no lançador. Para remapear os botões
-do mouse, use `mouse.<entrada>=left,right,middle,x1,x2`.
+**Mouse:** click in the game window to capture the mouse, which then rotates the camera; Esc or
+switching windows releases the mouse. Left button = R1 (grab), right = □ (attack),
+middle = L1. Sensitivity and inversion are under **Controls** in the launcher. To remap the mouse
+buttons, use `mouse.<input>=left,right,middle,x1,x2`.
 
-Um controle (DualShock 4, DualSense, Xbox...) é usado automaticamente. Com vários conectados,
-escolha um em **Controles** no lançador (ou `BB_GAMEPAD=` no `sotc.ini`). O teclado funciona
-junto com o controle:
+A controller (DualShock 4, DualSense, Xbox...) is used automatically. With several connected,
+choose one under **Controls** in the launcher (or `BB_GAMEPAD=` in `sotc.ini`). The keyboard works
+together with the controller:
 
-| Teclado | PS4 |
+| Keyboard | PS4 |
 |---|---|
-| W A S D | analógico esquerdo |
-| setas | analógico direito (câmera) |
-| Espaço | ✕ |
-| Shift esquerdo | ○ |
+| W A S D | left stick |
+| arrow keys | right stick (camera) |
+| Space | ✕ |
+| Left Shift | ○ |
 | E | □ |
 | Q | △ |
 | 1 / 3 | L1 / R1 |
 | R / F | L2 / R2 |
 | Z / C | L3 / R3 |
 | Enter | Options |
-| I J K L | direcional |
-| Tab / Backspace | touchpad (esquerda / direita) |
+| I J K L | D-pad |
+| Tab / Backspace | touchpad (left / right) |
 
-As teclas podem ser trocadas em **Controles** no lançador: clique na ação e aperte a nova tecla.
-O controle e o mouse também podem ser remapeados no `sotc.ini`, por exemplo `pad.circle=b`.
-As entradas são:
+The keys can be changed under **Controls** in the launcher: click the action and press the new
+key. The controller and the mouse can also be remapped in `sotc.ini`, for example
+`pad.circle=b`. The inputs are:
 
-- botões: `cross circle square triangle l1 r1 l2 r2 l3 r3 options touchpad touchpad_right`;
-- direcional: `up down left right`;
-- no teclado, os analógicos: `move_up` `move_down` `move_left` `move_right` e
+- buttons: `cross circle square triangle l1 r1 l2 r2 l3 r3 options touchpad touchpad_right`;
+- D-pad: `up down left right`;
+- on the keyboard, the sticks: `move_up` `move_down` `move_left` `move_right` and
   `look_up` `look_down` `look_left` `look_right`.
 
-## Estado
+## Status
 
-Funcionam: logos, abertura, menus com texto, carregar save, exploração a cavalo,
-som, controles DualShock, DualSense e Xbox (com os ícones e a vibração de cada um).
+Working: logos, intro, menus with text, loading a save, exploration on horseback,
+sound, DualShock, DualSense and Xbox controllers (with each one's icons and vibration).
 
-Desempenho medido no demo da tela de título, modo 60 FPS, i9-13900K + RTX 2060 SUPER:
-média de ~67 FPS; o trecho mais pesado (a ponte do cânion) fica em 29–34 FPS. No modo
-normal o jogo roda travado em 30 FPS, como no PS4.
+Performance measured in the title-screen demo, 60 FPS mode, i9-13900K + RTX 2060 SUPER:
+~67 FPS on average; the heaviest stretch (the canyon bridge) stays at 29–34 FPS. In normal
+mode the game runs locked at 30 FPS, as on the PS4.
 
-## Perguntas comuns
+## Frequently asked questions
 
-- **DirectX 11/12?** Não. O núcleo de vídeo (shadPS4) traduz a GPU do PS4 para Vulkan; os
-  shaders do jogo viram SPIR-V. Toda placa de vídeo com DirectX 12 recente também tem Vulkan
-  1.3: atualize o driver. Um modo DirectX exigiria reescrever o núcleo de vídeo inteiro.
-- **Placas AMD e Intel?** As otimizações valem para qualquer placa, menos duas que só ligam
-  sozinhas na NVIDIA (o envio periódico de trabalho à GPU e as leituras antecipadas).
-  Em **Imagem e FPS > Envio de trabalho à GPU**, escolha **Ligado** para testá-las na AMD ou
-  Intel; se a tela ficar preta, volte para **Automático**.
+- **DirectX 11/12?** No. The video core (shadPS4) translates the PS4 GPU to Vulkan; the game's
+  shaders become SPIR-V. Every graphics card with recent DirectX 12 also has Vulkan 1.3: update
+  the driver. A DirectX mode would require rewriting the entire video core.
+- **AMD and Intel cards?** The optimizations apply to any card, except two that turn on by
+  themselves only on NVIDIA (periodic work submission to the GPU and early reads).
+  Under **Image & FPS > GPU work submission**, choose **On** to test them on AMD or Intel; if the
+  screen goes black, switch back to **Automatic**.
 
-## Créditos
+## Credits
 
-- [bloodborne_pc](https://github.com/Supermedo/bloodborne_pc) (bbport, deadinside28 e forks): carregador,
-  runtime nativo e lançador, base deste port.
-- [shadPS4](https://github.com/shadps4-emu/shadPS4) e o fork shadPS4 SotC: núcleo de vídeo Vulkan.
-- [Pink-shadPS4](https://github.com/luizgustavs/Pink-shadPS4) (luizgustavs): as cvars de culling, a proteção
-  do heap do jogo contra leituras da GPU (`bpe_heap_guard`), o flush periódico, as leituras antecipadas,
-  o marcador de espera e o gravador de comandos Vulkan em thread própria (`cp_record_thread`).
+- [bloodborne_pc](https://github.com/Supermedo/bloodborne_pc) (bbport, deadinside28 and forks): loader,
+  native runtime and launcher, the base of this port.
+- [shadPS4](https://github.com/shadps4-emu/shadPS4) and the shadPS4 SotC fork: Vulkan video core.
+- [Pink-shadPS4](https://github.com/luizgustavs/Pink-shadPS4) (luizgustavs): the culling cvars, the protection
+  of the game heap against GPU reads (`bpe_heap_guard`), the periodic flush, the early reads, the
+  wait marker and the Vulkan command recorder on its own thread (`cp_record_thread`).
 
-## Diagnóstico
+## Diagnostics
 
-Estas variáveis de ambiente ajudam a investigar problemas:
+These environment variables help investigate problems:
 
-| Variável | Efeito |
+| Variable | Effect |
 |---|---|
-| `SOTC_FPS=1` | taxa de quadros a cada 5 s |
-| `SOTC_WINDOW_MODE=windowed/borderless/fullscreen` | janela, tela cheia em janela ou tela cheia exclusiva (na resolução de saída) |
-| `SOTC_PAD_GLYPHS=xbox/ps/keyboard` | fixa os ícones dos botões (padrão: os do dispositivo em uso) |
-| `BB_FAULT_RING=arquivo` | grava as últimas exceções (sobrevive a quedas) |
-| `BB_STACKS_TRIGGER=arquivo` | criar o arquivo despeja as pilhas das threads |
-| `BB_READBACKS=0/1/2` | leituras da GPU; o padrão 2 é o exigido pelo jogo |
-| `SOTC_FAST_BIND=1` | reaproveita binds de descritores entre desenhos iguais (padrão: desligado desde a 0.60.6) |
-| `SOTC_RECORD_THREAD=0` | grava os comandos Vulkan na própria thread de comandos (padrão: thread própria) |
-| `SOTC_INDIRECT_DIRECT=0` | mantém indiretos os draws cujos argumentos estão na CPU |
-| `SOTC_WAIT_MARKER=1/2` | esperas pela GPU consultam um marcador escrito por ela (experimental) |
-| `SOTC_CMD_STATS=1/2` | draws e dispatches por quadro (2: shaders de compute mais usados) |
-| `SOTC_TSC=qpc/native` | relógio do jogo: `qpc` sempre usa o QPC do Windows, `native` sempre o TSC do processador (padrão: QPC só quando os núcleos discordam no TSC) |
-| `SOTC_UI_HIRES=0` | com DLSS, a interface (textos, logos, HUD) volta a ser desenhada na resolução de renderização e ampliada, em vez de na resolução de saída |
+| `SOTC_FPS=1` | frame rate every 5 s |
+| `SOTC_WINDOW_MODE=windowed/borderless/fullscreen` | window, borderless fullscreen window or exclusive fullscreen (at the output resolution) |
+| `SOTC_PAD_GLYPHS=xbox/ps/keyboard` | fixes the button icons (default: those of the device in use) |
+| `BB_FAULT_RING=file` | records the latest exceptions (survives crashes) |
+| `BB_STACKS_TRIGGER=file` | creating the file dumps the thread stacks |
+| `BB_READBACKS=0/1/2` | GPU reads; the default 2 is the one the game requires |
+| `SOTC_FAST_BIND=1` | reuses descriptor binds between identical draws (default: off since 0.60.6) |
+| `SOTC_RECORD_THREAD=0` | records the Vulkan commands on the command thread itself (default: its own thread) |
+| `SOTC_INDIRECT_DIRECT=0` | keeps indirect the draws whose arguments are on the CPU |
+| `SOTC_WAIT_MARKER=1/2` | waits for the GPU poll a marker written by it (experimental) |
+| `SOTC_CMD_STATS=1/2` | draws and dispatches per frame (2: most used compute shaders) |
+| `SOTC_TSC=qpc/native` | game clock: `qpc` always uses the Windows QPC, `native` always the processor's TSC (default: QPC only when the cores disagree on the TSC) |
+| `SOTC_UI_HIRES=0` | with DLSS, the interface (text, logos, HUD) is again drawn at the render resolution and upscaled, instead of at the output resolution |

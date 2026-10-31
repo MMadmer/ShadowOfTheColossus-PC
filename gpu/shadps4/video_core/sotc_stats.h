@@ -152,7 +152,7 @@ inline uint64_t TakeDelta(const std::atomic<uint64_t>& counter, uint64_t& seen) 
 }
 
 /// sotc: SOTC_DRAW_SPLIT=1 (with SOTC_FPS): where the draw thread's time goes, the "SOTC DRAW
-/// SPLIT" lines (videoout/driver.cpp; step 0 of docs/sotc/PLANO-THREAD-DESENHO.md). "draw busy"
+/// SPLIT" lines (videoout/driver.cpp; step 0 of docs/sotc/DRAW-THREAD-PLAN.md). "draw busy"
 /// counts every wait inside an operation (flips, GPU waits, readbacks) as busy; these counters
 /// separate the operations, the binds and the waits, in TSC ticks (one rdtsc per edge), and the
 /// printer reads the CPU time of the draw, command processor and recorder threads. Counting only:

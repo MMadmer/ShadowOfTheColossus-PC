@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-// sotc: the game's memory for the GPU in place, the "PC memory model" (docs/sotc/MODELO-MEMORIA-PC.md).
+// sotc: the game's memory for the GPU in place, the "PC memory model" (docs/sotc/PC-MEMORY-MODEL.md).
 //
 // The backing view of the game's memory (src/runtime_memory.c: the pagefile section's second view,
 // which bypasses the guest's page protection) is imported into Vulkan with

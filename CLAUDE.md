@@ -16,8 +16,9 @@ No game files or Sony firmware are in the repo, and none may be added: packaging
 `.sprx`/`.prx`. Running the game needs a local dump (`SOTC_GAME_DIR`, default `../CUSA08809`) and,
 for sound, the user's own `libSceNgs2.sprx`/`libSceUlt.sprx` (`SOTC_SYS_MODULES`).
 
-User-facing docs (README, CHANGELOG, `docs/sotc/*`) are written in Portuguese (README also has
-English). Code comments are English.
+User-facing docs (README, CHANGELOG, `packaging/windows/README.md`) carry English and Russian
+sections; `docs/sotc/*` has an English file and a Russian `.ru.md` beside it. Portuguese text
+merged from upstream is translated into both. Code comments are English.
 
 ## Build / run / test
 
@@ -105,8 +106,9 @@ newer ones appear in `CHANGELOG.md` entries. Session log goes to `user/last_run.
 - Commit subjects are prefixed by area: `shader:`, `shader_recompiler:`, `vulkan:`, `sotc:`,
   `launcher:`, `docs:`, `diagnostics:`, `lod stats:`; releases are `Release X.YY: <summary>`.
 - A release bumps `VERSION` in `launcher/sotc_launcher_win.py`, the version/table in `README.md`
-  (both languages), and adds a Portuguese `CHANGELOG.md` entry.
+  (both languages), and adds the `CHANGELOG.md` entry in both its English and Russian sections.
 - Changes to recompiler/shader output invalidate the user's shader cache; CHANGELOG entries note
-  "O cache de shaders é refeito na primeira abertura" when that happens.
+  "The shader cache is rebuilt on the first start" / «Кэш шейдеров создаётся заново при первом
+  запуске» when that happens.
 - C code: C11, `-Wall -Wextra -Werror` on the Linux build; third-party decoders (LibAtrac9) are
   compiled separately without `-Werror`.
