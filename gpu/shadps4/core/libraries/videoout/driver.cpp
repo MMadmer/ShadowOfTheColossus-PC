@@ -282,6 +282,7 @@ int VideoOutDriver::ChangeBufferAttribute(VideoOutPort* port, s32 attributeIndex
 
 // sotc: src/runtime_memory.c, live view splits since the last call.
 extern "C" uint64_t runtime_memory_carve_splits(void);
+extern "C" void runtime_memory_process_usage(uint64_t* private_bytes, uint64_t* working_set);
 extern "C" void runtime_memory_lock_stats(uint64_t* writes, double* wait_ms, double* hold_ms,
                                           double* worst_ms);
 extern "C" void runtime_memory_lock_stats2(double* worst_hold_ms, uint64_t* read_waits,
@@ -376,6 +377,13 @@ void VideoOutDriver::Flip(const Request& req) {
                                      "Last minute: %.1f FPS average, %u frames over 50 ms, worst %.0f ms, video memory %llu MB"),
                            minute_flips / seconds, slow, worst_ms,
                            static_cast<unsigned long long>(SotcStats::vram_used.load(std::memory_order_relaxed) >> 20));
+            // sotc: the process's own RAM, for reports of high memory use (MMadmer #2). The guest
+            // memory section shows in the working set only (its commit is fixed at start).
+            uint64_t private_bytes = 0, working_set = 0;
+            runtime_memory_process_usage(&private_bytes, &working_set);
+            std::fprintf(stderr, "SOTC RAM: private %llu MiB, working set %llu MiB\n",
+                         static_cast<unsigned long long>(private_bytes >> 20),
+                         static_cast<unsigned long long>(working_set >> 20));
             const u64 skipped_cpu = SotcStats::rb_hot_cpu_skipped.exchange(0, std::memory_order_relaxed);
             const u64 skipped_late = SotcStats::rb_hot_late_skipped.exchange(0, std::memory_order_relaxed);
             if (skipped_cpu || skipped_late) {
