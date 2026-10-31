@@ -13,7 +13,7 @@ shaders é refeito na primeira abertura.
   modo PS4 Pro, em qualquer proporção de tela e em 4K, com a interface desenhada na resolução de
   saída. O jogo renderiza na resolução de saída dividida pelo fator do modo (no modo PS4 Pro, nos
   tamanhos do próprio Pro); o DLAA é o modo de fator 1. Sem placa RTX, o FSR 1 amplia a mesma
-  imagem.
+  imagem. Com a saída HDR, o FSR 1 é usado no lugar do DLSS.
 - **Multiplicador do DLSS-G até x6 e modo Dinâmico** (GeForce RTX 50, conforme o driver), no
   lançador e no menu do jogo (PR #314).
 - **Grama:** sombras, distância, altura, detalhe e esmaecimento da grama e do mato no lançador
