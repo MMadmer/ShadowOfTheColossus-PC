@@ -39,6 +39,7 @@ struct ComputePipelineKey {
 
 class ComputePipeline : public Pipeline {
 public:
+    using Pipeline::GetDebugString; // sotc: the slow-build log of the pipeline workers
     struct SerializationSupport {
         u32 dummy{};
 

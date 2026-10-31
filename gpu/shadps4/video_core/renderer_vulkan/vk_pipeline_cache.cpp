@@ -522,6 +522,25 @@ static void LogSyncPipeline(const char* kind, const char* reason,
                  static_cast<unsigned long long>(hash_b), at);
 }
 
+// sotc: a pipeline the workers took longer than a second to build (SOTC_SLOW_BUILD_MS changes the
+// limit) is logged with its shaders: Intel Arc drivers stalled for ~13 s at a time compiling
+// compute pipelines while the recorder waited for them (AjncSystem #199).
+template <class P>
+static void LogSlowBuild(const char* kind, std::chrono::steady_clock::time_point start,
+                         const P& pipeline) {
+    const double ms =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    static const double min_ms = [] {
+        const char* v = std::getenv("SOTC_SLOW_BUILD_MS");
+        return v ? std::atof(v) : 1000.0;
+    }();
+    static std::atomic<int> logged{0};
+    if (ms >= min_ms && logged.fetch_add(1, std::memory_order_relaxed) < 200) {
+        std::fprintf(stderr, "SOTC SLOW BUILD %s %.0f ms: %s\n", kind, ms,
+                     pipeline.GetDebugString().c_str());
+    }
+}
+
 bool PipelineCache::AsyncPipelineEligible() const {
     // Off the command processor the guest registers belong to later draws: only pipelines whose
     // construction reads nothing from them. Vertex inputs are dynamic state (otherwise they are
@@ -639,6 +658,7 @@ void PipelineCache::AsyncPipelineWorker(std::stop_token token) {
         if (job->compute) {
             const auto start = std::chrono::steady_clock::now();
             job->compute->Build();
+            LogSlowBuild("compute", start, *job->compute);
             SotcStats::async_compute_built.fetch_add(1, std::memory_order_relaxed);
             SotcStats::async_compute_build_ns.fetch_add(
                 std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -647,10 +667,12 @@ void PipelineCache::AsyncPipelineWorker(std::stop_token token) {
                 std::memory_order_relaxed);
             continue;
         }
+        const auto start = std::chrono::steady_clock::now();
         job->pipeline = std::make_unique<GraphicsPipeline>(
             instance, scheduler, desc_heap, profile, job->key, *pipeline_cache, job->infos,
             job->runtime_infos, job->fetch_shader ? &*job->fetch_shader : nullptr, job->modules,
             job->sdata, job->preloaded, true);
+        LogSlowBuild("graphics", start, *job->pipeline);
         SotcStats::frame_compiles.fetch_add(1, std::memory_order_relaxed);
         std::scoped_lock lock{async_mutex};
         async_done.push_back(std::move(job));

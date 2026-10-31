@@ -70,6 +70,7 @@ struct GraphicsPipelineKey {
 
 class GraphicsPipeline : public Pipeline {
 public:
+    using Pipeline::GetDebugString; // sotc: the slow-build log of the pipeline workers
     struct SerializationSupport {
         VertexInputs<vk::VertexInputAttributeDescription> vertex_attributes{};
         VertexInputs<vk::VertexInputBindingDescription> vertex_bindings{};
