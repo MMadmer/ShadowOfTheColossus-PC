@@ -60,10 +60,13 @@ AjncSystem**. The shader cache is rebuilt on the first start.
   and frame pacing, as in other games; the FSR-Vulkan module is no longer used.
   - **A dark rectangle trailing the camera and a hazy picture while it turns** (it also looked like
     a flickering window): near the screen edges, where one of the two game frames has the point off
-    screen, FSR 3 fills a band up to a frame's motion wide with a blurred estimate. The port
-    rebuilds that band from the frame that has the point, moved half way along the game's motion
-    vectors, in the tone half way between the two frames (the game's exposure and fog change from
-    frame to frame), and blends it smoothly into FSR 3's picture.
+    screen, FSR 3 fills a band up to a frame's motion wide with a blurred estimate, lighter or darker
+    than the rest of the frame. The port rebuilds that band from the frame that has the point (the
+    point of the game frame whose motion lands there half way, so that moving objects such as Agro
+    keep their place), in the tone half way between the two frames (the game's exposure and fog
+    change from frame to frame), and blends it smoothly into FSR 3's picture; further in, FSR 3's
+    pixels keep their detail and take that tone. Where the rebuilt band would show something else
+    than FSR 3 (an object that moved), only the tone is corrected.
   - **Outlines and doubled edges around moving objects** (Agro running): the game's motion blur
     smears an object over the pixels around it, whose motion vectors are the background's, and FSR
     3 moved the smear away from the object. Those pixels now take the object's motion vectors and
@@ -101,7 +104,8 @@ AjncSystem**. The shader cache is rebuilt on the first start.
 - The FPS hint in the launcher mentions the known cases: above 30 FPS, the fight against Avion;
   above 60 FPS, the opening video may close the game (#100, #331).
 
-**New diagnostic options:** `SOTC_POOL_FIX=0` (without the page allocator fix),
+**New diagnostic options:** `SOTC_FG_MARK=1` (marks generated frames in screen recordings),
+`SOTC_POOL_FIX=0` (without the page allocator fix),
 `SOTC_EXTRA_CVARS` and cvars in the `NOME(ARGS)` format (PR #345), `SOTC_SWAP_IMAGES` (swapchain
 depth, PR #352), `SOTC_DRIVER_CACHE_LOCK`, `SOTC_SLOW_BUILD_MS`, `SOTC_WIDE_ASPECT=0`,
 `SOTC_THREAD_TIMES`.
@@ -1121,10 +1125,14 @@ HiddenUserHere, Lukto02, Oussama268, InkAurora, NathanMBR, Gabriel-TwoBits и Aj
   используется.
   - **При повороте камеры за ней тянулся тёмный прямоугольник, а изображение было мутным** (это
     также выглядело как мерцающее окно): у краёв экрана, где точка одного из двух кадров игры
-    находится за краем, FSR 3 заполняет полосу шириной до смещения кадра размытой оценкой. Порт
-    восстанавливает эту полосу по кадру, в котором точка видна, смещённому на половину пути по
-    векторам движения игры, в тоне посередине между двумя кадрами (экспозиция и туман в игре
-    меняются от кадра к кадру), и плавно совмещает её с изображением FSR 3.
+    находится за краем, FSR 3 заполняет полосу шириной до смещения кадра размытой оценкой, светлее
+    или темнее остального кадра. Порт восстанавливает эту полосу по кадру, в котором точка видна
+    (по точке кадра игры, которая по своему движению оказывается здесь на полпути, поэтому
+    движущиеся объекты, например Агро, остаются на своём месте), в тоне посередине между двумя
+    кадрами (экспозиция и туман в игре меняются от кадра к кадру), и плавно совмещает её с
+    изображением FSR 3; дальше от края пиксели FSR 3 сохраняют детали и получают этот тон. Там,
+    где восстановленная полоса показала бы не то, что FSR 3 (сместившийся объект), исправляется
+    только тон.
   - **Контуры и двоящиеся края у движущихся объектов** (бегущий Агро): размытие движения в игре
     размазывает объект по соседним пикселям, векторы движения которых принадлежат фону, и FSR 3
     уводил этот след в сторону от объекта. Теперь такие пиксели получают векторы движения и глубину
@@ -1162,7 +1170,8 @@ HiddenUserHere, Lukto02, Oussama268, InkAurora, NathanMBR, Gabriel-TwoBits и Aj
 - Подсказка о FPS в лаунчере называет известные случаи: выше 30 FPS — бой с колоссом Avion; выше
   60 FPS вступительный ролик может закрыть игру (#100, #331).
 
-**Новые параметры для диагностики:** `SOTC_POOL_FIX=0` (без исправления страничного аллокатора),
+**Новые параметры для диагностики:** `SOTC_FG_MARK=1` (отмечает сгенерированные кадры в записях
+экрана), `SOTC_POOL_FIX=0` (без исправления страничного аллокатора),
 `SOTC_EXTRA_CVARS` и cvar в формате `NOME(ARGS)` (PR #345), `SOTC_SWAP_IMAGES` (глубина swapchain,
 PR #352), `SOTC_DRIVER_CACHE_LOCK`, `SOTC_SLOW_BUILD_MS`, `SOTC_WIDE_ASPECT=0`,
 `SOTC_THREAD_TIMES`.
