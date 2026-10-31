@@ -50,7 +50,7 @@ GAME_ID = next(iter(GAMES))
 DEFAULT_GAME_DIR = next((PORT_DIR.parent / g for g in GAMES if (PORT_DIR.parent / g / 'eboot.bin').is_file()),
                         PORT_DIR.parent / GAME_ID)
 SYS_MODULES = ('libSceUlt.sprx', 'libSceNgs2.sprx')
-VERSION = '1.1.4'
+VERSION = '1.2.0'
 MAX_LOG_LINES = 6000
 NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 

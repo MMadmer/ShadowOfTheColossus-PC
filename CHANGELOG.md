@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.1.4 — 2026-10-31 (fork Madmer)
+## 1.2.0 — 2026-10-31 (fork Madmer)
 Junta ao fork a 0.70 do projeto original e as versões 0.60.6-C1 a C3 (abaixo), partes das pull
 requests abertas dele e correções de issues ainda abertas. Obrigado a **tabnul, Lucas-blip-png,
 HiddenUserHere, Lukto02, Oussama268, InkAurora, NathanMBR, Gabriel-TwoBits e AjncSystem**. O cache de
