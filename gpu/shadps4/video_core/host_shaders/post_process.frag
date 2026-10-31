@@ -22,6 +22,7 @@ layout (push_constant) uniform settings {
     vec4 vignette; // sotc: start, end, radius scale, strength (the game's tonemap, after DLSS)
     float ui_sharpen; // sotc: unsharp amount for the upscaled ui
     float sky_sharpen; // sotc: unsharp amount in the sky
+    float hdr_white; // sotc: HDR paper white in nits
 } pp;
 
 const float cutoff = 0.0031308, a = 1.055, b = 0.055, d = 12.92;
@@ -71,6 +72,17 @@ vec4 sampleCatmullRom(sampler2D tex, vec2 p) {
     return clamp(r, 0.0, 1.0);
 }
 
+// sotc: SMPTE ST 2084 (PQ), in nits.
+const float pq_m1 = 0.1593017578125, pq_m2 = 78.84375, pq_c1 = 0.8359375, pq_c2 = 18.8515625, pq_c3 = 18.6875;
+vec3 pqDecode(vec3 e) {
+    const vec3 p = pow(clamp(e, 0.0, 1.0), vec3(1.0 / pq_m2));
+    return 10000.0 * pow(max(p - pq_c1, 0.0) / (pq_c2 - pq_c3 * p), vec3(1.0 / pq_m1));
+}
+vec3 pqEncode(vec3 nits) {
+    const vec3 y = pow(clamp(nits / 10000.0, 0.0, 1.0), vec3(pq_m1));
+    return pow((pq_c1 + pq_c2 * y) / (1.0 + pq_c3 * y), vec3(pq_m2));
+}
+
 void main() {
     vec4 color_linear = texture(texSampler, uv);
     if (pp.sky_sharpen != 0.0) {
@@ -113,7 +125,10 @@ void main() {
         color_linear = vec4(clamp(color_linear.rgb, 0.0, 1.0) * (1.0 - ui.a) + ui.rgb, 1.0);
     }
     if (pp.hdr) {
-        color = color_linear;
+        // sotc: the game's own BT.2020 PQ output has its white at about 100 nits, too dim next
+        // to the desktop; scaled to the paper white.
+        color = vec4(pqEncode(pqDecode(color_linear.rgb) * (pp.hdr_white / 100.0)),
+                     color_linear.a);
     } else {
         if (pp.srgb_input) color_linear.rgb = degamma(color_linear.rgb);
         color = vec4(gamma(color_linear.rgb), color_linear.a);
