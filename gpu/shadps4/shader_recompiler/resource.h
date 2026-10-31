@@ -184,6 +184,11 @@ struct ImageResource {
         }
         if (!image.Valid()) {
             image = AmdGpu::Image::Null(is_depth);
+        } else if (image.GetViewType(is_array) == AmdGpu::ImageType::Color2DMsaaArray) {
+            // sotc: an arrayed MSAA view has no image type in the recompiler (sample patching)
+            // nor in the SPIR-V backend; only a garbage T# gave one (upstream #255: the game
+            // closed with exit 23). Compiled and bound as the null image, as other invalid T#s.
+            image = AmdGpu::Image::Null(is_depth);
         } else if (is_depth) {
             const auto data_fmt = image.GetDataFmt();
             if (data_fmt != AmdGpu::DataFormat::Format16 &&
