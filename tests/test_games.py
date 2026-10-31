@@ -1,5 +1,6 @@
 """The supported releases: EU CUSA08809 1.01 and US CUSA08034 1.00, the same eboot build."""
 from paths import ROOT
+import os
 from pathlib import Path
 import struct
 import sys
@@ -175,6 +176,27 @@ class LauncherTests(unittest.TestCase):
                 self.assertFalse(launcher.game_supported(us))
             self.assertEqual(launcher.game_serial(Path(tmp) / 'missing'), EU)
             self.assertEqual(launcher.supported_games(), 'CUSA08809 01.01, CUSA08034 01.00')
+
+    def test_damaged_archives_of_both_releases_and_the_update(self):
+        sizes = {'cachedFiles.psarc': (3, 5), 'pak0.psarc': (4,)}
+        with tempfile.TemporaryDirectory() as tmp, patch.object(launcher, 'GAME_ARCHIVES', sizes), \
+                patch.dict('os.environ', {}, clear=False):
+            os.environ.pop('SOTC_UPDATE_DIR', None)
+            for serial in (EU, US):
+                game = make_game(Path(tmp) / serial, serial)
+                (game / 'cachedFiles.psarc').write_bytes(b'abc')
+                self.assertEqual(launcher.damaged_archives(game), ['pak0.psarc'])
+                (game / 'pak0.psarc').write_bytes(b'abcd')
+                self.assertEqual(launcher.damaged_archives(game), [])
+                # The update's archive is read in place of the base game's (#112).
+                update = Path(tmp) / f'{serial}-UPDATE'
+                update.mkdir()
+                (update / 'cachedFiles.psarc').write_bytes(b'abcde')
+                (update / 'other.psarc').write_bytes(b'x')
+                self.assertEqual(launcher.damaged_archives(game), [])
+                (update / 'cachedFiles.psarc').write_bytes(b'ab')
+                self.assertEqual(launcher.damaged_archives(game), [str(Path(update.name, 'cachedFiles.psarc'))])
+                self.assertEqual(launcher.damaged_archives(game, update=''), [])
 
 
 if __name__ == '__main__':

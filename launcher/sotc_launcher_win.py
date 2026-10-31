@@ -569,26 +569,38 @@ def supported_games():
     return ', '.join(f'{serial} {version}' for serial, (_region, version) in GAMES.items())
 
 
-# The game's archives in a CUSA08809 (EU) dump and their sizes: an incomplete copy (a download or
-# a copy cut short) only showed as a crash at boot (#30, #56). A dump merged with the 1.01 update
-# carries the update's cachedFiles.psarc.
+# The game's archives and their sizes, the same in a CUSA08809 (EU) and a CUSA08034 (US) dump (the
+# .psarc files are byte-identical): an incomplete copy (a download or a copy cut short) only showed
+# as a crash at boot (#30, #56). The 1.01 update's cachedFiles.psarc (in the update folder, or in a
+# dump merged with it) is the larger size.
 GAME_ARCHIVES = {'cachedFiles.psarc': (37159164, 37274125), 'pak0.psarc': (364098725,),
                  'pak1.psarc': (464260479,), 'pak2.psarc': (16557548,), 'pak3.psarc': (720294074,),
                  'pakN.psarc': (12838532222,)}
 
 
-def damaged_archives(folder):
-    """The archives of a CUSA08809 game folder that are missing or of another size."""
+def damaged_archives(folder, update=None):
+    """The archives of a game folder (EU or US) that are missing or of another size, then those of
+    its update folder that are of another size, as <update folder>/<name>: the game reads them in
+    place of the base game's (#112). update: SOTC_UPDATE_DIR or the folder sotc_discovery finds
+    when not given."""
     folder = Path(folder or '.')
-    present = {p.name.lower(): p for p in folder.glob('*.psarc')}
-    bad = []
-    for name, sizes in GAME_ARCHIVES.items():
-        path = present.get(name.lower())
+    sizes = {name.lower(): (name, allowed) for name, allowed in GAME_ARCHIVES.items()}
+
+    def wrong_size(path):
         try:
-            if not path or path.stat().st_size not in sizes:
-                bad.append(name)
+            return path.stat().st_size not in sizes[path.name.lower()][1]
         except OSError:
-            bad.append(name)
+            return True
+
+    present = {p.name.lower(): p for p in folder.glob('*.psarc')}
+    bad = [name for key, (name, _s) in sizes.items() if key not in present or wrong_size(present[key])]
+    if update is None:
+        from sotc_discovery import find_update
+        update = os.environ.get('SOTC_UPDATE_DIR') or (find_update(folder) if folder.name else '')
+    if update:
+        update = Path(update)
+        bad += [str(Path(update.name, p.name)) for p in sorted(update.glob('*.psarc'))
+                if p.name.lower() in sizes and wrong_size(p)]
     return bad
 
 
