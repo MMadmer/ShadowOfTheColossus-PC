@@ -880,11 +880,13 @@ void DisplaySettings() {
 // settings file and applies when the game starts again.
 void EngineEffects() {
     using SotcUi::T;
-    static constexpr const char* keys[] = {"fx_vignette", "fx_fog", "fx_ssao", "perf_dma"};
+    static constexpr const char* keys[] = {"fx_vignette", "fx_fog", "fx_ssao", "fx_shadows",
+                                           "perf_dma"};
     const char* const labels[std::size(keys)] = {
         T("Vinheta (cantos escurecidos)", "Vignette (darkened corners)"),
         T("Névoa atmosférica", "Atmospheric fog"),
         T("Oclusão ambiente (SSAO)", "Ambient occlusion (SSAO)"),
+        T("Sombras do sol", "Sun shadows"),
         T("Reflexos completos da água (acesso direto à memória)",
           "Full water reflections (direct memory access)"),
     };

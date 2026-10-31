@@ -1067,6 +1067,13 @@ constexpr Texts kTexts[] = {
       "在 FPS 不限时生效：每一帧按游戏自身的节奏显示，而不是按 vblank 网格显示，避免帧时间在 8/17 毫秒之间交替。",
       "FPS 無制限のときに有効です。各フレームを vblank グリッドではなくゲーム自体のペースで表示し、8/17 ms が交互に続く状態を防ぎます。",
       "FPS 무제한에서 적용됩니다. 각 프레임을 vblank 그리드가 아닌 게임 자체 속도에 맞춰 표시하여 8/17ms가 번갈아 나타나는 현상을 방지합니다."}},
+    // Upstream 0.70 texts: grass, controller vibration, F5/F9 tools, FPS modes.
+    {"Sombras do sol",
+     {"Sombras del sol",
+      "Тени от солнца",
+      "阳光阴影",
+      "太陽の影",
+      "태양 그림자"}},
 };
 // clang-format on
 
