@@ -15,6 +15,9 @@ range, from the same zip), each checked against its SHA-256, into <port>/update/
 failure (no range support, an older release without the manifest, a hash mismatch) falls back to
 the whole zip. Files the installed manifest lists and the new one no longer does are removed.
 
+HTTPS is verified against the Windows certificate store (ssl_context: truststore or certifi too,
+when either is installed; #359).
+
 The files are replaced by a copy of the running launcher (SotC.exe and _internal/ copied to
 <port>/update/applier/), started with --apply-update once the launcher has closed, so no file in
 use is overwritten. It copies the new files over the port folder, never touching user/ (saves,
@@ -29,6 +32,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import ssl
 import subprocess
 import sys
 import time
@@ -55,10 +59,36 @@ def version_key(text):
     return tuple(int(n) for n in re.findall(r'\d+', text or ''))
 
 
+_ssl_context = None
+
+
+def ssl_context():
+    """The context every HTTPS request is verified with. Python's OpenSSL only sees the roots
+    already in the Windows store and cannot make Windows fetch a missing one, so a fresh system
+    failed with CERTIFICATE_VERIFY_FAILED, "unable to get issuer certificate" (#359). truststore,
+    when installed, has Windows itself verify the chain; otherwise the Windows store's roots, plus
+    certifi's when installed. Neither module is required."""
+    global _ssl_context
+    if _ssl_context is None:
+        try:
+            import truststore
+            _ssl_context = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        except Exception:  # not installed, or not usable with this Python
+            # create_default_context() loads the Windows ROOT and CA stores (load_default_certs).
+            context = ssl.create_default_context()
+            try:
+                import certifi
+                context.load_verify_locations(cafile=certifi.where())
+            except Exception:  # not installed, or its CA file missing from a frozen build
+                pass
+            _ssl_context = context
+    return _ssl_context
+
+
 def _open(url, timeout):
     request = urllib.request.Request(url, headers={'Accept': 'application/vnd.github+json',
                                                    'User-Agent': USER_AGENT})
-    return urllib.request.urlopen(request, timeout=timeout)
+    return urllib.request.urlopen(request, timeout=timeout, context=ssl_context())
 
 
 def latest_release(timeout=10):
@@ -155,7 +185,7 @@ def _range(url, start, end, timeout=60):
     """A response with bytes [start, end) of url; the server must answer with that range."""
     request = urllib.request.Request(url, headers={'User-Agent': USER_AGENT,
                                                    'Range': f'bytes={start}-{end - 1}'})
-    response = urllib.request.urlopen(request, timeout=timeout)
+    response = urllib.request.urlopen(request, timeout=timeout, context=ssl_context())
     if response.status != 206:
         response.close()
         raise ValueError('the server does not send byte ranges')

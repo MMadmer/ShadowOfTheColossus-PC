@@ -17,6 +17,15 @@ hidden=()
 for module in argparse base64 collections hashlib json re shutil struct; do
     hidden+=(--hidden-import "$module")
 done
+# The updater's HTTPS checks (launcher/sotc_update.py ssl_context): Windows' own chain verification
+# (truststore) and certifi's roots, each only when installed in this Python.
+for module in truststore certifi; do
+    if "$python" -c "import $module" 2>/dev/null; then
+        hidden+=(--hidden-import "$module")
+    else
+        echo "updater: no $module in $python, not packaged" >&2
+    fi
+done
 "$python" -m PyInstaller --noconfirm --clean --log-level WARN --windowed --name SotC \
     --icon "$(cygpath -w "$PWD/launcher/sotc.ico")" --distpath out/pyi-dist --workpath out/pyi-work \
     --specpath out/pyi-work --paths "$(cygpath -w "$PWD/scripts")" "${hidden[@]}" \

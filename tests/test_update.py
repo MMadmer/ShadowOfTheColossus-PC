@@ -4,9 +4,12 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import ssl
 import sys
 import tempfile
+import types
 import unittest
+from unittest.mock import MagicMock, patch
 import zipfile
 
 sys.path.insert(0, str(ROOT / 'launcher'))
@@ -17,6 +20,44 @@ def release_zip(path, files):
     with zipfile.ZipFile(path, 'w') as archive:
         for name, data in files.items():
             archive.writestr(name, data)
+
+
+class SslTests(unittest.TestCase):
+    """HTTPS verification (#359): truststore when installed, else the Windows store plus certifi."""
+
+    def setUp(self):
+        sotc_update._ssl_context = None
+        self.addCleanup(setattr, sotc_update, '_ssl_context', None)
+
+    def test_truststore_first(self):
+        fake = types.SimpleNamespace(SSLContext=lambda protocol: ('truststore', protocol))
+        with patch.dict(sys.modules, {'truststore': fake}):
+            self.assertEqual(sotc_update.ssl_context(), ('truststore', ssl.PROTOCOL_TLS_CLIENT))
+
+    def test_system_store_and_certifi(self):
+        context = MagicMock()
+        fake = types.SimpleNamespace(where=lambda: 'C:/certifi/cacert.pem')
+        with patch.dict(sys.modules, {'truststore': None, 'certifi': fake}), \
+                patch.object(ssl, 'create_default_context', return_value=context):
+            self.assertIs(sotc_update.ssl_context(), context)
+        context.load_verify_locations.assert_called_once_with(cafile='C:/certifi/cacert.pem')
+
+    def test_without_either_module(self):
+        with patch.dict(sys.modules, {'truststore': None, 'certifi': None}):
+            context = sotc_update.ssl_context()
+        self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
+        self.assertTrue(context.check_hostname)
+        self.assertIs(sotc_update.ssl_context(), context)  # built once
+
+    def test_requests_use_it(self):
+        response = MagicMock(status=206)
+        with patch.dict(sys.modules, {'truststore': None, 'certifi': None}), \
+                patch.object(sotc_update.urllib.request, 'urlopen', return_value=response) as urlopen:
+            sotc_update._open('https://api.github.com/x', 5)
+            self.assertIs(sotc_update._range('https://github.com/x.zip', 10, 20), response)
+        for call in urlopen.call_args_list:
+            self.assertIs(call.kwargs['context'], sotc_update.ssl_context())
+        self.assertEqual(urlopen.call_args.args[0].get_header('Range'), 'bytes=10-19')
 
 
 class VersionTests(unittest.TestCase):
