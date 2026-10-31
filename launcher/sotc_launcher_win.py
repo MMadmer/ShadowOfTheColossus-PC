@@ -2487,8 +2487,9 @@ class Launcher:
 
     # Quick settings the in-game menu may have changed (it writes them to the settings file).
     LIVE_KEYS = ('fps_mode', 'framegen', 'dlssg_mult', 'textures', 'shadow_reuse', 'volume', 'upscaler',
-                 'sharpness', 'fx_vignette', 'fx_fog', 'fx_ssao', 'fx_shadows', 'perf_dma', 'vibration', 'grass_distance',
-                 'grass_height', 'weed_distance', 'weed_height', 'grass_detail', 'grass_shadows', 'grass_fade')
+                 'sharpness', 'fx_vignette', 'fx_fog', 'fx_ssao', 'fx_shadows', 'perf_dma', 'vibration',
+                 'grass_distance', 'grass_height', 'weed_distance', 'weed_height', 'grass_detail',
+                 'grass_shadows', 'grass_fade')
 
     def reload_live_settings(self):
         saved = load_json(settings_in_use, {})
