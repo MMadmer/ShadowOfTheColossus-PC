@@ -55,19 +55,18 @@ AjncSystem**. The shader cache is rebuilt on the first start.
 - **AMD GPUs:** running out of video memory with budget still free (RX 9070 XT, #293) and invalid
   descriptor formats no longer close the game; an invalid MSAA texture no longer aborts the shader
   translator (#255). `SOTC_GCN_NV=1` (test for RX 400/500) uses the NVIDIA shader options.
-- **FSR 3 frame generation: a dark rectangle trailing the camera and a hazy picture while it
-  turns** (it also looked like a flickering, see-through window). FSR 3 blended the two game frames
-  without lining them up, and near the screen edges, where one frame has the pixel off screen, it
-  switched hard to the other frame; two game frames differ (clouds, light), so a rectangle with a
-  hard edge followed the camera, and objects (Wander, Agro, pillars) were doubled. The port now
-  builds the generated frame from the game's motion vectors: each pixel is the point of the
-  current frame that lands there half way (the nearest one where a pillar hides the sky), taken
-  from both frames at its own place in each (the sky moves with the camera); where the previous
-  frame showed something else there the current one is used alone, and each frame fades out
-  smoothly near the screen edges (`SOTC_FG_REPROJECT=0` turns this off). The copies of the
-  interface layer that put the HUD back over generated frames now cover every queued frame, and
-  each frame uses its own. `SOTC_FG_HUD_PASS=0` lets FSR 3 compose the interface itself (as in
-  Dead Air Refined).
+- **FSR 3 frame generation now runs on AMD's official runtime** (`amd_fidelityfx_vk.dll` of the
+  FidelityFX SDK 1.1.4, FSR 3.1, included in the package), with its own frame generation swap chain
+  and frame pacing, as in other games; the FSR-Vulkan module is no longer used. **A dark rectangle
+  trailing the camera and a hazy picture while it turns** (it also looked like a flickering window):
+  near the screen edges, where one of the two game frames has the point off screen, FSR 3 fills a
+  band about half a frame's motion wide with a blurred estimate. The port rebuilds that band from
+  the frame that has the point, moved half way along the game's motion vectors, and blends it
+  smoothly into FSR 3's picture. F8 now turns frame generation on and off in the mode chosen at
+  start: FSR 3 and DLSS-G use different swap chains, so changing between them requires a restart.
+  With FSR 3 the NVIDIA Streamline runtime is not loaded. Fast objects close to the camera (Agro
+  running past it) may still show thin outlines in generated frames, as with FSR 3 in other games
+  at 30 FPS.
 - **The game could stop while loading a save** (behind the loading screen, about one load in six
   in tests): the draw thread looped in a memory fault while comparing a table the game fills every
   frame. The table's source is now read through the backing memory view, as the table itself.
@@ -1110,19 +1109,19 @@ HiddenUserHere, Lukto02, Oussama268, InkAurora, NathanMBR, Gabriel-TwoBits и Aj
   форматы дескрипторов больше не закрывают игру; недопустимая MSAA-текстура не прерывает работу
   транслятора шейдеров (#255). `SOTC_GCN_NV=1` (тест для RX 400/500) использует параметры шейдеров
   NVIDIA.
-- **Генерация кадров FSR 3: при повороте камеры за ней тянулся тёмный прямоугольник, а изображение
-  было мутным** (это также выглядело как мерцающее полупрозрачное окно). FSR 3 смешивал два кадра
-  игры, не совмещая их, а у краёв экрана, где точки одного из кадров выходят за край, резко
-  переключался на другой кадр; соседние кадры различаются (облака, свет), поэтому за камерой шёл
-  прямоугольник с резкой границей, а объекты (Вандер, Агро, колонны) двоились. Теперь порт строит
-  промежуточный кадр по векторам движения игры: каждый пиксель — это точка текущего кадра, которая
-  оказывается в нём на полпути (ближайшая, если, например, колонна закрывает небо), взятая из обоих
-  кадров в её собственном положении в каждом из них (небо смещается вместе с камерой); если в
-  предыдущем кадре на этом месте было другое, используется только текущий кадр, а у краёв экрана
-  доля каждого кадра плавно уменьшается (`SOTC_FG_REPROJECT=0` отключает это). Копий слоя
-  интерфейса, по которым HUD возвращается на сгенерированные кадры, теперь хватает на все кадры в
-  очереди, и каждый кадр использует свою. `SOTC_FG_HUD_PASS=0` позволяет FSR 3 собирать интерфейс
-  самостоятельно (как в Dead Air Refined).
+- **Генерация кадров FSR 3 теперь работает на официальной среде выполнения AMD**
+  (`amd_fidelityfx_vk.dll` из FidelityFX SDK 1.1.4, FSR 3.1, входит в пакет) с собственной цепочкой
+  буферов генерации кадров и темпом кадров, как в других играх; модуль FSR-Vulkan больше не
+  используется. **При повороте камеры за ней тянулся тёмный прямоугольник, а изображение было
+  мутным** (это также выглядело как мерцающее окно): у краёв экрана, где точка одного из двух кадров
+  игры находится за краем, FSR 3 заполняет полосу шириной примерно в половину смещения кадра
+  размытой оценкой. Порт восстанавливает эту полосу по кадру, в котором точка видна, смещённому на
+  половину пути по векторам движения игры, и плавно совмещает её с изображением FSR 3. Клавиша F8
+  теперь включает и выключает генерацию кадров в режиме, выбранном при запуске: FSR 3 и DLSS-G
+  используют разные цепочки буферов, поэтому для переключения между ними требуется перезапуск. С
+  FSR 3 среда выполнения NVIDIA Streamline не загружается. У быстрых объектов вблизи камеры (Агро,
+  пробегающий мимо неё) в сгенерированных кадрах ещё могут быть видны тонкие контуры, как и с FSR 3
+  в других играх при 30 FPS.
 - **Игра могла зависнуть при загрузке сохранения** (за экраном загрузки, в тестах примерно при
   каждой шестой загрузке): поток отрисовки зацикливался на ошибке доступа к памяти, сравнивая
   таблицу, которую игра заполняет каждый кадр. Источник таблицы теперь читается через основное

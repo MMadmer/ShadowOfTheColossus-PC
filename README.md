@@ -155,8 +155,8 @@ file, so no `.sprx`/`.prx` can end up in a package by mistake.
 
 **GPL-2.0-or-later** ([LICENSE](LICENSE)), as the original port. Changes of this fork © 2026
 Madmer. Third-party components keep their own licenses: shadPS4 (GPL-2.0-or-later), the
-submodules listed in `.gitmodules`, the files under `gpu/third_party`, NVIDIA Streamline, and
-PkgTool / LibOrbisPkg (LGPL-3.0, [source](https://github.com/maxton/LibOrbisPkg)), shipped
+submodules listed in `.gitmodules`, the files under `gpu/third_party`, NVIDIA Streamline, the AMD
+FidelityFX runtime (MIT, `bin/amd_fidelityfx_vk.dll`), and PkgTool / LibOrbisPkg (LGPL-3.0, [source](https://github.com/maxton/LibOrbisPkg)), shipped
 unmodified in `tools/PkgTool`. Release packages are built from this source; each release's exact
 source is its git tag.
 
@@ -318,7 +318,7 @@ build.cmd
 
 **GPL-2.0-or-later** ([LICENSE](LICENSE)), как и у оригинального порта. Изменения этого форка
 © 2026 Madmer. Сторонние компоненты распространяются под собственными лицензиями: shadPS4
-(GPL-2.0-or-later), подмодули из `.gitmodules`, файлы в `gpu/third_party`, NVIDIA Streamline, а
-также PkgTool / LibOrbisPkg (LGPL-3.0, [исходный код](https://github.com/maxton/LibOrbisPkg)),
+(GPL-2.0-or-later), подмодули из `.gitmodules`, файлы в `gpu/third_party`, NVIDIA Streamline,
+среда выполнения AMD FidelityFX (MIT, `bin/amd_fidelityfx_vk.dll`), а также PkgTool / LibOrbisPkg (LGPL-3.0, [исходный код](https://github.com/maxton/LibOrbisPkg)),
 поставляемый без изменений в `tools/PkgTool`. Пакеты релизов собираются из этого исходного кода;
 точный исходный код каждого релиза соответствует его git-тегу.
