@@ -44,6 +44,9 @@ inline std::atomic<bool> load_flush{false};
 /// sotc: the device runs without dynamic vertex input (vk_instance.cpp, SOTC_VERTEX_INPUT_DYNAMIC):
 /// its pipelines carry the vertex formats, so they get a cache folder of their own.
 inline std::atomic<bool> vertex_input_static{false};
+/// sotc: SOTC_GCN_NV=1 on an AMD card (vk_pipeline_cache.cpp): the NVIDIA shader options, so the
+/// shaders get a cache folder of their own (the default cache is not reset by a test).
+inline std::atomic<bool> gcn_nv_paths{false};
 /// sotc: F9 (diagnostic): every cached texture not drawn by the GPU is uploaded again from guest
 /// memory. Garbage that stays was written there by the game; garbage that goes was a stale copy.
 inline std::atomic<bool> reload_all{false};
