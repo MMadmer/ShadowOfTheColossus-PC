@@ -689,7 +689,8 @@ static void skip_movie(PadData *d) {
     if (state<0) {
         const char *v=getenv("SOTC_SKIP_MOVIE");
         char profile[700]; struct stat st;
-        snprintf(profile,sizeof(profile),"%s/savedata/1/CUSA08809/SAVEDATA0ShadowProfile0",runtime_file_user_dir());
+        snprintf(profile,sizeof(profile),"%s/savedata/1/%s/SAVEDATA0ShadowProfile0",runtime_file_user_dir(),
+                 runtime_savedata_title());
         state=v && *v=='1' && stat(profile,&st)==0 ? SKIP_WATCH : SKIP_DONE;
         since=now;
         if (state==SKIP_DONE) return;

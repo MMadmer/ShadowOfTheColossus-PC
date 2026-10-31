@@ -80,6 +80,8 @@ void runtime_savedata_configure(const char *title) {
     if (title && *title) snprintf(title_id,sizeof(title_id),"%s",title);
     repair_all_meta();
 }
+/* sotc: the title whose folder holds the game's own saves (CUSA08809 EU, CUSA08034 US). */
+const char *runtime_savedata_title(void) { return title_id; }
 
 static int make_dirs(const char *path) {
     char buffer[700];
