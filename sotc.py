@@ -56,6 +56,9 @@ import time
 PORT = Path(__file__).resolve().parent
 SCRIPTS = PORT / 'scripts'
 SYS_MODULES = ('libSceUlt.sprx', 'libSceNgs2.sprx')
+sys.path.insert(0, str(SCRIPTS))
+# The supported title IDs (EU CUSA08809 first, US CUSA08034), the same eboot build.
+from sotc_modes import GAMES, game_serial  # noqa: E402
 
 
 def fail(message):
@@ -283,15 +286,15 @@ def fingerprint(game, modules):
     return digest.hexdigest()
 
 
-def is_game_patch(folder):
-    """True for an update of this game: its param.sfo says TITLE_ID CUSA08809, CATEGORY gp*."""
+def is_game_patch(folder, serial):
+    """True for an update of the game serial (CUSA08809 EU or CUSA08034 US): its param.sfo says
+    that TITLE_ID and CATEGORY gp*."""
     try:
-        sys.path.insert(0, str(PORT / 'scripts'))
         from prepare import sfo
         values = sfo((folder / 'sce_sys' / 'param.sfo').read_bytes())
     except (OSError, ValueError, ImportError):
         return False
-    return values.get('TITLE_ID') == 'CUSA08809' and str(values.get('CATEGORY', '')).startswith('gp')
+    return values.get('TITLE_ID') == serial and str(values.get('CATEGORY', '')).startswith('gp')
 
 
 def game_update(game):
@@ -305,10 +308,11 @@ def game_update(game):
         folder = game.with_name(game.name + suffix)
         if folder.is_dir():
             return folder
+    serial = game_serial(game)
     for base in (game, game.parent):
         for name in ('update', 'patch'):
             folder = base / name
-            if folder.is_dir() and is_game_patch(folder):
+            if folder.is_dir() and is_game_patch(folder, serial):
                 return folder
     return None
 
@@ -350,8 +354,8 @@ def main():
     out = PORT / 'out'
     out.mkdir(exist_ok=True)
     # The EU dump (CUSA08809) next to the port, else the US one (CUSA08034).
-    default = next((PORT.parent / g for g in ('CUSA08809', 'CUSA08034') if (PORT.parent / g / 'eboot.bin').is_file()),
-                   PORT.parent / 'CUSA08809')
+    default = next((PORT.parent / g for g in GAMES if (PORT.parent / g / 'eboot.bin').is_file()),
+                   PORT.parent / next(iter(GAMES)))
     game = Path(env.get('SOTC_GAME_DIR', default)).resolve()
     if not (game / 'eboot.bin').is_file():
         fail(f'No eboot.bin in {game}: set SOTC_GAME_DIR (environment or sotc.ini) to the CUSA08809 (EU) '

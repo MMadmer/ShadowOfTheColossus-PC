@@ -79,8 +79,9 @@ cp README.md "$dest/README.md"
 # replaced the player's own when extracted over an older copy (#136).
 cat > "$dest/sotc.ini.example" <<'EOF'
 # Shadow of the Colossus PC - settings (see README.md)
-# Folder of your game dump (the one with eboot.bin): CUSA08809 (EU) or CUSA08034 (US):
-SOTC_GAME_DIR=..\CUSA08809
+# Folder of your game dump (the one with eboot.bin), CUSA08809 (EU) or CUSA08034 (US); by default
+# ..\CUSA08809, else ..\CUSA08034:
+# SOTC_GAME_DIR=..\CUSA08809
 # Folder with libSceNgs2.sprx and libSceUlt.sprx from YOUR OWN console (for sound):
 # SOTC_SYS_MODULES=C:\path\to\sys_modules
 # Optional modes: af16 (sharp textures), fps60 (no 30 FPS cap, experimental):

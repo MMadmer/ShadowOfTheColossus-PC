@@ -43,9 +43,12 @@ CONFIG_FILE = CONFIG_DIR / 'launcher_settings.json'
 # (Program Files). The game writes the in-game menu's changes into it.
 settings_in_use = CONFIG_FILE
 # The supported releases (title ID -> region, version) share one eboot build; scripts/ is on
-# sys.path above. The EU one (CUSA08809) is the default game folder.
+# sys.path above. The EU one (CUSA08809) is the default title ID.
 from sotc_modes import GAMES  # noqa: E402
-GAME_ID, GAME_VERSION = 'CUSA08809', '01.01'
+GAME_ID = next(iter(GAMES))
+# The default game folder: the EU dump next to the port folder, else the US one (as sotc.py).
+DEFAULT_GAME_DIR = next((PORT_DIR.parent / g for g in GAMES if (PORT_DIR.parent / g / 'eboot.bin').is_file()),
+                        PORT_DIR.parent / GAME_ID)
 SYS_MODULES = ('libSceUlt.sprx', 'libSceNgs2.sprx')
 VERSION = '1.1.4'
 MAX_LOG_LINES = 6000
@@ -176,7 +179,7 @@ def windows_language():
 # ---------------------------------------------------------------------------------------------
 # Settings, passed to sotc.py as environment variables.
 
-APP_DEFAULTS = {'ui_language': '', 'game_dir': str(PORT_DIR.parent / GAME_ID), 'sys_modules': '',
+APP_DEFAULTS = {'ui_language': '', 'game_dir': str(DEFAULT_GAME_DIR), 'sys_modules': '',
                 'user_dir': '', 'af16': True, 'textures': 'high', 'skip_intro': 'off', 'hdr': False, 'window_icon_file': '', 'fps60': False,
                 'fps_mode': '30', 'window_mode': 'windowed',
                 'present_mode': 'Mailbox', 'language': '', 'player_name': '', 'show_fps': False,
@@ -2105,7 +2108,7 @@ class Launcher:
     def unpack_for_setup(self, folder):
         """The game's packages in folder (game, update, every DLC) unpacked next to them (sotc_pkg),
         then the setup goes on with the unpacked game."""
-        from sotc_pkg import find_packages, needed_bytes, targets, pkgtool_path
+        from sotc_pkg import find_packages, needed_bytes, packages_serial, targets, pkgtool_path
         packages = find_packages(folder, 2)
         if not any(p['kind'] == 'game' for p in packages):
             return False
@@ -2143,7 +2146,7 @@ class Launcher:
                                            self.messagebox.showerror('Shadow of the Colossus', _(
                                                'Não foi possível desempacotar:\n{}', 'Could not unpack:\n{}').format(message))))
                 return
-            game = places.get('game') or str(targets(folder)['game'])
+            game = places.get('game') or str(targets(folder, packages_serial(packages))['game'])
             self.ui_calls.put(lambda: self.configure_from_game(game, folder))
         threading.Thread(target=work, daemon=True).start()
         return True
@@ -2177,11 +2180,12 @@ class Launcher:
             serial = game_serial(game)
             try:
                 from sotc_pkg import find_packages, targets, unpack
-                packages = [p for p in find_packages(chosen or Path(game).parent, 2) if p['kind'] == 'dlc']
+                packages = [p for p in find_packages(chosen or Path(game).parent, 2)
+                            if p['kind'] == 'dlc' and p['serial'] == serial]
                 if packages:
                     folder = Path(game).parent
                     unpack(packages, folder, PORT_DIR)
-                    dlc_root = str(targets(folder)['dlc'])
+                    dlc_root = str(targets(folder, serial)['dlc'])
             except Exception:  # the packages stay usable as they are (the runtime reads them)
                 dlc_root = ''
             result = {'game': game, 'dlc': dlc_root or find_dlc_root(game, chosen), 'update': find_update(game),
