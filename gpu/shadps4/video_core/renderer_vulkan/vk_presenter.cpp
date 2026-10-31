@@ -557,6 +557,9 @@ Presenter::~Presenter() {
     draw_scheduler.Finish();
     present_scheduler.Finish();
     flip_scheduler.Finish();
+    // sotc: the FSR 3 context and depth images: no frame in flight uses them any more, and the
+    // device goes after this presenter.
+    FsrFg::Shutdown();
     Check(draw_scheduler.CommandBuffer().reset());
     Check(present_scheduler.CommandBuffer().reset());
     Check(flip_scheduler.CommandBuffer().reset());
@@ -878,6 +881,8 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
             }
         } else if (sharpness >= 0.0f) {
             scene = fsr_pass.Sharpen(cmdbuf, scene, {frame->width, frame->height}, sharpness);
+        } else {
+            fsr_pass.Idle(); // sotc: its images are freed after a few frames (fsr_pass.h)
         }
         pp_settings.srgb_input = 0;
         pp_settings.ui = 1;
@@ -947,6 +952,7 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
             scene_only.ui = 2; // the vignette, without the UI layer
             pp_pass.Render(cmdbuf, upscaled_scene, {frame->width, frame->height}, hudless,
                            scene_only, upscaled.ui, upscaled.sky);
+            fsr_pass_hudless.Idle();
         } else {
             // The pass records whether it scaled in DebugState: the game frame's pass said it.
             const bool fsr1 = DebugState.is_using_fsr;
@@ -993,6 +999,8 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
                     [readback] { SavePendingScreenshot(*readback); });
             }
         }
+    } else {
+        fsr_pass_hudless.Idle(); // sotc: no HUD-less frame: its FSR 1 images are freed
     }
 
 
@@ -1087,6 +1095,9 @@ Frame* Presenter::PrepareBlankFrame(bool present_thread) {
 }
 
 void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame) {
+    // sotc: FSR 3 resources freed a few presents after leaving its mode (vk_fsrfg.h).
+    FsrFg::Update(FrameGen::Current() == FrameGen::Mode::Fsr, draw_scheduler);
+
     // Free the frame for reuse
     const auto free_frame = [&] {
         if (!is_reusing_frame) {
@@ -1457,17 +1468,20 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
                                 SotcStats::image_query_ns.load(), SotcStats::image_alloc_ns.load(),
                                 SotcStats::image_dedicated.load()};
             if (last_us >= 0 && now_us - last_us > stall_us) {
+                // The 5 s stats printer resets these counters with exchange(0): a snapshot taken
+                // across a reset would underflow, so a shrunk counter reads as its new value.
+                const auto d = [&](int i) { return cur[i] >= last[i] ? cur[i] - last[i] : cur[i]; };
                 std::fprintf(stderr,
                              "SOTCSTALL frame %llu %.0f ms: pipelines %llu (%.0f ms), shaders %llu "
                              "(%.0f ms), images %llu (%.0f ms: query %.0f, alloc %.0f, %llu dedicated), "
                              "readbacks %llu (%.0f ms)\n",
                              static_cast<unsigned long long>(frames), (now_us - last_us) / 1e3,
-                             static_cast<unsigned long long>(cur[0] - last[0]), (cur[1] - last[1]) / 1e6,
-                             static_cast<unsigned long long>(cur[2] - last[2]), (cur[3] - last[3]) / 1e6,
-                             static_cast<unsigned long long>(cur[4] - last[4]), (cur[5] - last[5]) / 1e6,
-                             (cur[8] - last[8]) / 1e6, (cur[9] - last[9]) / 1e6,
-                             static_cast<unsigned long long>(cur[10] - last[10]),
-                             static_cast<unsigned long long>(cur[6] - last[6]), (cur[7] - last[7]) / 1e6);
+                             static_cast<unsigned long long>(d(0)), d(1) / 1e6,
+                             static_cast<unsigned long long>(d(2)), d(3) / 1e6,
+                             static_cast<unsigned long long>(d(4)), d(5) / 1e6,
+                             d(8) / 1e6, d(9) / 1e6,
+                             static_cast<unsigned long long>(d(10)),
+                             static_cast<unsigned long long>(d(6)), d(7) / 1e6);
             }
             last_us = now_us;
             std::copy(std::begin(cur), std::end(cur), std::begin(last));

@@ -1320,16 +1320,22 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset, const Pipeline* resolve
     const auto state = BeginRendering(pipeline);
     RefreshImageLayouts();
 
+    // sotc: the binds below can submit the command buffer (arena allocation, readbacks,
+    // releases); what was recorded before lands in the old one. Re-record vertex state then.
+    u64 vertex_tick = scheduler.CurrentTick();
     BindVertexBuffers(pipeline);
     if (is_indexed) {
         BindIndexBuffer(index_offset);
     }
+    RebindVertexIfSubmitted(pipeline, vertex_tick, is_indexed, index_offset);
 
     if (needs_barrier) {
         runtime.FlushBarriers();
     }
 
-    if (!fast_bind_hit) {
+    // sotc: a fast bind hit's descriptors and push constants are in the command buffer of its
+    // tick: after a submit since, push them again (the arrays are the last full bind's).
+    if (!fast_bind_hit || fast_bind.tick != scheduler.CurrentTick()) {
         pipeline->BindResources(set_writes, push_data);
     }
     UpdateDynamicState(pipeline, is_indexed);
@@ -1434,10 +1440,12 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
     ui_shadow_broken |= ui_shadow_hit; // sotc: indirect draws are not redrawn (BeginUiShadow)
     RefreshImageLayouts();
 
+    u64 vertex_tick = scheduler.CurrentTick(); // sotc: see the direct draw
     BindVertexBuffers(pipeline);
     if (is_indexed) {
         BindIndexBuffer();
     }
+    RebindVertexIfSubmitted(pipeline, vertex_tick, is_indexed);
 
     // sotc: SotC writes the arguments of most indirect draws with WRITE_DATA right before them
     // (thousands per frame). With the arguments CPU-side, read them here and draw directly: no
@@ -1461,7 +1469,7 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
         if (needs_barrier) {
             runtime.FlushBarriers();
         }
-        if (!fast_bind_hit) {
+        if (!fast_bind_hit || fast_bind.tick != scheduler.CurrentTick()) {
             pipeline->BindResources(set_writes, push_data);
         }
         UpdateDynamicState(pipeline, is_indexed);
@@ -1511,12 +1519,14 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
         std::tie(count_buffer, count_offset) = buffer_cache.ObtainBuffer(count_address, 4, false);
         needs_barrier |= runtime.IsBufferAccessed(count_buffer, count_offset, 4);
     }
+    // sotc: the argument buffers can submit too.
+    RebindVertexIfSubmitted(pipeline, vertex_tick, is_indexed);
 
     if (needs_barrier) {
         runtime.FlushBarriers();
     }
 
-    if (!fast_bind_hit) {
+    if (!fast_bind_hit || fast_bind.tick != scheduler.CurrentTick()) {
         pipeline->BindResources(set_writes, push_data);
     }
     UpdateDynamicState(pipeline, is_indexed);
@@ -2025,6 +2035,21 @@ bool Rasterizer::BindResources(const Pipeline* pipeline) {
     }
 
     return true;
+}
+
+void Rasterizer::RebindVertexIfSubmitted(const GraphicsPipeline* pipeline, u64& vertex_tick,
+                                         bool is_indexed, u32 index_offset) {
+    // sotc: a submit while binding (arena allocation, readback, release) moved recording to a new
+    // command buffer, and the vertex input, vertex and index buffers recorded before it stayed in
+    // the old one: the draw would run without them. Record them again; a second submit while
+    // doing so is rare, so retry a few times. From AjncSystem#339 (HiddenUserHere).
+    for (int tries = 0; tries < 4 && vertex_tick != scheduler.CurrentTick(); ++tries) {
+        vertex_tick = scheduler.CurrentTick();
+        BindVertexBuffers(pipeline);
+        if (is_indexed) {
+            BindIndexBuffer(index_offset);
+        }
+    }
 }
 
 void Rasterizer::BindVertexBuffers(const GraphicsPipeline* pipeline) {

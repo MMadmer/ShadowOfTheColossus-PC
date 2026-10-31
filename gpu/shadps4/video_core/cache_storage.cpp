@@ -136,13 +136,16 @@ void DataBase::Open() {
         // analysis but not the profile: with them off the shaders go to a cache of their own
         // (AjncSystem#93), so a test with them off never reuses shaders built with them on.
         // Pipelines built without dynamic vertex input carry the vertex formats (_novid).
+        // sotc: SOTC_GCN_NV=1 changes the shader profile of an AMD card: a test with it would
+        // reset the usual cache (WarmUp), so it has a folder of its own (_gcnnv).
         cache_path = GetUserPath(PathType::CacheDir) /
                      (std::string{game_info.GameSerial()} +
                       (EmulatorSettings.IsDirectMemoryAccessEnabled() ? "" : "_nodma") +
                       (EmulatorSettings.IsNoInt64() ? "_noi64" : "") +
                       (Libraries::Kernel::sceKernelIsNeoMode() ? "_neo" : "") +
                       (Shader::Optimization::Wave64UniformBranchesEnabled() ? "" : "_w64off") +
-                      (SotcStats::vertex_input_static.load(std::memory_order_relaxed) ? "_novid" : ""));
+                      (SotcStats::vertex_input_static.load(std::memory_order_relaxed) ? "_novid" : "") +
+                      (SotcStats::gcn_nv_paths.load(std::memory_order_relaxed) ? "_gcnnv" : ""));
         if (!std::filesystem::exists(cache_path)) {
             std::filesystem::create_directories(cache_path);
         }

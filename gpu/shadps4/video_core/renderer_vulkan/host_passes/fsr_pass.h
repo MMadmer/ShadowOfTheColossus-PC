@@ -26,6 +26,11 @@ public:
     vk::ImageView Sharpen(vk::CommandBuffer cmdbuf, vk::ImageView input, vk::Extent2D size,
                           float attenuation);
 
+    /// sotc: a presented frame that does not use this pass (see ReleaseImagesWhenIdle).
+    void Idle() {
+        ReleaseImagesWhenIdle();
+    }
+
 private:
     struct Img {
         u8 id{};
@@ -40,9 +45,18 @@ private:
 
     void ResizeAndInvalidate(u32 width, u32 height);
     void CreateImages(Img& img) const;
+    /// sotc: frees the images (2 x RGBA16F per ring slot) once the frames recorded with them are
+    /// done, after release_delay frames without the pass; CreateImages recreates them when it is
+    /// used again (FSR 1 switched on live, a larger output).
+    void ReleaseImagesWhenIdle();
+    void ReleaseImages();
+    bool ImagesAlive() const;
 
     vk::Device device{};
     u32 num_images{};
+    u32 release_delay{5}; ///< sotc: frames without the pass before ReleaseImages (in flight)
+    u32 release_wait{};
+    bool release_pending{};
 
     vk::UniqueDescriptorSetLayout descriptor_set_layout{};
     vk::UniqueDescriptorSet easu_descriptor_set{};
