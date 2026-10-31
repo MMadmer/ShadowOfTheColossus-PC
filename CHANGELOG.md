@@ -56,12 +56,13 @@ AjncSystem**. The shader cache is rebuilt on the first start.
   descriptor formats no longer close the game; an invalid MSAA texture no longer aborts the shader
   translator (#255). `SOTC_GCN_NV=1` (test for RX 400/500) uses the NVIDIA shader options.
 - **FSR 3 frame generation: a dark rectangle trailing the camera** (it also looked like a
-  flickering, see-through window). The port's own pass that put the real frame's interface over
-  generated frames took the interface layer of another frame once the frames queued up (more so
-  at 1440p and above). FSR 3 now composes the interface itself from the frame without it, as in
-  Dead Air Refined (`SOTC_FG_HUD_PASS=1` brings back the old pass, whose copies of the interface
-  layer now cover every queued frame). FSR 3 also receives the game's own motion vectors again,
-  not the ones completed for DLSS.
+  flickering, see-through window). The pass that puts the real frame's interface over generated
+  frames kept copies of the interface layer for 4 frames, as many as were queued, and the newest
+  frame overwrote the copy still to be used once the queue filled up (more so at 1440p and above):
+  another frame's translucent panels were laid over the picture. The copies now cover every queued
+  frame. `SOTC_FG_HUD_PASS=0` lets FSR 3 compose the interface itself (as in Dead Air Refined),
+  which shows the old scene through translucent panels. FSR 3 also receives the game's own motion
+  vectors again, not the ones completed for DLSS.
 - **4-thread processors (i5-3470 and similar): the game never left the first loading screen
   without frame generation** (upstream #267). The thread that presents the frames ran at normal
   priority below the raised GPU, loading and sound threads; it is raised too on 4 threads or fewer.
@@ -1102,12 +1103,13 @@ HiddenUserHere, Lukto02, Oussama268, InkAurora, NathanMBR, Gabriel-TwoBits и Aj
   транслятора шейдеров (#255). `SOTC_GCN_NV=1` (тест для RX 400/500) использует параметры шейдеров
   NVIDIA.
 - **Генерация кадров FSR 3: за камерой тянулся тёмный прямоугольник** (это также выглядело как
-  мерцающее полупрозрачное окно). Собственный проход порта, накладывавший интерфейс настоящего
-  кадра на сгенерированные, при заполненной очереди кадров брал слой интерфейса другого кадра
-  (особенно в 1440p и выше). Теперь FSR 3 сам собирает интерфейс по кадру без него, как в
-  Dead Air Refined (`SOTC_FG_HUD_PASS=1` возвращает прежний проход, копии слоя интерфейса которого
-  теперь хватает на все кадры в очереди). Кроме того, FSR 3 снова получает собственные векторы
-  движения игры, а не дополненные для DLSS.
+  мерцающее полупрозрачное окно). Проход, накладывающий интерфейс настоящего кадра на
+  сгенерированные, хранил копии слоя интерфейса для 4 кадров — столько же, сколько стояло в
+  очереди, — и при заполненной очереди новый кадр перезаписывал ещё нужную копию (особенно в 1440p
+  и выше): на изображение ложились полупрозрачные панели другого кадра. Теперь копий хватает на все
+  кадры в очереди. `SOTC_FG_HUD_PASS=0` позволяет FSR 3 собирать интерфейс самостоятельно (как в
+  Dead Air Refined), но тогда сквозь полупрозрачные панели видна прежняя сцена. Кроме того, FSR 3
+  снова получает собственные векторы движения игры, а не дополненные для DLSS.
 - **Четырёхпоточные процессоры (i5-3470 и подобные): без генерации кадров игра не выходила из
   первого экрана загрузки** (upstream #267). Поток вывода кадров работал с обычным приоритетом,
   ниже повышенных потоков GPU, загрузки и звука; на 4 потоках и меньше он теперь тоже повышен.
