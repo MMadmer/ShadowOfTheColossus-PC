@@ -55,14 +55,19 @@ AjncSystem**. The shader cache is rebuilt on the first start.
 - **AMD GPUs:** running out of video memory with budget still free (RX 9070 XT, #293) and invalid
   descriptor formats no longer close the game; an invalid MSAA texture no longer aborts the shader
   translator (#255). `SOTC_GCN_NV=1` (test for RX 400/500) uses the NVIDIA shader options.
-- **FSR 3 frame generation: a dark rectangle trailing the camera** (it also looked like a
-  flickering, see-through window). The pass that puts the real frame's interface over generated
-  frames kept copies of the interface layer for 4 frames, as many as were queued, and the newest
-  frame overwrote the copy still to be used once the queue filled up (more so at 1440p and above):
-  another frame's translucent panels were laid over the picture. The copies now cover every queued
-  frame. `SOTC_FG_HUD_PASS=0` lets FSR 3 compose the interface itself (as in Dead Air Refined),
-  which shows the old scene through translucent panels. FSR 3 also receives the game's own motion
-  vectors again, not the ones completed for DLSS.
+- **FSR 3 frame generation: a dark rectangle trailing the camera and a hazy picture while it
+  turns** (it also looked like a flickering, see-through window). FSR 3 blended the two game frames
+  without lining them up, and near the screen edges, where one frame has the pixel off screen, it
+  switched hard to the other frame; two game frames differ (clouds, light), so a rectangle with a
+  hard edge followed the camera. The port now builds the generated frame along the game's motion
+  vectors where they agree (the sky's from the camera's motion) and fades each frame out smoothly
+  near the edges; FSR 3's own pixels stay at the edges of moving objects (`SOTC_FG_REPROJECT=0`
+  turns this off). The copies of the interface layer that put the HUD back over generated frames
+  now cover every queued frame, and each frame uses its own. `SOTC_FG_HUD_PASS=0` lets FSR 3
+  compose the interface itself (as in Dead Air Refined).
+- **The game could stop while loading a save** (behind the loading screen, about one load in six
+  in tests): the draw thread looped in a memory fault while comparing a table the game fills every
+  frame. The table's source is now read through the backing memory view, as the table itself.
 - **4-thread processors (i5-3470 and similar): the game never left the first loading screen
   without frame generation** (upstream #267). The thread that presents the frames ran at normal
   priority below the raised GPU, loading and sound threads; it is raised too on 4 threads or fewer.
@@ -1102,14 +1107,20 @@ HiddenUserHere, Lukto02, Oussama268, InkAurora, NathanMBR, Gabriel-TwoBits и Aj
   форматы дескрипторов больше не закрывают игру; недопустимая MSAA-текстура не прерывает работу
   транслятора шейдеров (#255). `SOTC_GCN_NV=1` (тест для RX 400/500) использует параметры шейдеров
   NVIDIA.
-- **Генерация кадров FSR 3: за камерой тянулся тёмный прямоугольник** (это также выглядело как
-  мерцающее полупрозрачное окно). Проход, накладывающий интерфейс настоящего кадра на
-  сгенерированные, хранил копии слоя интерфейса для 4 кадров — столько же, сколько стояло в
-  очереди, — и при заполненной очереди новый кадр перезаписывал ещё нужную копию (особенно в 1440p
-  и выше): на изображение ложились полупрозрачные панели другого кадра. Теперь копий хватает на все
-  кадры в очереди. `SOTC_FG_HUD_PASS=0` позволяет FSR 3 собирать интерфейс самостоятельно (как в
-  Dead Air Refined), но тогда сквозь полупрозрачные панели видна прежняя сцена. Кроме того, FSR 3
-  снова получает собственные векторы движения игры, а не дополненные для DLSS.
+- **Генерация кадров FSR 3: при повороте камеры за ней тянулся тёмный прямоугольник, а изображение
+  было мутным** (это также выглядело как мерцающее полупрозрачное окно). FSR 3 смешивал два кадра
+  игры, не совмещая их, а у краёв экрана, где точки одного из кадров выходят за край, резко
+  переключался на другой кадр; соседние кадры различаются (облака, свет), поэтому за камерой шёл
+  прямоугольник с резкой границей. Теперь порт строит промежуточный кадр по векторам движения игры
+  там, где они согласованы (для неба — по движению камеры), и у краёв плавно уменьшает долю каждого
+  кадра; на границах движущихся объектов остаются пиксели FSR 3 (`SOTC_FG_REPROJECT=0` отключает
+  это). Копий слоя интерфейса, по которым HUD возвращается на сгенерированные кадры, теперь хватает
+  на все кадры в очереди, и каждый кадр использует свою. `SOTC_FG_HUD_PASS=0` позволяет FSR 3
+  собирать интерфейс самостоятельно (как в Dead Air Refined).
+- **Игра могла зависнуть при загрузке сохранения** (за экраном загрузки, в тестах примерно при
+  каждой шестой загрузке): поток отрисовки зацикливался на ошибке доступа к памяти, сравнивая
+  таблицу, которую игра заполняет каждый кадр. Источник таблицы теперь читается через основное
+  представление памяти, как и сама таблица.
 - **Четырёхпоточные процессоры (i5-3470 и подобные): без генерации кадров игра не выходила из
   первого экрана загрузки** (upstream #267). Поток вывода кадров работал с обычным приоритетом,
   ниже повышенных потоков GPU, загрузки и звука; на 4 потоках и меньше он теперь тоже повышен.
