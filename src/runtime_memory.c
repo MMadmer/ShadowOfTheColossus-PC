@@ -18,6 +18,7 @@
 #include <errno.h>
 #ifdef _WIN32
 #include <windows.h>
+#include <psapi.h>
 #else
 #include <fcntl.h>
 #include <sys/mman.h>
@@ -1546,4 +1547,16 @@ void runtime_memory_report(void) {
     printf("Runtime: flexible maps=%zu, in use=%" PRIu64 ", protects=%zu, queries=%zu, regions=%zu\n",
            flexible_maps, flexible_bytes, protects, queries, vma_count);
 }
-
+/* sotc: the process's private bytes (commit charge) and working set, for the per-minute PERF line
+ * (RAM reports, fork #2); 0 where unknown. Views of the guest memory section are not private: they
+ * show in the working set only. */
+void runtime_memory_process_usage(uint64_t *private_bytes, uint64_t *working_set) {
+    *private_bytes=*working_set=0;
+#ifdef _WIN32
+    PROCESS_MEMORY_COUNTERS_EX counters={.cb=sizeof(counters)};
+    if (K32GetProcessMemoryInfo(GetCurrentProcess(),(PROCESS_MEMORY_COUNTERS *)&counters,sizeof(counters))) {
+        *private_bytes=counters.PrivateUsage;
+        *working_set=counters.WorkingSetSize;
+    }
+#endif
+}
