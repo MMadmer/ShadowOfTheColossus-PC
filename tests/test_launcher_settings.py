@@ -127,6 +127,18 @@ class MouseBindingTests(unittest.TestCase):
             launcher.write_key_bindings({}, {}, ini)
             self.assertEqual(ini.read_text(encoding='utf-8').splitlines(), ['pad.circle=b'])
 
+    def test_ini_from_template(self):
+        # The release ships sotc.ini.example (#136): the first bindings keep its lines.
+        with tempfile.TemporaryDirectory() as tmp:
+            ini = Path(tmp) / 'sotc.ini'
+            (Path(tmp) / 'sotc.ini.example').write_text('# settings\nSOTC_MODES=af16\n', encoding='utf-8')
+            launcher.write_key_bindings({'cross': 'V'}, {}, ini)
+            self.assertEqual(ini.read_text(encoding='utf-8').splitlines(),
+                             ['# settings', 'SOTC_MODES=af16', '# key bindings (launcher)', 'key.cross=V'])
+            (Path(tmp) / 'sotc.ini.example').write_text('SOTC_MODES=fps60\n', encoding='utf-8')
+            launcher.write_key_bindings({}, {}, ini)
+            self.assertEqual(ini.read_text(encoding='utf-8').splitlines(), ['# settings', 'SOTC_MODES=af16'])
+
 
 class FindUpdateTests(unittest.TestCase):
     def setUp(self):

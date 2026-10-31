@@ -5,7 +5,8 @@ and starts it.
 
     python sotc.py                      (or double-click SotC.bat)
 
-Settings (environment variables, or sotc.ini beside this script as NAME=value lines):
+Settings (environment variables, or sotc.ini beside this script as NAME=value lines; the first
+start makes it from sotc.ini.example):
     SOTC_GAME_DIR     the dumped game folder (the one with eboot.bin); default ../CUSA08809,
                       else ../CUSA08034
     SOTC_SYS_MODULES  optional: folder with YOUR OWN console's decrypted libSceNgs2.sprx and
@@ -57,8 +58,21 @@ def fail(message):
     sys.exit(1)
 
 
+def ini_file():
+    """sotc.ini, made from the release's sotc.ini.example the first time: the zip no longer carries
+    sotc.ini itself, which replaced the player's when extracted over an older copy (#136). The
+    template itself when the port folder cannot be written."""
+    ini, template = PORT / 'sotc.ini', PORT / 'sotc.ini.example'
+    if not ini.exists() and template.is_file():
+        try:
+            shutil.copyfile(template, ini)
+        except OSError:
+            return template
+    return ini
+
+
 def load_ini():
-    ini = PORT / 'sotc.ini'
+    ini = ini_file()
     if ini.is_file():
         for line in ini.read_text(encoding='utf-8', errors='replace').splitlines():
             line = line.strip()

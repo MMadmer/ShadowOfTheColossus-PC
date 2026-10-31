@@ -285,10 +285,22 @@ def sdl_key_name(keysym):
     return None
 
 
+def ensure_ini(ini):
+    """sotc.ini made from the release's sotc.ini.example when missing (as sotc.py does): the zip
+    no longer carries sotc.ini, which replaced the player's when extracted over an older copy (#136)."""
+    template = ini.with_name(ini.name + '.example')
+    if not ini.exists() and template.is_file():
+        try:
+            shutil.copyfile(template, ini)
+        except OSError:
+            pass
+
+
 def write_key_bindings(keys, mouse=None, ini=None):
     """The launcher's key and mouse button bindings as key.<input>= and mouse.<input>= lines of
     sotc.ini (BB_CONFIG), replacing its earlier ones; other lines stay. An empty value unbinds."""
     ini = Path(ini or PORT_DIR / 'sotc.ini')
+    ensure_ini(ini)
     try:
         lines = ini.read_text(encoding='utf-8').splitlines()
     except OSError:

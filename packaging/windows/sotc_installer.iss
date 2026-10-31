@@ -46,9 +46,9 @@ Name: "brazilianportuguese"; MessagesFile: "compiler:Languages\BrazilianPortugue
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 
 [Files]
-Source: "{#SourceDir}\*"; Excludes: "sotc.ini"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-; The launcher writes the player's keys into sotc.ini: an update keeps it.
-Source: "{#SourceDir}\sotc.ini"; DestDir: "{app}"; Flags: onlyifdoesntexist uninsneveruninstall
+; The package carries sotc.ini.example; the first start copies it to sotc.ini (the launcher writes
+; the player's keys there), so an update never replaces the player's sotc.ini.
+Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\Shadow of the Colossus PC"; Filename: "{app}\SotC.exe"
