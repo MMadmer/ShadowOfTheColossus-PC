@@ -119,8 +119,7 @@ POOL_FIX = (0x41a321, bytes.fromhex('eb34666666662e0f1f840000000000'),
 LOW_MEM_PIXELS = 4_200_000
 RENDER_SITES = [
     # display init (0x495a90): back buffer, display targets, scene size. The display object's
-    # aspect (0x495b3e, 16/9) stays: the HUD lays out its health bar with it, and a wider value
-    # left a grey stub on the bar in 21:9 (#301, user test 26 Oct; the scene is unchanged).
+    # aspect (0x495b3e, WIDE_ASPECT) is added in render_patches for other shapes.
     (0x00495bec, 'H', 'b938040000'), (0x00495bf7, 'W', 'b880070000'),
     (0x00495c91, 'W', 'ba80070000'), (0x00495c96, 'H', 'b938040000'),
     (0x00495d34, 'W', 'ba80070000'), (0x00495d39, 'H', 'b938040000'),
@@ -158,6 +157,7 @@ RENDER_SITES = [
     (0x008e2cf1, 'v', 'c78550feffff0000f044'),
     (0x00920309, 'v', 'c78560feffff0000f044'),
 ]
+WIDE_ASPECT = (0x00495b3e, 'a', 'c74304398ee33f')  # the display object's aspect (16/9)
 RT_POOL = 0x14280000
 # The camera's "FOV Adjustment" tweak (debug menu Shadow Camera, 0.1 to 3): a factor on the vertical
 # field of view in degrees, 1.0 in the game's data. The lenses read it whenever they build their
@@ -230,8 +230,13 @@ def render_patches(elf, ph, size):
     # #301: health and stamina bars stretched in 21:9).
     keep = {int(a, 16) for a in os.environ.get('SOTC_RENDER_KEEP', '').replace(' ', ',').split(',') if a}
     sites = list(RENDER_SITES)
-    if os.environ.get('SOTC_WIDE_ASPECT') == '1':  # the display object's aspect too (pre-#301)
-        sites.append((0x00495b3e, 'a', 'c74304398ee33f'))
+    # The display object's aspect also sets the 3D scene's: left at 16:9 (upstream C2, for #301)
+    # the scene was the 16:9 image stretched in 21:9, 32:9 and 16:10 (AjncSystem #315, #327, #331,
+    # #341). Patched for any other shape, as the fork did before 0.70; the health bar's grey stub in
+    # 21:9 (#301) is the smaller defect. SOTC_WIDE_ASPECT=0 keeps 16:9, =1 forces the patch.
+    wide = os.environ.get('SOTC_WIDE_ASPECT', '1' if abs(w * 9 - h * 16) > h * 16 // 100 else '0')
+    if wide == '1':
+        sites.append(WIDE_ASPECT)
     for address, kind, original in sites:
         original = bytes.fromhex(original)
         if image_bytes(elf, ph, address - BASE, len(original)) != original:
