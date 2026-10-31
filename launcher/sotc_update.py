@@ -106,6 +106,45 @@ def latest_release(timeout=10):
             'sha256': digest[7:].lower() if digest.startswith('sha256:') else ''}
 
 
+# Names and codes that mark a language's part of a release body (release_notes).
+NOTE_LANGUAGES = {
+    'en': ('en', 'english', 'inglês'),
+    'pt': ('pt', 'pt-br', 'português', 'portuguese'),
+    'es': ('es', 'español', 'spanish', 'espanhol'),
+    'ru': ('ru', 'русский', 'russian'),
+    'zh': ('zh', 'cn', '中文', '简体中文', 'chinese'),
+    'ja': ('ja', 'jp', '日本語', 'japanese'),
+    'ko': ('ko', 'kr', '한국어', 'korean'),
+}
+_NOTE_NAMES = {name: code for code, names in NOTE_LANGUAGES.items() for name in names}
+# A heading ("## English") or a bold tag at a line start ("**RU:** text").
+_NOTE_MARK = re.compile(r'^(?:#{1,6}[ \t]*(?P<head>[^\n#]+?)[ \t]*#*[ \t]*$|\*\*(?P<tag>[^*\n]+)\*\*:?[ \t]*)', re.M)
+_NOTE_RULE = re.compile(r'(?:(?:^|\n)[ \t]*(?:-{3,}|\*{3,}|_{3,})[ \t]*)+$')
+
+
+def release_notes(body, lang):
+    """The part of a release body in the launcher language lang ('en', 'ru', ...; #321): a marker
+    naming a language (a heading such as "## English", or "**RU:**" at a line start, as the fork's
+    notes have) starts its part, which runs to the next marker. Without a part in lang: the text
+    before the first marker, else the English part, else the first one; a body without markers
+    whole."""
+    body = (body or '').replace('\r\n', '\n')
+    marks = []
+    for match in _NOTE_MARK.finditer(body):
+        code = _NOTE_NAMES.get((match['head'] or match['tag']).strip().rstrip(':').strip().casefold())
+        if code:
+            marks.append((match.start(), match.end(), code))
+    parts = [(code, body[end:marks[i + 1][0] if i + 1 < len(marks) else len(body)])
+             for i, (_start, end, code) in enumerate(marks)]
+    lead = body[:marks[0][0]] if marks else body
+    for text in (*(t for c, t in parts if c == lang), lead, *(t for c, t in parts if c == 'en'),
+                 *(t for _c, t in parts)):
+        text = _NOTE_RULE.sub('', text.strip()).strip()
+        if text:
+            return text
+    return ''
+
+
 def is_newer(release, current):
     return bool(release) and version_key(release['version']) > version_key(current)
 

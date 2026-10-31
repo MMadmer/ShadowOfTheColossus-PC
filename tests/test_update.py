@@ -60,6 +60,34 @@ class SslTests(unittest.TestCase):
         self.assertEqual(urlopen.call_args.args[0].get_header('Range'), 'bytes=10-19')
 
 
+class NotesTests(unittest.TestCase):
+    """Release notes in the launcher language (#321)."""
+    FORK = ('Update of the port.\n\n**No game files are included.** A dump is required.\n\n### New\n'
+            '- **Field of view**: 100% to 130%.\n\n---\n\n**RU:** обновление порта.\n- **Поле зрения**: 100–130%.\n')
+
+    def test_fork_layout(self):
+        english = ('Update of the port.\n\n**No game files are included.** A dump is required.\n\n### New\n'
+                   '- **Field of view**: 100% to 130%.')
+        self.assertEqual(sotc_update.release_notes(self.FORK, 'ru'), 'обновление порта.\n- **Поле зрения**: 100–130%.')
+        for lang in ('en', 'pt', 'es', 'zh'):
+            self.assertEqual(sotc_update.release_notes(self.FORK, lang), english, lang)
+
+    def test_headings(self):
+        body = 'Texto\n\n## English\nText\n\n## Русский:\nТекст\n'
+        self.assertEqual(sotc_update.release_notes(body, 'pt'), 'Texto')
+        self.assertEqual(sotc_update.release_notes(body, 'en'), 'Text')
+        self.assertEqual(sotc_update.release_notes(body, 'ru'), 'Текст')
+        self.assertEqual(sotc_update.release_notes(body, 'ja'), 'Texto')
+        # Nothing before the first part: the English one, else the first.
+        self.assertEqual(sotc_update.release_notes('## Русский\nТекст\n## English\nText', 'ko'), 'Text')
+        self.assertEqual(sotc_update.release_notes('**RU:** Текст', 'es'), 'Текст')
+
+    def test_without_parts(self):
+        self.assertEqual(sotc_update.release_notes('Only one\r\n## Fixes\n- a\n', 'ru'), 'Only one\n## Fixes\n- a')
+        self.assertEqual(sotc_update.release_notes(None, 'en'), '')
+        self.assertEqual(sotc_update.release_notes('', 'en'), '')
+
+
 class VersionTests(unittest.TestCase):
     def test_order(self):
         key = sotc_update.version_key

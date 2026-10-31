@@ -2622,7 +2622,7 @@ class Launcher:
             return
         if not manual and release['version'] == self.app.get('skip_version'):
             return
-        notes = release['notes'].strip()
+        notes = sotc_update.release_notes(release['notes'], LANG)
         if len(notes) > 900:
             notes = notes[:900].rsplit('\n', 1)[0] + '\n…'
         question = _('Nova versão disponível: v{new} (versão atual: v{cur}).\n\n{notes}\n\n',
