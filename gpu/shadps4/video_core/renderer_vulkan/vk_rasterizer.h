@@ -352,6 +352,7 @@ private:
         struct VmaAllocation_T* allocation{};
         u32 width{}, height{};
         bool fresh{};
+        s32 ui_slot{-1}; ///< sotc: the hudless_ui copy its last composite took, -1 none
     };
     void DestroyHudless(HudlessImage& image);
     /// sotc: copies of the composite's UI layer (HudlessUi), a ring: the present thread reads one

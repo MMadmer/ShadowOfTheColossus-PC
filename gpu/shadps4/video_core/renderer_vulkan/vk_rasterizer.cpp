@@ -985,6 +985,7 @@ bool Rasterizer::BeginHudless(const GraphicsPipeline* pipeline, const RenderStat
     cmdbuf.pipelineBarrier2(
         vk::DependencyInfo{.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &to_target});
     // The UI layer as the composite blended it, for its alpha (HudlessUi).
+    target.ui_slot = -1;
     if (const VideoCore::ImageId ui_id = image_info_images[hudless_ui_info]) {
         auto& ui_image = texture_cache.GetImage(ui_id);
         const u32 ui_w = ui_image.info.size.width, ui_h = ui_image.info.size.height;
@@ -1041,6 +1042,7 @@ bool Rasterizer::BeginHudless(const GraphicsPipeline* pipeline, const RenderStat
                             vk::AccessFlagBits2::eShaderRead);
             runtime.FlushBarriers();
             slot.address = hudless_vo;
+            target.ui_slot = static_cast<s32>(hudless_ui_next % hudless_ui.size());
             ++hudless_ui_next;
         }
     }
@@ -1091,15 +1093,10 @@ vk::ImageView Rasterizer::TakeHudless(VAddr address, vk::Format format) {
     if (it == hudless_images.end() || !std::exchange(it->second.fresh, false)) {
         return {};
     }
-    // The newest UI copy of this video out image is this composite's.
-    for (u32 back = 1; back <= hudless_ui.size(); ++back) {
-        const u32 index = (hudless_ui_next - back) % hudless_ui.size();
-        if (hudless_ui[index].address == address && hudless_ui_next >= back) {
-            hudless_ui_taken = static_cast<s32>(index);
-            break;
-        }
-    }
     auto& target = it->second;
+    // The copy this composite took; none when it took none (an older copy of the same video out
+    // image holds another frame's panels).
+    hudless_ui_taken = target.ui_slot;
     if (!target.read_view) {
         // As the presenter's view of the video out image: alpha excluded.
         auto [result, view] = instance.GetDevice().createImageView(vk::ImageViewCreateInfo{

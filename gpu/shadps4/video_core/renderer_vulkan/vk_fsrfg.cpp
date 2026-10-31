@@ -713,15 +713,15 @@ vk::Image Generate(vk::CommandBuffer cmdbuf, u32 frame_id, vk::Image frame_image
     });
     // sotc: the frame without the HUD (Rasterizer::TakeHudless): FSR 3.1 interpolates only the
     // scene instead of moving the HUD with it (text and bars smeared, the stamina circle
-    // doubled). The SDK composes the HUD itself, as in Dead Air Refined: the HUD-less frame is
-    // its interpolation source and the HUD the difference to the real frame
-    // (currentBackBuffer_HUDLess, gpu/CMakeLists.txt). SOTC_FG_HUD_PASS=1: PutHudBack lays the
-    // real frame's HUD over the generated scene by the UI layer's alpha instead; it showed a dark
-    // rectangle trailing the camera where that alpha did not match the frame (1.2.0). Same
-    // conversion as the game frame.
+    // doubled), and PutHudBack lays the real frame's HUD over it by the UI layer's alpha.
+    // SOTC_FG_HUD_PASS=0: the SDK composes the HUD itself, as in Dead Air Refined
+    // (currentBackBuffer_HUDLess, gpu/CMakeLists.txt). It adds the difference of the two frames,
+    // which under the game's translucent dark panels (hints) depends on the scene behind them: the
+    // old scene showed through the panel, a dark rectangle trailing the camera. Same conversion
+    // as the game frame.
     static const bool own_hud_pass = [] {
         const char* v = std::getenv("SOTC_FG_HUD_PASS");
-        return v && v[0] == '1';
+        return !v || v[0] != '0';
     }();
     sotc_fsrfg_hudless = {};
     const bool hud_pass = hudless_image && own_hud_pass && hud_pipeline;
