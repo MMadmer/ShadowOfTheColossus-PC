@@ -146,3 +146,4 @@ These environment variables help investigate problems:
 | `SOTC_CMD_STATS=1/2` | draws and dispatches per frame (2: most used compute shaders) |
 | `SOTC_TSC=qpc/native` | game clock: `qpc` always uses the Windows QPC, `native` always the processor's TSC (default: QPC only when the cores disagree on the TSC) |
 | `SOTC_UI_HIRES=0` | with DLSS, the interface (text, logos, HUD) is again drawn at the render resolution and upscaled, instead of at the output resolution |
+| `SOTC_FG_MARK=1` | FSR 3: a magenta square in the bottom-left corner of generated frames, a cyan one on game frames held in their place (telling them apart in screen recordings) |

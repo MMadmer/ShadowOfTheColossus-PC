@@ -65,6 +65,9 @@ struct DepthSlot {
 const Instance* g_instance{};
 bool supported = false;
 int log_level = 0; // SOTC_FSRFG_LOG
+// SOTC_FG_MARK=1: generated frames get a magenta 16x16 square in the bottom-left corner, held game
+// frames a cyan one (telling them apart in captures).
+bool mark_frames = false;
 
 // The runtime, loaded once and kept.
 ffxFunctions ffx{};
@@ -111,6 +114,7 @@ ffxContext fg_ctx{};
 vk::Extent2D ctx_display{}, ctx_render{};
 vk::Format ctx_format{};
 std::array<OwnedImage, kRing> hudless_copies, full_copies;
+OwnedImage tone_map; // fg_rim.comp's tone per 8x8 block (the presenter's queue only)
 // What the runtime reads for each prepared frame at the render size (fg_halo.comp, or the game's
 // vectors and depth as they are); the rim reads the vectors too.
 std::array<OwnedImage, kRing> mv_copies, halo_depths;
@@ -492,7 +496,7 @@ ffxReturnCode_t Present(ffxCallbackDescFrameGenerationPresent* params, void*) {
             sampled(cur_full),
             sampled(mv_copies[info.slot]),
         };
-        std::array<vk::WriteDescriptorSet, 6> writes{};
+        std::array<vk::WriteDescriptorSet, 8> writes{};
         for (u32 i = 0; i < infos.size(); ++i) {
             writes[i] = {.dstBinding = i,
                          .descriptorCount = 1,
@@ -506,6 +510,19 @@ ffxReturnCode_t Present(ffxCallbackDescFrameGenerationPresent* params, void*) {
                      .descriptorCount = 1,
                      .descriptorType = vk::DescriptorType::eStorageBuffer,
                      .pBufferInfo = &risk};
+        const vk::DescriptorImageInfo tone_store{.imageView = tone_map.view,
+                                                 .imageLayout = vk::ImageLayout::eGeneral};
+        const vk::DescriptorImageInfo tone_read{.sampler = *rim_sampler,
+                                                .imageView = tone_map.view,
+                                                .imageLayout = vk::ImageLayout::eGeneral};
+        writes[6] = {.dstBinding = 6,
+                     .descriptorCount = 1,
+                     .descriptorType = vk::DescriptorType::eStorageImage,
+                     .pImageInfo = &tone_store};
+        writes[7] = {.dstBinding = 7,
+                     .descriptorCount = 1,
+                     .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+                     .pImageInfo = &tone_read};
         cmdbuf.pushDescriptorSetKHR(vk::PipelineBindPoint::eCompute, *rim_layout, 0, writes);
         struct {
             u32 size[2];
@@ -516,19 +533,44 @@ ffxReturnCode_t Present(ffxCallbackDescFrameGenerationPresent* params, void*) {
             u32 cur_slot;
             s32 prev_slot;
             u32 risk_min;
-        } const constants{
+            u32 pass;
+        } constants{
             {frame.description.width, frame.description.height},
             {info.rect.offset.x, info.rect.offset.y},
             {info.rect.extent.width, info.rect.extent.height},
             {info.mv_scale[0], info.mv_scale[1]},
-            (rim ? 1u : 0u) | (info.hudless ? 2u : 0u),
+            (rim ? 1u : 0u) | (info.hudless ? 2u : 0u) | (mark_frames ? 4u : 0u),
             info.slot,
             info.id == params->frameID ? info.prev_slot : -1,
             info.id == params->frameID ? info.risk_min : ~0U,
+            0,
         };
-        cmdbuf.pushConstants(*rim_layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(constants),
-                             &constants);
-        cmdbuf.dispatch((frame.description.width + 7) / 8, (frame.description.height + 7) / 8, 1);
+        // Pass 0 the band's tone per block, pass 1 the frame (reading the tones; it rewrites the
+        // pixels pass 0 read).
+        const auto to_tones = Barrier(tone_map.image, vk::PipelineStageFlagBits2::eAllCommands,
+                                      vk::AccessFlagBits2::eNone, vk::ImageLayout::eUndefined,
+                                      vk::PipelineStageFlagBits2::eComputeShader,
+                                      vk::AccessFlagBits2::eShaderWrite, vk::ImageLayout::eGeneral);
+        cmdbuf.pipelineBarrier2(
+            vk::DependencyInfo{.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &to_tones});
+        for (u32 pass = 0; pass < 2; ++pass) {
+            if (pass == 1) {
+                const vk::MemoryBarrier2 tones_done{
+                    .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+                    .srcAccessMask = vk::AccessFlagBits2::eShaderWrite,
+                    .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+                    .dstAccessMask =
+                        vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite,
+                };
+                cmdbuf.pipelineBarrier2(
+                    vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &tones_done});
+            }
+            constants.pass = pass;
+            cmdbuf.pushConstants(*rim_layout, vk::ShaderStageFlagBits::eCompute, 0,
+                                 sizeof(constants), &constants);
+            cmdbuf.dispatch((frame.description.width + 7) / 8,
+                            (frame.description.height + 7) / 8, 1);
+        }
     }
     const std::array to_copy{
         Barrier(src, view ? vk::PipelineStageFlagBits2::eComputeShader
@@ -614,6 +656,7 @@ void DestroyContext() {
     }
     DestroyImage(halo_tiles);
     DestroyImage(halo_near);
+    DestroyImage(tone_map);
     DestroyOutputViews();
     last_slot = -1;
     active = false;
@@ -654,7 +697,9 @@ bool EnsureContext(vk::Extent2D display, u32 render_w, u32 render_h) {
     ffx.Configure(&fg_ctx, &messages.header);
     for (u32 i = 0; i < kRing; ++i) {
         if (!CreateImage(hudless_copies[i], chain_format, display.width, display.height, true) ||
-            !CreateImage(full_copies[i], chain_format, display.width, display.height, true)) {
+            !CreateImage(full_copies[i], chain_format, display.width, display.height, true) ||
+            (i == 0 && !CreateImage(tone_map, vk::Format::eR16G16B16A16Sfloat,
+                                    (display.width + 7) / 8, (display.height + 7) / 8))) {
             std::fprintf(stderr, "SOTC FSR3 FG: cannot create the %ux%u frame copies\n",
                          display.width, display.height);
             DestroyContext();
@@ -995,6 +1040,9 @@ void Init(const Instance& instance) {
     if (const char* l = std::getenv("SOTC_FSRFG_LOG")) {
         log_level = std::atoi(l);
     }
+    if (const char* m = std::getenv("SOTC_FG_MARK")) {
+        mark_frames = m[0] == '1';
+    }
     if (!FrameGen::AskedAtStart()) {
         return;
     }
@@ -1134,17 +1182,23 @@ void Init(const Instance& instance) {
         features.shaderStorageImageWriteWithoutFormat) {
         rim_sampler = std::move(sampler);
         rim_shader = CompileSPV(FG_RIM_COMP, device);
-        std::array<vk::DescriptorSetLayoutBinding, 6> rim_bindings{};
+        // The frame and the tones as storage images, the frames, vectors and tones sampled, the
+        // risk counts.
+        constexpr std::array rim_types{
+            vk::DescriptorType::eStorageImage,         vk::DescriptorType::eCombinedImageSampler,
+            vk::DescriptorType::eCombinedImageSampler, vk::DescriptorType::eCombinedImageSampler,
+            vk::DescriptorType::eCombinedImageSampler, vk::DescriptorType::eStorageBuffer,
+            vk::DescriptorType::eStorageImage,         vk::DescriptorType::eCombinedImageSampler,
+        };
+        std::array<vk::DescriptorSetLayoutBinding, rim_types.size()> rim_bindings{};
         for (u32 i = 0; i < rim_bindings.size(); ++i) {
             rim_bindings[i] = {.binding = i,
-                               .descriptorType = i == 0   ? vk::DescriptorType::eStorageImage
-                                                 : i < 5 ? vk::DescriptorType::eCombinedImageSampler
-                                                         : vk::DescriptorType::eStorageBuffer,
+                               .descriptorType = rim_types[i],
                                .descriptorCount = 1,
                                .stageFlags = vk::ShaderStageFlagBits::eCompute};
         }
         const vk::PushConstantRange rim_push = {
-            .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = 12 * sizeof(u32)};
+            .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = 13 * sizeof(u32)};
         auto [rim_set_result, rim_set] = device.createDescriptorSetLayoutUnique({
             .flags = vk::DescriptorSetLayoutCreateFlagBits::ePushDescriptorKHR,
             .bindingCount = static_cast<u32>(rim_bindings.size()),
