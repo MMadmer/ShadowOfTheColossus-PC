@@ -197,7 +197,7 @@ APP_DEFAULTS = {'ui_language': '', 'game_dir': str(DEFAULT_GAME_DIR), 'sys_modul
                 'fx_fog': True, 'fx_ssao': True, 'fx_shadows': True, 'engine_cvars': '', 'perf_culling': True,
                 'perf_record_thread': True, 'perf_dma': True, 'gpu_submit': 'auto', 'vram_use': 'normal', 'volume': '100', 'shadow_reuse': '0',
                 'grass_shadows': '2', 'grass_distance': '1', 'grass_height': '1', 'weed_distance': '1', 'weed_height': '1',
-                'grass_fade': '1', 'grass_detail': '0.25', 'library_dirs': [], 'keys': {},
+                'grass_fade': '1', 'grass_detail': '1', 'library_dirs': [], 'keys': {},
                 'auto_setup': True, 'dlc_dir': '', 'framegen': 'off', 'dlssg_mult': '2',
                 'check_updates': True, 'skip_version': '', 'dlss': 'off', 'dlss_compare': False, 'vibration': '100',
                 'mouse_buttons': {}, 'gpu_name': '', 'fov': '100'}
