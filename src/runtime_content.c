@@ -130,7 +130,8 @@ static void scan_addons(void) {
         if (entry.cFileName[0]=='.') continue;
         static char path[1400];
         /* An add-on package not installed: its header says it is additional content (type
-         * 0x1b) and carries the content ID. Entitlement-only DLC needs nothing else. */
+         * 0x1b, AC) or an additional license (0x1c, AL: entitlement-only DLC without data) and
+         * carries the content ID. Entitlement-only DLC needs nothing else. */
         const size_t name_len=strlen(entry.cFileName);
         if (!(entry.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && name_len>4 &&
             !_stricmp(entry.cFileName+name_len-4,".pkg")) {
@@ -142,7 +143,7 @@ static void scan_addons(void) {
             static char content[37];
             memcpy(content,header+0x40,36); content[36]=0;
             const uint32_t type=(uint32_t)header[0x74]<<24|header[0x75]<<16|header[0x76]<<8|header[0x77];
-            if (got<sizeof header || memcmp(header,"\x7f" "CNT",4) || type!=0x1b ||
+            if (got<sizeof header || memcmp(header,"\x7f" "CNT",4) || (type!=0x1b && type!=0x1c) ||
                 !strstr(content,title_id) || strlen(content)<=20 || addon_count==MAX_ADDONS ||
                 addon_known(content)) continue;
             AddonInfo *info=&addons[addon_count++];
