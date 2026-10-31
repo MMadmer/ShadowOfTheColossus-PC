@@ -55,10 +55,20 @@ AjncSystem**. The shader cache is rebuilt on the first start.
 - **AMD GPUs:** running out of video memory with budget still free (RX 9070 XT, #293) and invalid
   descriptor formats no longer close the game; an invalid MSAA texture no longer aborts the shader
   translator (#255). `SOTC_GCN_NV=1` (test for RX 400/500) uses the NVIDIA shader options.
-- **FSR 3 frame generation: a darker double image trailing behind while the camera turns** (it
-  also looked like a flickering, see-through window). The camera motion that 0.70 writes into the
-  motion vectors for DLSS reached FSR 3, which then blended two frames instead of moving the
-  picture; FSR 3 receives the game's own motion vectors again, as in 1.1.3.
+- **FSR 3 frame generation: a dark rectangle trailing the camera** (it also looked like a
+  flickering, see-through window). The port's own pass that put the real frame's interface over
+  generated frames took the interface layer of another frame once the frames queued up (more so
+  at 1440p and above). FSR 3 now composes the interface itself from the frame without it, as in
+  Dead Air Refined (`SOTC_FG_HUD_PASS=1` brings back the old pass, whose copies of the interface
+  layer now cover every queued frame). FSR 3 also receives the game's own motion vectors again,
+  not the ones completed for DLSS.
+- **4-thread processors (i5-3470 and similar): the game never left the first loading screen
+  without frame generation** (upstream #267). The thread that presents the frames ran at normal
+  priority below the raised GPU, loading and sound threads; it is raised too on 4 threads or fewer.
+- **Skip intro:** a mouse click during the loading (to give the window the focus) no longer
+  cancels skipping the opening movie.
+- **Taskbar over the game in borderless fullscreen:** the game window takes the foreground once
+  the shader loading screen closes.
 - **HDR:** with FSR 1 the image was too dark; reference white at 200 nits (`SOTC_HDR_WHITE`).
 - **Low volume** on stereo outputs (#214): the 8-channel audio is downmixed to stereo by the port,
   with the front channels at full volume. If you raised the volume above 100% to compensate, lower
@@ -1091,10 +1101,20 @@ HiddenUserHere, Lukto02, Oussama268, InkAurora, NathanMBR, Gabriel-TwoBits и Aj
   форматы дескрипторов больше не закрывают игру; недопустимая MSAA-текстура не прерывает работу
   транслятора шейдеров (#255). `SOTC_GCN_NV=1` (тест для RX 400/500) использует параметры шейдеров
   NVIDIA.
-- **Генерация кадров FSR 3: при повороте камеры за изображением тянулась более тёмная копия**
-  (это также выглядело как мерцающее полупрозрачное окно). Движение камеры, которое 0.70 записывает
-  в векторы движения для DLSS, попадало в FSR 3, и вместо сдвига изображения он смешивал два кадра;
-  FSR 3 снова получает собственные векторы движения игры, как в 1.1.3.
+- **Генерация кадров FSR 3: за камерой тянулся тёмный прямоугольник** (это также выглядело как
+  мерцающее полупрозрачное окно). Собственный проход порта, накладывавший интерфейс настоящего
+  кадра на сгенерированные, при заполненной очереди кадров брал слой интерфейса другого кадра
+  (особенно в 1440p и выше). Теперь FSR 3 сам собирает интерфейс по кадру без него, как в
+  Dead Air Refined (`SOTC_FG_HUD_PASS=1` возвращает прежний проход, копии слоя интерфейса которого
+  теперь хватает на все кадры в очереди). Кроме того, FSR 3 снова получает собственные векторы
+  движения игры, а не дополненные для DLSS.
+- **Четырёхпоточные процессоры (i5-3470 и подобные): без генерации кадров игра не выходила из
+  первого экрана загрузки** (upstream #267). Поток вывода кадров работал с обычным приоритетом,
+  ниже повышенных потоков GPU, загрузки и звука; на 4 потоках и меньше он теперь тоже повышен.
+- **Пропуск вступления:** щелчок мышью во время загрузки (чтобы вернуть окну фокус) больше не
+  отменяет пропуск вступительного ролика.
+- **Панель задач поверх игры в полноэкранном оконном режиме:** окно игры выходит на передний план
+  после закрытия экрана загрузки шейдеров.
 - **HDR:** с FSR 1 изображение было слишком тёмным; опорный белый — 200 нит (`SOTC_HDR_WHITE`).
 - **Тихий звук** на стереовыходах (#214): 8-канальный звук сводится портом в стерео, фронтальные
   каналы — на полной громкости. Если вы подняли громкость выше 100% для компенсации, уменьшите её.
