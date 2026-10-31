@@ -1,6 +1,8 @@
 //  SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 //  SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
+
 #include "common/assert.h"
 #include "core/emulator_settings.h"
 #include "video_core/host_shaders/fsr_easu_comp.h"
@@ -121,6 +123,10 @@ void FsrPass::Create(vk::Device device, VmaAllocator allocator, u32 num_images) 
     device.destroyShaderModule(cs_rcas_module);
 
     available_imgs.resize(num_images);
+    // sotc: the presenter keeps at most max(swapchain images, 4) frames in flight
+    // (vk_presenter.cpp, num_frames), each handed out again only after its present fence: an
+    // image may still be read that many frames after its last use.
+    release_delay = std::max(num_images, 4u) + 1;
     for (int i = 0; i < num_images; ++i) {
         auto& img = available_imgs[i];
         img.id = i;
@@ -131,6 +137,7 @@ void FsrPass::Create(vk::Device device, VmaAllocator allocator, u32 num_images) 
 
 vk::ImageView FsrPass::Sharpen(vk::CommandBuffer cmdbuf, vk::ImageView input, vk::Extent2D size,
                                float attenuation) {
+    release_pending = false; // sotc: in use, a release in progress is called off
     if (size != cur_size) {
         ResizeAndInvalidate(size.width, size.height);
     }
@@ -205,14 +212,18 @@ vk::ImageView FsrPass::Render(vk::CommandBuffer cmdbuf, vk::ImageView input,
                               bool hdr) {
     if (!settings.enable) {
         DebugState.is_using_fsr = false;
+        // sotc: FSR 1 off: its images are freed instead of kept until the presenter goes.
+        ReleaseImagesWhenIdle();
         return input;
     }
     if (input_size.width >= output_size.width && input_size.height >= output_size.height) {
         DebugState.is_using_fsr = false;
+        ReleaseImagesWhenIdle();
         return input;
     }
 
     DebugState.is_using_fsr = true;
+    release_pending = false; // sotc: in use, a release in progress is called off
 
     if (output_size != cur_size) {
         ResizeAndInvalidate(output_size.width, output_size.height);
@@ -471,6 +482,42 @@ void FsrPass::ResizeAndInvalidate(u32 width, u32 height) {
     for (int i = 0; i < num_images; ++i) {
         available_imgs[i].dirty = true;
     }
+}
+
+void FsrPass::ReleaseImagesWhenIdle() {
+    if (!ImagesAlive()) {
+        release_pending = false;
+        return;
+    }
+    // sotc: the frames recorded with these images may still be on the GPU (release_delay).
+    if (!release_pending) {
+        release_pending = true;
+        release_wait = release_delay;
+        return;
+    }
+    if (--release_wait > 0) {
+        return;
+    }
+    ReleaseImages();
+    release_pending = false;
+}
+
+void FsrPass::ReleaseImages() {
+    for (auto& img : available_imgs) {
+        // Views first: they reference the images.
+        img.intermediary_image_view.reset();
+        img.output_image_view.reset();
+        img.intermediary_image.Destroy();
+        img.output_image.Destroy();
+        img.dirty = true; // sotc: CreateImages makes them again at the next use
+    }
+    cur_image = 0;
+}
+
+bool FsrPass::ImagesAlive() const {
+    return std::ranges::any_of(available_imgs, [](const Img& img) {
+        return img.intermediary_image || img.output_image;
+    });
 }
 
 void FsrPass::CreateImages(Img& img) const {

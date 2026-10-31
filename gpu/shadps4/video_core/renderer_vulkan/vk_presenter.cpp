@@ -557,6 +557,9 @@ Presenter::~Presenter() {
     draw_scheduler.Finish();
     present_scheduler.Finish();
     flip_scheduler.Finish();
+    // sotc: the FSR 3 context and depth images: no frame in flight uses them any more, and the
+    // device goes after this presenter.
+    FsrFg::Shutdown();
     Check(draw_scheduler.CommandBuffer().reset());
     Check(present_scheduler.CommandBuffer().reset());
     Check(flip_scheduler.CommandBuffer().reset());
@@ -878,6 +881,8 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
             }
         } else if (sharpness >= 0.0f) {
             scene = fsr_pass.Sharpen(cmdbuf, scene, {frame->width, frame->height}, sharpness);
+        } else {
+            fsr_pass.Idle(); // sotc: its images are freed after a few frames (fsr_pass.h)
         }
         pp_settings.srgb_input = 0;
         pp_settings.ui = 1;
@@ -947,6 +952,7 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
             scene_only.ui = 2; // the vignette, without the UI layer
             pp_pass.Render(cmdbuf, upscaled_scene, {frame->width, frame->height}, hudless,
                            scene_only, upscaled.ui, upscaled.sky);
+            fsr_pass_hudless.Idle();
         } else {
             // The pass records whether it scaled in DebugState: the game frame's pass said it.
             const bool fsr1 = DebugState.is_using_fsr;
@@ -993,6 +999,8 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
                     [readback] { SavePendingScreenshot(*readback); });
             }
         }
+    } else {
+        fsr_pass_hudless.Idle(); // sotc: no HUD-less frame: its FSR 1 images are freed
     }
 
 
@@ -1087,6 +1095,9 @@ Frame* Presenter::PrepareBlankFrame(bool present_thread) {
 }
 
 void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame) {
+    // sotc: FSR 3 resources freed a few presents after leaving its mode (vk_fsrfg.h).
+    FsrFg::Update(FrameGen::Current() == FrameGen::Mode::Fsr, draw_scheduler);
+
     // Free the frame for reuse
     const auto free_frame = [&] {
         if (!is_reusing_frame) {

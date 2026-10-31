@@ -7,10 +7,12 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <deque>
+#include <mutex>
 #include <utility>
 #include <vk_mem_alloc.h>
 
@@ -63,6 +65,11 @@ vk::UniqueDescriptorSetLayout depth_set_layout;
 vk::UniquePipelineLayout depth_layout;
 vk::UniquePipeline depth_pipeline;
 std::array<DepthSlot, kMaxFrames> depth_slots;
+// sotc: the depth images are released on the present thread (Update) while FSR 3 is off. It
+// sets depth_retired under the lock first, and ConvertDepth records nothing while it is set.
+std::mutex depth_mutex;
+bool depth_retired = false;            // written by the present thread only, under depth_mutex
+std::atomic<bool> depth_alive{false};  // a depth image exists (read by Update without the lock)
 // sotc: the real frame's HUD over the generated frame (fg_hud.comp), present thread.
 vk::ShaderModule hud_shader;
 vk::UniqueDescriptorSetLayout hud_set_layout;
@@ -88,6 +95,12 @@ double interval_ms = 33.3;
 double delay_sum_ms = 0.0; // generated frame presented after the game frame arrived
 u32 delay_count = 0;
 u64 generated = 0, generated_logged = 0;
+// sotc: releasing the context and the depth images while FSR 3 is off (Update). A few presents
+// out of its mode first, so that switching back and forth costs nothing.
+constexpr u32 kReleaseDelay = 6;
+u32 idle_presents = 0;
+bool release_pending = false; // depth_retired set, waiting for release_tick
+u64 release_tick = 0;         // draw scheduler: the last command buffer ConvertDepth could use
 
 bool CreateImage(OwnedImage& img, vk::Format format, u32 width, u32 height) {
     const VkImageCreateInfo info = static_cast<VkImageCreateInfo>(vk::ImageCreateInfo{
@@ -195,6 +208,29 @@ void DestroyContext() {
     DestroyImage(output);
     DestroyImage(hudless_color);
     output_initialised = false;
+}
+
+/// sotc: frees the context, its images and the depth images of the presentation frames (up to
+/// ~130 MB at 1080p); the next use of FSR 3 makes them again (EnsureContext, ConvertDepth). The
+/// caller made sure the GPU is done with the depth images (Update, Shutdown).
+void Release() {
+    const bool had_context = context != nullptr;
+    DestroyContext(); // waits for the FSR 3 work in flight (RetireCompleted)
+    u64 depth_bytes = 0;
+    {
+        std::scoped_lock lock{depth_mutex};
+        for (auto& slot : depth_slots) {
+            depth_bytes += u64{slot.r32.width} * slot.r32.height * 4;
+            DestroyImage(slot.r32);
+            slot.valid = false;
+        }
+        depth_alive.store(false, std::memory_order_relaxed);
+    }
+    history_game_frame = ~0ULL;
+    if (had_context || depth_bytes != 0) {
+        std::fprintf(stderr, "SOTC FSR3 FG: released (off), %.0f MB of depth images freed\n",
+                     static_cast<double>(depth_bytes) / 1048576.0);
+    }
 }
 
 bool EnsureContext(u32 display_w, u32 display_h, u32 render_w, u32 render_h) {
@@ -466,8 +502,13 @@ void ConvertDepth(u32 frame_id, vk::CommandBuffer cmdbuf, vk::ImageView depth_vi
     if (!supported || frame_id >= kMaxFrames) {
         return;
     }
+    std::scoped_lock lock{depth_mutex};
     DepthSlot& slot = depth_slots[frame_id];
     slot.valid = false;
+    if (depth_retired) {
+        // sotc: being released (FSR 3 was off): no depth until the present thread sees the mode.
+        return;
+    }
     // The slot's last reader (this presentation frame's previous FSR 3 work) is done: the frame
     // was handed out again after its present fence.
     if (slot.r32.width != width || slot.r32.height != height) {
@@ -477,6 +518,7 @@ void ConvertDepth(u32 frame_id, vk::CommandBuffer cmdbuf, vk::ImageView depth_vi
                          height);
             return;
         }
+        depth_alive.store(true, std::memory_order_relaxed);
     }
     const auto to_write = Barrier(slot.r32.image, vk::PipelineStageFlagBits2::eAllCommands,
                                   vk::AccessFlagBits2::eNone, vk::ImageLayout::eUndefined,
@@ -838,6 +880,47 @@ void WaitForGameFrame() {
     const auto due =
         last_present + std::chrono::microseconds(static_cast<s64>(interval_ms * 500.0));
     SleepUntil(due);
+}
+
+void Update(bool fsr_enabled, Scheduler& draw) {
+    if (fsr_enabled) {
+        // On again, perhaps before a release ran: nothing is freed, depth is converted again.
+        idle_presents = 0;
+        release_pending = false;
+        if (depth_retired) {
+            std::scoped_lock lock{depth_mutex};
+            depth_retired = false;
+        }
+        return;
+    }
+    if (!context && !depth_alive.load(std::memory_order_relaxed)) {
+        idle_presents = 0;
+        return;
+    }
+    if (!release_pending) {
+        if (++idle_presents < kReleaseDelay) {
+            return;
+        }
+        idle_presents = 0;
+        // From here on ConvertDepth records nothing (the command processor may still read the
+        // old mode for a frame); what it recorded is in the draw scheduler's command buffers up
+        // to this tick.
+        std::scoped_lock lock{depth_mutex};
+        depth_retired = true;
+        release_tick = draw.CurrentTick();
+        release_pending = true;
+        return;
+    }
+    if (!draw.IsFree(release_tick)) {
+        return; // checked again at the next present, no wait here
+    }
+    release_pending = false;
+    Release();
+}
+
+void Shutdown() {
+    release_pending = false;
+    Release();
 }
 
 } // namespace Vulkan::FsrFg

@@ -57,4 +57,13 @@ void WaitForGameFrame();
 /// prints them every 5 s).
 void NotePresent();
 
+/// sotc: present thread, at each present. A few presents after the mode left FSR 3 (F8, the
+/// in-game menu), the context, its images and the depth images (up to ~130 MB at 1080p) are
+/// freed once `draw` (the scheduler ConvertDepth records on) finished the depth conversions
+/// recorded before; switched on again, FSR 3 makes them as at its first use.
+void Update(bool fsr_enabled, Scheduler& draw);
+
+/// sotc: frees them at once (the presenter's destructor, with the schedulers finished).
+void Shutdown();
+
 } // namespace Vulkan::FsrFg
