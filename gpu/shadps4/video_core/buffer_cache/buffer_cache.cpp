@@ -2501,6 +2501,9 @@ void BufferCache::SubmitPendingArenaBinds(Vulkan::SubmitInfo& info) {
             .pSignalSemaphores = &sema,
         };
         std::scoped_lock lk{Vulkan::Scheduler::submit_mutex};
+        Vulkan::SubmitInfo bind_info{}; // sotc: for the queue operation dump (DumpQueueOps)
+        bind_info.AddSignal(sema, retained_tick);
+        Vulkan::NoteQueueOp('B', bind_info, static_cast<u32>(retained_infos.size()));
         const auto result = instance.GetGraphicsQueue().bindSparse(retained_info);
         ASSERT_MSG(result != vk::Result::eErrorDeviceLost, "Device lost during submit");
         if (result == vk::Result::eSuccess) {
@@ -2553,6 +2556,15 @@ void BufferCache::SubmitPendingArenaBinds(Vulkan::SubmitInfo& info) {
     // Queue access is serialized by submit_mutex, which the scheduler no longer holds here.
     std::unique_lock lk{Vulkan::Scheduler::submit_mutex};
     const auto bind_start = std::chrono::steady_clock::now();
+    // sotc: the binds for the queue operation dump (Vulkan::DumpQueueOps), under submit_mutex.
+    const auto note_bind = [&](size_t buffers, bool waits) {
+        Vulkan::SubmitInfo bind_info{};
+        if (waits && retained_tick) {
+            bind_info.AddWait(signal_sema, retained_tick);
+        }
+        bind_info.AddSignal(signal_sema, signal_tick);
+        Vulkan::NoteQueueOp('B', bind_info, static_cast<u32>(buffers));
+    };
     // sotc: SOTC_TEST_BIND_REFUSE=<n> (test knob): every n-th batch is refused twice, as a full card;
     // with SOTC_TEST_BIND_REFUSE_RETRY=1 its retry without the fresh memory too (retained_binds).
     static const u64 refuse_every = [] {
@@ -2565,6 +2577,7 @@ void BufferCache::SubmitPendingArenaBinds(Vulkan::SubmitInfo& info) {
     }();
     static u64 batches = 0;
     const bool refuse = refuse_every && ++batches % refuse_every == 0;
+    note_bind(buffer_binds.size(), true);
     auto submit_result = refuse ? vk::Result::eErrorOutOfDeviceMemory
                                 : instance.GetGraphicsQueue().bindSparse(sparse_info);
     ASSERT_MSG(submit_result != vk::Result::eErrorDeviceLost, "Device lost during submit");
@@ -2574,6 +2587,7 @@ void BufferCache::SubmitPendingArenaBinds(Vulkan::SubmitInfo& info) {
     // the semaphore signalled from the host when nothing else can.
     if (submit_result != vk::Result::eSuccess) {
         memory_semaphore.Wait(signal_tick - 1);
+        note_bind(buffer_binds.size(), true);
         submit_result = refuse ? vk::Result::eErrorOutOfDeviceMemory
                                : instance.GetGraphicsQueue().bindSparse(sparse_info);
         ASSERT_MSG(submit_result != vk::Result::eErrorDeviceLost, "Device lost during submit");
@@ -2638,6 +2652,7 @@ void BufferCache::SubmitPendingArenaBinds(Vulkan::SubmitInfo& info) {
                 .signalSemaphoreCount = 1u,
                 .pSignalSemaphores = &signal_sema,
             };
+            note_bind(retry_infos.size(), false);
             submit_result = refuse && refuse_retry
                                 ? vk::Result::eErrorOutOfDeviceMemory
                                 : instance.GetGraphicsQueue().bindSparse(retry_info);
