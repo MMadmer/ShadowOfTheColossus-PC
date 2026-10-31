@@ -57,16 +57,22 @@ AjncSystem**. The shader cache is rebuilt on the first start.
   translator (#255). `SOTC_GCN_NV=1` (test for RX 400/500) uses the NVIDIA shader options.
 - **FSR 3 frame generation now runs on AMD's official runtime** (`amd_fidelityfx_vk.dll` of the
   FidelityFX SDK 1.1.4, FSR 3.1, included in the package), with its own frame generation swap chain
-  and frame pacing, as in other games; the FSR-Vulkan module is no longer used. **A dark rectangle
-  trailing the camera and a hazy picture while it turns** (it also looked like a flickering window):
-  near the screen edges, where one of the two game frames has the point off screen, FSR 3 fills a
-  band about half a frame's motion wide with a blurred estimate. The port rebuilds that band from
-  the frame that has the point, moved half way along the game's motion vectors, and blends it
-  smoothly into FSR 3's picture. F8 now turns frame generation on and off in the mode chosen at
-  start: FSR 3 and DLSS-G use different swap chains, so changing between them requires a restart.
-  With FSR 3 the NVIDIA Streamline runtime is not loaded. Fast objects close to the camera (Agro
-  running past it) may still show thin outlines in generated frames, as with FSR 3 in other games
-  at 30 FPS.
+  and frame pacing, as in other games; the FSR-Vulkan module is no longer used.
+  - **A dark rectangle trailing the camera and a hazy picture while it turns** (it also looked like
+    a flickering window): near the screen edges, where one of the two game frames has the point off
+    screen, FSR 3 fills a band up to a frame's motion wide with a blurred estimate. The port
+    rebuilds that band from the frame that has the point, moved half way along the game's motion
+    vectors, in the tone half way between the two frames (the game's exposure and fog change from
+    frame to frame), and blends it smoothly into FSR 3's picture.
+  - **Outlines and doubled edges around moving objects** (Agro running): the game's motion blur
+    smears an object over the pixels around it, whose motion vectors are the background's, and FSR
+    3 moved the smear away from the object. Those pixels now take the object's motion vectors and
+    depth.
+  - **A torn frame when an object rushes past right in front of the camera** (Agro walking by):
+    such a frame cannot be interpolated; the next game frame is shown a moment longer instead.
+  - F8 now turns frame generation on and off in the mode chosen at start: FSR 3 and DLSS-G use
+    different swap chains, so changing between them requires a restart. With FSR 3 the NVIDIA
+    Streamline runtime is not loaded.
 - **The game could stop while loading a save** (behind the loading screen, about one load in six
   in tests): the draw thread looped in a memory fault while comparing a table the game fills every
   frame. The table's source is now read through the backing memory view, as the table itself.
@@ -1112,16 +1118,22 @@ HiddenUserHere, Lukto02, Oussama268, InkAurora, NathanMBR, Gabriel-TwoBits и Aj
 - **Генерация кадров FSR 3 теперь работает на официальной среде выполнения AMD**
   (`amd_fidelityfx_vk.dll` из FidelityFX SDK 1.1.4, FSR 3.1, входит в пакет) с собственной цепочкой
   буферов генерации кадров и темпом кадров, как в других играх; модуль FSR-Vulkan больше не
-  используется. **При повороте камеры за ней тянулся тёмный прямоугольник, а изображение было
-  мутным** (это также выглядело как мерцающее окно): у краёв экрана, где точка одного из двух кадров
-  игры находится за краем, FSR 3 заполняет полосу шириной примерно в половину смещения кадра
-  размытой оценкой. Порт восстанавливает эту полосу по кадру, в котором точка видна, смещённому на
-  половину пути по векторам движения игры, и плавно совмещает её с изображением FSR 3. Клавиша F8
-  теперь включает и выключает генерацию кадров в режиме, выбранном при запуске: FSR 3 и DLSS-G
-  используют разные цепочки буферов, поэтому для переключения между ними требуется перезапуск. С
-  FSR 3 среда выполнения NVIDIA Streamline не загружается. У быстрых объектов вблизи камеры (Агро,
-  пробегающий мимо неё) в сгенерированных кадрах ещё могут быть видны тонкие контуры, как и с FSR 3
-  в других играх при 30 FPS.
+  используется.
+  - **При повороте камеры за ней тянулся тёмный прямоугольник, а изображение было мутным** (это
+    также выглядело как мерцающее окно): у краёв экрана, где точка одного из двух кадров игры
+    находится за краем, FSR 3 заполняет полосу шириной до смещения кадра размытой оценкой. Порт
+    восстанавливает эту полосу по кадру, в котором точка видна, смещённому на половину пути по
+    векторам движения игры, в тоне посередине между двумя кадрами (экспозиция и туман в игре
+    меняются от кадра к кадру), и плавно совмещает её с изображением FSR 3.
+  - **Контуры и двоящиеся края у движущихся объектов** (бегущий Агро): размытие движения в игре
+    размазывает объект по соседним пикселям, векторы движения которых принадлежат фону, и FSR 3
+    уводил этот след в сторону от объекта. Теперь такие пиксели получают векторы движения и глубину
+    объекта.
+  - **Разорванный кадр, когда объект проходит вплотную перед камерой** (Агро идёт мимо): такой кадр
+    невозможно интерполировать; вместо него чуть дольше показывается следующий кадр игры.
+  - Клавиша F8 теперь включает и выключает генерацию кадров в режиме, выбранном при запуске: FSR 3
+    и DLSS-G используют разные цепочки буферов, поэтому для переключения между ними требуется
+    перезапуск. С FSR 3 среда выполнения NVIDIA Streamline не загружается.
 - **Игра могла зависнуть при загрузке сохранения** (за экраном загрузки, в тестах примерно при
   каждой шестой загрузке): поток отрисовки зацикливался на ошибке доступа к памяти, сравнивая
   таблицу, которую игра заполняет каждый кадр. Источник таблицы теперь читается через основное
