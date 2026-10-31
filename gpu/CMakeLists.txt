@@ -318,6 +318,10 @@ target_link_libraries(motion-shader-test PRIVATE bbgpu)
 add_executable(ui-composition-test EXCLUDE_FROM_ALL ../tests/test_ui_composition.cpp)
 target_compile_options(ui-composition-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
 target_include_directories(ui-composition-test PRIVATE ..)
+# sotc: the present thread's vblank deadlines and flip pacer subticks on a virtual clock.
+add_executable(vblank-clock-test EXCLUDE_FROM_ALL ../tests/test_vblank_clock.cpp)
+target_compile_options(vblank-clock-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+target_include_directories(vblank-clock-test PRIVATE ..)
 
 add_executable(scene-resolution-test EXCLUDE_FROM_ALL ../tests/test_scene_resolution.cpp ../tests/test_gpu_runtime_stubs.cpp)
 target_include_directories(scene-resolution-test PRIVATE shim shadps4 third_party/gcn/include)

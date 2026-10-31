@@ -28,6 +28,7 @@
 #include "video_core/sotc_event.h"
 #include "video_core/sotc_stats.h"
 #include "video_core/sotc_ui_lang.h"
+#include "video_core/sotc_vblank_clock.h"
 
 extern std::unique_ptr<Vulkan::Presenter> presenter;
 extern std::unique_ptr<AmdGpu::Liverpool> liverpool;
@@ -1118,17 +1119,24 @@ void VideoOutDriver::SubmitFlipInternal(VideoOutPort* port, s32 index, s64 flip_
         .flip_arg = flip_arg,
         .index = index,
         .eop = is_eop,
+        .arrival = std::chrono::steady_clock::now(),
     });
 }
 
 void VideoOutDriver::PresentThread(std::stop_token token) {
+    using Clock = std::chrono::steady_clock;
     const std::chrono::nanoseconds vblank_period(1000000000 /
                                                  EmulatorSettings.GetVblankFrequency());
 
     Common::SetCurrentThreadName("shadPS4:PresentThread");
     Common::SetCurrentThreadRealtime(vblank_period);
 
-    Common::AccurateTimer timer{vblank_period};
+    // sotc: guest vblanks fire by absolute deadline: at the end of a tick, every vblank whose
+    // deadline has passed fires, so the count keeps BB_VBLANK_HZ on average after a slow flip.
+    // AccurateTimer caught up at most one interval and moved the grid later for good. The thread
+    // wakes at each deadline and, with the flip pacer (below), on subticks between them.
+    auto next_vblank = Clock::now();
+    auto wake = next_vblank;
 
     // sotc: the flip rate is the minimum interval between two flips, counted from the last flip,
     // as on the console: a 30 FPS frame that misses its vblank is shown one vblank later (50 ms).
@@ -1156,6 +1164,21 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
     u64 last_flip_vblank = 0;
     bool flipped = false;
 
+    // sotc: with unlimited FPS, flips taken only on vblanks made every frame time a multiple of
+    // the vblank period: at 120 Hz a scene around 10 ms showed as alternating 8/17 ms frames. The
+    // flip pacer (SotcFpsCap::flip_pacer) wakes SOTC_FLIP_SUBTICKS (default 8) times per vblank
+    // and releases a flip at the last flip plus an EMA of the submit intervals (the game's own
+    // rate), never later than its submit plus one vblank period, the worst the grid did. With a
+    // 30/60 FPS cap the thread wakes on vblanks only. From AjncSystem#351 (tabnul).
+    static const u32 flip_subticks = [] {
+        const char* v = std::getenv("SOTC_FLIP_SUBTICKS");
+        const long n = v ? std::strtol(v, nullptr, 10) : 8;
+        return u32(std::clamp(n, 1l, 16l));
+    }();
+    auto last_flip_time = Clock::now();
+    auto prev_arrival = last_flip_time;
+    std::chrono::nanoseconds arrival_ema = vblank_period;
+
     const auto receive_request = [this] -> Request {
         std::scoped_lock lk{mutex};
         if (!requests.empty()) {
@@ -1166,12 +1189,35 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
         return {};
     };
 
+    // sotc: the front request once the pacer releases it; `held` while one waits for its time.
+    const auto receive_paced = [&](Clock::time_point now, bool& held) -> Request {
+        std::scoped_lock lk{mutex};
+        held = false;
+        if (requests.empty()) {
+            return {};
+        }
+        const auto request = requests.front();
+        if (now < last_flip_time + arrival_ema && now < request.arrival + vblank_period) {
+            held = true;
+            return {};
+        }
+        requests.pop();
+        return request;
+    };
+
     while (!token.stop_requested()) {
-        timer.Start();
+        for (auto now = Clock::now(); now < wake; now = Clock::now()) {
+            Common::AccurateSleep(wake - now, nullptr, false);
+        }
+        const auto tick = Clock::now();
+        // sotc: grid flips and redraws without a flip happen only at a vblank deadline.
+        const bool vblank_tick = tick >= next_vblank;
 
         if (DebugState.IsGuestThreadsPaused()) {
             DrawLastFrame();
-            timer.End();
+            // sotc: no vblanks while paused, and none owed after it.
+            next_vblank = Clock::now() + vblank_period;
+            wake = next_vblank;
             continue;
         }
 
@@ -1190,6 +1236,8 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
         // sotc: the game's rate, or none when uncapped (F7, sotc_fps_cap.h).
         const int flip_rate = SotcFpsCap::EffectiveRate();
         bool take_request;
+        // sotc: the flip pacer applies with unlimited FPS only (no game rate, no frame limit).
+        bool paced = false;
         if (!flip_pacing) {
             take_request = vblank_status.count % (flip_rate + 1) == 0;
         } else if (!flipped) {
@@ -1198,17 +1246,30 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
             const int live_limit = SotcFpsCap::limit_fps.load(std::memory_order_relaxed);
             const u64 limit_vblanks = live_limit >= 0 ? vblanks_for(live_limit) : start_limit_vblanks;
             take_request = limit_vblanks == 0 || vblank_status.count - last_flip_vblank >= limit_vblanks;
+            paced = limit_vblanks == 0 && SotcFpsCap::flip_pacer.load(std::memory_order_relaxed);
         } else {
             const u64 interval = u64(flip_rate + 1) * vblanks_per_60hz;
             take_request = vblank_status.count - last_flip_vblank >= interval;
         }
+        Request request{};
+        if (paced) {
+            bool held;
+            request = receive_paced(tick, held);
+            // An empty queue still redraws on vblank ticks, as on the grid.
+            take_request = !held;
+        } else {
+            take_request = take_request && vblank_tick;
+            if (take_request) {
+                request = receive_request();
+            }
+        }
         if (take_request) {
-            const auto request = receive_request();
             if (request) {
                 last_flip_count = vblank_status.count;
             }
             if (!request) {
-                if (timer.GetTotalWait().count() < 0) { // Dont draw too fast
+                // sotc: on vblank ticks only, as upstream's "Dont draw too fast" did.
+                if (vblank_tick) {
                     if (!main_port.is_open) {
                         DrawBlankFrame();
                     } else if (ImGui::Core::MustKeepDrawing() || BbOverlay::LoadingShown()) {
@@ -1220,35 +1281,52 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
                 Flip(request);
                 last_flip_vblank = vblank_status.count;
                 flipped = true;
+                // sotc: the game's production rate from the submit intervals, clamped so that a
+                // load stall does not poison it.
+                last_flip_time = Clock::now();
+                const auto delta = std::clamp<std::chrono::nanoseconds>(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(request.arrival -
+                                                                         prev_arrival),
+                    std::chrono::nanoseconds{0}, std::chrono::nanoseconds{100'000'000});
+                prev_arrival = request.arrival;
+                arrival_ema += (delta - arrival_ema) / 8;
                 FRAME_END;
             }
         }
 
-        {
+        if (const s64 due = SotcVblankClock::TakeDue(Clock::now(), next_vblank, vblank_period)) {
             // Needs lock here as can be concurrently read by `sceVideoOutGetVblankStatus`
             std::scoped_lock lock{main_port.vo_mutex};
 
-            // Trigger flip events for the port
-            for (auto event : main_port.vblank_events) {
-                auto equeue = Kernel::GetEqueue(event);
-                if (equeue != nullptr) {
-                    equeue->TriggerEvent(
-                        static_cast<u64>(OrbisVideoOutInternalEventId::Vblank),
-                        Kernel::OrbisKernelEvent::Filter::VideoOut,
-                        reinterpret_cast<void*>(
-                            static_cast<u64>(OrbisVideoOutInternalEventId::Vblank) |
-                            (vblank_status.count << 16)));
+            for (s64 left = due; left > 0; --left) {
+                // sotc: after a long stall only the last 16 trigger the events (their vblank
+                // counter saturates at 15); the count takes all of them.
+                if (left <= 16) {
+                    // Trigger flip events for the port
+                    for (auto event : main_port.vblank_events) {
+                        auto equeue = Kernel::GetEqueue(event);
+                        if (equeue != nullptr) {
+                            equeue->TriggerEvent(
+                                static_cast<u64>(OrbisVideoOutInternalEventId::Vblank),
+                                Kernel::OrbisKernelEvent::Filter::VideoOut,
+                                reinterpret_cast<void*>(
+                                    static_cast<u64>(OrbisVideoOutInternalEventId::Vblank) |
+                                    (vblank_status.count << 16)));
+                        }
+                    }
                 }
+                vblank_status.count++;
             }
 
             // Update vblank status
-            vblank_status.count++;
             vblank_status.process_time = Libraries::Kernel::sceKernelGetProcessTime();
             vblank_status.tsc = Libraries::Kernel::sceKernelReadTsc();
             main_port.vblank_cv.notify_all();
         }
 
-        timer.End();
+        // sotc: the next vblank deadline, or with the pacer the next subtick still ahead.
+        wake = SotcVblankClock::NextWake(Clock::now(), next_vblank, vblank_period,
+                                         paced ? flip_subticks : 1);
     }
 }
 
