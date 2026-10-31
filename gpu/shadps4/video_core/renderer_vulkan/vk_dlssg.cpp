@@ -1684,7 +1684,11 @@ void NoteDraw(const AmdGpu::Regs& regs, u32 mrt_mask, VideoCore::ImageId depth_i
         scheduler.EndRendering(); // the first draw after the final composite
         CopyComposite(scheduler.CommandBuffer(), texture_cache, runtime);
     }
-    if (pending.captured && !pending.snapped && CapturingInputs() &&
+    // sotc: only for DLSS super resolution. Frame generation copies them at the flip (the frame
+    // complete), as up to 1.1.3: taken at the first draw without MRT 4 they held regions of the
+    // previous frame where the game draws more of its G-buffer after it, and FSR 3 moved those
+    // rectangles a frame late while the camera turned (1.2.0).
+    if (pending.captured && !pending.snapped && CapturingInputs() && SuperResolution() &&
         (!(mrt_mask & (1u << 4)) || mvec_id != pending.mvec_id || depth_id != pending.depth_id)) {
         scheduler.EndRendering(); // the first draw after the G-buffer pass
         SnapshotInputs(pending, scheduler.CommandBuffer(), texture_cache, runtime);
@@ -1937,10 +1941,8 @@ void PrepareInputs(u32 frame_id, vk::CommandBuffer cmdbuf, VideoCore::TextureCac
         FsrFg::ConvertDepth(frame_id, cmdbuf, f.depth_view, f.mvec, width, height,
                             constants.depthInverted == sl::Boolean::eTrue);
     }
-    // Only DLSS (super resolution, DLSS-G) reads the filled vectors and the sky bias.
-    if (!fsr || SuperResolution()) {
-        FillCameraMotion(cmdbuf, f, constants);
-    }
+    // DLSS reads the filled vectors, and FSR 3's edge pass (fg_edge.comp) for the sky's motion.
+    FillCameraMotion(cmdbuf, f, constants);
 
     // sotc: only while SR upscales (not with F9 on FSR 1): the reset also stops frame generation.
     if (SuperResolution() && !sr_prev) {
@@ -2173,6 +2175,7 @@ bool GetFrameInputs(u32 frame_id, FrameInputs& out) {
     const FrameSlot& f = frames[frame_id];
     const sl::Constants& c = f.constants;
     out.mvec = f.mvec;
+    out.mvec_view = f.mvec_view;
     out.mvec_usage = vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eTransferSrc |
                      vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage;
     out.width = f.width;

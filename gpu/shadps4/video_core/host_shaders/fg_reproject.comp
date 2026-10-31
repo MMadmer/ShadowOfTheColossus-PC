@@ -1,0 +1,77 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// sotc: the generated frame of FSR 3.1 frame generation, rebuilt along the game's motion vectors
+// (vk_fsrfg.cpp). FSR 3 blended the two game frames without lining them up (a hazy, half
+// transparent picture), and near the screen edges, where one frame has the pixel off screen, it
+// switched hard to the other frame: two game frames differ (clouds, light), so a rectangle with a
+// hard edge trailed the camera. Here a pixel half way between the frames is taken from both,
+// moved by half the motion (the sky's from the camera), and a frame's share fades out as its point
+// nears the screen edge, so the band where only one frame has the pixel joins smoothly. Where the
+// vectors disagree away from the edges (moving objects) FSR 3's pixel stays; HUD pixels are left
+// to the HUD pass.
+
+#version 450 core
+
+layout (local_size_x = 8, local_size_y = 8) in;
+
+layout (binding = 0) uniform sampler2D cur_scene;  // this game frame (FSR 3's interpolation source)
+layout (binding = 1) uniform sampler2D prev_scene; // the previous game frame's
+layout (binding = 2, rgba8) uniform image2D generated;
+layout (binding = 3) uniform sampler2D mvec;       // curUV - prevUV at render size, sky filled
+layout (binding = 4, rgba8) uniform readonly image2D frame_in; // the real frame, HUD included
+layout (binding = 5, rgba8) uniform readonly image2D prev_frame; // the previous real frame
+
+layout (push_constant) uniform Params {
+    uvec2 size;
+    uint has_hudless; // cur_scene is the frame without its HUD
+} pc;
+
+// Pixels from uv to the nearest screen edge, negative off screen.
+float Inside(vec2 uv, vec2 pixels) {
+    const vec2 d = min(uv, 1.0 - uv) * pixels;
+    return min(d.x, d.y);
+}
+
+void main() {
+    const ivec2 at = ivec2(gl_GlobalInvocationID.xy);
+    if (at.x >= int(pc.size.x) || at.y >= int(pc.size.y)) {
+        return;
+    }
+    const vec4 fsr = imageLoad(generated, at);
+    // Alpha is FSR 3's inpainting weight; the frame is presented opaque.
+    vec4 out_color = vec4(fsr.rgb, 1.0);
+    const vec2 pixels = vec2(pc.size);
+    const vec2 uv = (vec2(at) + 0.5) / pixels;
+    // The vector is stored at the point's place in the current frame: look it up there.
+    const vec2 mv0 = texture(mvec, uv).xy;
+    const vec2 look = uv + 0.5 * mv0;
+    const vec2 mv = Inside(look, pixels) >= 0.0 ? texture(mvec, look).xy : mv0;
+    const vec3 now = imageLoad(frame_in, at).rgb;
+    bool hud;
+    if (pc.has_hudless != 0u) {
+        hud = any(greaterThan(abs(now - texelFetch(cur_scene, at, 0).rgb), vec3(0.5 / 255.0)));
+    } else {
+        // Without the HUD-less frame the scene carries the HUD: a pixel that stayed put while
+        // the camera moved is the HUD, shown as it is now instead of moved with the scene.
+        hud = length(mv * pixels) > 2.0 &&
+              all(lessThan(abs(now - imageLoad(prev_frame, at).rgb), vec3(3.0 / 255.0)));
+        if (hud) {
+            out_color.rgb = now;
+        }
+    }
+    if (!hud) {
+        const vec2 cur_uv = uv + 0.5 * mv;
+        const vec2 prev_uv = uv - 0.5 * mv;
+        // Each frame's share fades over half a motion (at least 48 pixels) before its edge.
+        const float ramp = max(48.0, 0.5 * length(mv * pixels));
+        const float w_cur = smoothstep(0.0, ramp, Inside(cur_uv, pixels));
+        const float w_prev = smoothstep(0.0, ramp, Inside(prev_uv, pixels));
+        // Agreeing vectors: camera motion over static scenery, not a moving object's edge.
+        const bool agree = length((mv - mv0) * pixels) < 1.5;
+        if (w_cur + w_prev > 0.0 && (agree || min(w_cur, w_prev) < 1.0)) {
+            out_color.rgb = (w_cur * texture(cur_scene, cur_uv).rgb +
+                             w_prev * texture(prev_scene, prev_uv).rgb) /
+                            (w_cur + w_prev);
+        }
+    }
+    imageStore(generated, at, out_color);
+}

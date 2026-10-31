@@ -938,7 +938,39 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
     // here), so it is used instead. The UI layer goes with it: the HUD pass of frame generation
     // takes the real frame's HUD by its alpha (fg_hud.comp).
     frame->hudless_ui = vk::ImageView{};
-    if (const vk::ImageView hudless_view = rasterizer->TakeHudless(cpu_address, view_info.format)) {
+    const vk::ImageView hudless_view = rasterizer->TakeHudless(cpu_address, view_info.format);
+    // sotc: SOTC_FSRFG_LOG=1: frames with and without their HUD-less image, by video out buffer
+    // (every 300 frames; frame generation interpolates the HUD of the ones without).
+    if (static const bool log = [] {
+            const char* v = std::getenv("SOTC_FSRFG_LOG");
+            return v && v[0] >= '1';
+        }();
+        log && FrameGen::Current() != FrameGen::Mode::Off) {
+        static std::array<std::pair<VAddr, std::array<u32, 2>>, 4> seen{};
+        static u32 frames = 0;
+        for (auto& [address, counts] : seen) {
+            if (address == cpu_address || !address) {
+                address = cpu_address;
+                ++counts[hudless_view ? 0 : 1];
+                break;
+            }
+        }
+        if (++frames == 300) {
+            frames = 0;
+            std::string text;
+            for (auto& [address, counts] : seen) {
+                if (address) {
+                    char part[96];
+                    std::snprintf(part, sizeof(part), " %#llx: %u with, %u without;",
+                                  static_cast<unsigned long long>(address), counts[0], counts[1]);
+                    text += part;
+                }
+                counts = {};
+            }
+            std::fprintf(stderr, "SOTC FG HUD-less frames:%s\n", text.c_str());
+        }
+    }
+    if (hudless_view) {
         frame->hudless_ui = rasterizer->HudlessUi(cpu_address, frame->hudless_ui_width,
                                                   frame->hudless_ui_height);
         Frame& hudless = hudless_frames[frame->id];

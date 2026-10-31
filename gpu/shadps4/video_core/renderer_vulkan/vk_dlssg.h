@@ -136,6 +136,7 @@ void Suspend();
 /// A frame's inputs for FSR 3 frame generation, from the camera like Streamline's constants.
 struct FrameInputs {
     vk::Image mvec;      ///< R16G16 float, curUV - prevUV, layout ShaderReadOnlyOptimal
+    vk::ImageView mvec_view; ///< sotc: of `mvec` (the sky has the camera's motion)
     vk::ImageUsageFlags mvec_usage;
     u32 width, height;   ///< of the depth and motion vectors (the game's render size)
     float jitter[2];     ///< pixels, y down

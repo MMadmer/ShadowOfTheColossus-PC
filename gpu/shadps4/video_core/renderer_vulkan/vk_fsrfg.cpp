@@ -26,6 +26,7 @@
 
 #include "video_core/host_shaders/fg_depth_comp.h"
 #include "video_core/host_shaders/fg_hud_comp.h"
+#include "video_core/host_shaders/fg_reproject_comp.h"
 
 // sotc: the HUD-less input of the next RecordPrepare/RecordDispatch (gpu/CMakeLists.txt adds it to
 // the module's frame generation source; a null image: none).
@@ -85,6 +86,14 @@ vk::UniqueSampler hud_sampler;
 FfxVkFsr3_3_1_6FrameGenerationContext* context{};
 u32 ctx_display_w{}, ctx_display_h{}, ctx_render_w{}, ctx_render_h{};
 OwnedImage color, output, hudless_color;
+// sotc: the previous game frame's interpolation source, for the reprojection (fg_reproject.comp).
+OwnedImage prev_scene;
+OwnedImage prev_frame; // the previous real frame (HUD included)
+bool prev_scene_valid = false;
+vk::ShaderModule reproject_shader;
+vk::UniqueDescriptorSetLayout reproject_set_layout;
+vk::UniquePipelineLayout reproject_layout;
+vk::UniquePipeline reproject_pipeline;
 bool output_initialised = false;
 bool failed = false;
 u64 fsr_frame = 0;              // FSR 3 frame id of the last Generate
@@ -211,6 +220,9 @@ void DestroyContext() {
     DestroyImage(color);
     DestroyImage(output);
     DestroyImage(hudless_color);
+    DestroyImage(prev_scene);
+    DestroyImage(prev_frame);
+    prev_scene_valid = false;
     output_initialised = false;
 }
 
@@ -264,7 +276,9 @@ bool EnsureContext(u32 display_w, u32 display_h, u32 render_w, u32 render_h) {
     }
     if (!CreateImage(color, kColorFormat, display_w, display_h) ||
         !CreateImage(output, kColorFormat, display_w, display_h) ||
-        !CreateImage(hudless_color, kColorFormat, display_w, display_h)) {
+        !CreateImage(hudless_color, kColorFormat, display_w, display_h) ||
+        !CreateImage(prev_scene, kColorFormat, display_w, display_h) ||
+        !CreateImage(prev_frame, kColorFormat, display_w, display_h)) {
         std::fprintf(stderr, "SOTC FSR3 FG: cannot create the %ux%u images\n", display_w, display_h);
         DestroyContext();
         return false;
@@ -279,7 +293,7 @@ bool EnsureContext(u32 display_w, u32 display_h, u32 render_w, u32 render_h) {
     std::fprintf(stderr,
                  "SOTC FSR3 FG: context %ux%u (render %ux%u), %.0f MB, created in %.0f ms\n",
                  display_w, display_h, render_w, render_h,
-                 (usage.totalUsageInBytes + 3ull * display_w * display_h * 4) / 1048576.0,
+                 (usage.totalUsageInBytes + 5ull * display_w * display_h * 4) / 1048576.0,
                  std::chrono::duration<double, std::milli>(Clock::now() - start).count());
     return true;
 }
@@ -456,7 +470,127 @@ void Init(const Instance& instance) {
         hud_pipeline.reset();
         std::fprintf(stderr, "SOTC FSR3 FG: HUD pass unavailable, the SDK composes the HUD\n");
     }
+
+    // The reprojection: both game frames and the motion vectors sampled, the generated frame and
+    // the real frame as storage images.
+    reproject_shader = CompileSPV(FG_REPROJECT_COMP, device);
+    std::array<vk::DescriptorSetLayoutBinding, 6> reproject_bindings{};
+    for (u32 i = 0; i < reproject_bindings.size(); ++i) {
+        const bool sampled = i == 0 || i == 1 || i == 3;
+        reproject_bindings[i] = {.binding = i,
+                            .descriptorType = sampled ? vk::DescriptorType::eCombinedImageSampler
+                                                      : vk::DescriptorType::eStorageImage,
+                            .descriptorCount = 1,
+                            .stageFlags = vk::ShaderStageFlagBits::eCompute};
+    }
+    auto [reproject_set_result, reproject_set] = device.createDescriptorSetLayoutUnique({
+        .flags = vk::DescriptorSetLayoutCreateFlagBits::ePushDescriptorKHR,
+        .bindingCount = static_cast<u32>(reproject_bindings.size()),
+        .pBindings = reproject_bindings.data(),
+    });
+    if (reproject_set_result == vk::Result::eSuccess && hud_sampler) {
+        reproject_set_layout = std::move(reproject_set);
+        const vk::DescriptorSetLayout reproject_layouts[] = {*reproject_set_layout};
+        auto [reproject_layout_result, reproject_pipeline_layout] = device.createPipelineLayoutUnique({
+            .setLayoutCount = 1,
+            .pSetLayouts = reproject_layouts,
+            .pushConstantRangeCount = 1,
+            .pPushConstantRanges = &hud_push,
+        });
+        if (reproject_layout_result == vk::Result::eSuccess) {
+            reproject_layout = std::move(reproject_pipeline_layout);
+            auto [reproject_pipeline_result, pipeline_reproject] = device.createComputePipelineUnique(
+                {}, vk::ComputePipelineCreateInfo{
+                        .stage{.stage = vk::ShaderStageFlagBits::eCompute,
+                               .module = reproject_shader,
+                               .pName = "main"},
+                        .layout = *reproject_layout,
+                    });
+            if (reproject_pipeline_result == vk::Result::eSuccess) {
+                reproject_pipeline = std::move(pipeline_reproject);
+            }
+        }
+    }
+    if (!reproject_pipeline) {
+        std::fprintf(stderr, "SOTC FSR3 FG: reprojection unavailable\n");
+    }
     supported = true;
+}
+
+/// sotc: the generated frame rebuilt along the motion vectors where they agree
+/// (fg_reproject.comp). Recorded after the FSR 3.1 dispatch wrote `output`, before PutHudBack.
+/// `scene` is this frame's interpolation source.
+void Reproject(vk::CommandBuffer cmdbuf, u32 width, u32 height, const OwnedImage& scene,
+              bool has_hudless, vk::ImageView mvec_view) {
+    const auto written = Barrier(output.image, vk::PipelineStageFlagBits2::eComputeShader,
+                                 vk::AccessFlagBits2::eShaderWrite, vk::ImageLayout::eGeneral,
+                                 vk::PipelineStageFlagBits2::eComputeShader,
+                                 vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite,
+                                 vk::ImageLayout::eGeneral);
+    cmdbuf.pipelineBarrier2(vk::DependencyInfo{
+        .imageMemoryBarrierCount = 1,
+        .pImageMemoryBarriers = &written,
+    });
+    cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, *reproject_pipeline);
+    const std::array infos{
+        vk::DescriptorImageInfo{.sampler = *hud_sampler,
+                                .imageView = scene.view,
+                                .imageLayout = vk::ImageLayout::eGeneral},
+        vk::DescriptorImageInfo{.sampler = *hud_sampler,
+                                .imageView = prev_scene.view,
+                                .imageLayout = vk::ImageLayout::eGeneral},
+        vk::DescriptorImageInfo{.imageView = output.view, .imageLayout = vk::ImageLayout::eGeneral},
+        vk::DescriptorImageInfo{.sampler = *hud_sampler,
+                                .imageView = mvec_view,
+                                .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal},
+        vk::DescriptorImageInfo{.imageView = color.view, .imageLayout = vk::ImageLayout::eGeneral},
+        vk::DescriptorImageInfo{.imageView = prev_frame.view,
+                                .imageLayout = vk::ImageLayout::eGeneral},
+    };
+    std::array<vk::WriteDescriptorSet, 6> writes{};
+    for (u32 i = 0; i < writes.size(); ++i) {
+        const bool sampled = i == 0 || i == 1 || i == 3;
+        writes[i] = {.dstBinding = i,
+                     .descriptorCount = 1,
+                     .descriptorType = sampled ? vk::DescriptorType::eCombinedImageSampler
+                                               : vk::DescriptorType::eStorageImage,
+                     .pImageInfo = &infos[i]};
+    }
+    cmdbuf.pushDescriptorSetKHR(vk::PipelineBindPoint::eCompute, *reproject_layout, 0, writes);
+    const u32 params[3] = {width, height, has_hudless ? 1u : 0u};
+    cmdbuf.pushConstants(*reproject_layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(params),
+                         params);
+    cmdbuf.dispatch((width + 7) / 8, (height + 7) / 8, 1);
+}
+
+/// sotc: this frame's interpolation source and real frame become the reprojection's previous ones.
+void KeepScene(vk::CommandBuffer cmdbuf, u32 width, u32 height, const OwnedImage& scene) {
+    const vk::MemoryBarrier2 before = {
+        .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+        .srcAccessMask = vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eCopy,
+        .dstAccessMask = vk::AccessFlagBits2::eTransferRead | vk::AccessFlagBits2::eTransferWrite,
+    };
+    cmdbuf.pipelineBarrier2(vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &before});
+    const vk::ImageSubresourceLayers layers{vk::ImageAspectFlagBits::eColor, 0, 0, 1};
+    cmdbuf.copyImage(scene.image, vk::ImageLayout::eGeneral, prev_scene.image,
+                     vk::ImageLayout::eGeneral,
+                     vk::ImageCopy{.srcSubresource = layers,
+                                   .dstSubresource = layers,
+                                   .extent = {width, height, 1}});
+    cmdbuf.copyImage(color.image, vk::ImageLayout::eGeneral, prev_frame.image,
+                     vk::ImageLayout::eGeneral,
+                     vk::ImageCopy{.srcSubresource = layers,
+                                   .dstSubresource = layers,
+                                   .extent = {width, height, 1}});
+    const vk::MemoryBarrier2 after = {
+        .srcStageMask = vk::PipelineStageFlagBits2::eCopy,
+        .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+        .dstAccessMask = vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite,
+    };
+    cmdbuf.pipelineBarrier2(vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &after});
+    prev_scene_valid = true;
 }
 
 /// sotc: the real frame's HUD over the generated scene (fg_hud.comp): by the UI layer's alpha,
@@ -831,8 +965,21 @@ vk::Image Generate(vk::CommandBuffer cmdbuf, u32 frame_id, vk::Image frame_image
         dispatch.frameId = fsr_frame;
         dispatch.reset = prepare.reset;
         r = ffxVkFsr3_3_1_6FrameGenerationContextRecordDispatch(context, &dispatch);
+        const OwnedImage& scene = hudless_image ? hudless_color : color;
+        // SOTC_FG_REPROJECT=0: FSR 3's generated frame as it is (tests).
+        static const bool reproject = [] {
+            const char* v = std::getenv("SOTC_FG_REPROJECT");
+            return !v || v[0] != '0';
+        }();
+        if (r == FFX_VK_FSR3_3_1_6_FRAMEGEN_OK && reproject && reproject_pipeline && in.mvec_view &&
+            prev_scene_valid && !reset) {
+            Reproject(cmdbuf, width, height, scene, static_cast<bool>(hudless_image), in.mvec_view);
+        }
         if (r == FFX_VK_FSR3_3_1_6_FRAMEGEN_OK && hud_pass) {
             PutHudBack(cmdbuf, width, height, ui_view);
+        }
+        if (r == FFX_VK_FSR3_3_1_6_FRAMEGEN_OK) {
+            KeepScene(cmdbuf, width, height, scene);
         }
     }
     if (r != FFX_VK_FSR3_3_1_6_FRAMEGEN_OK) {
