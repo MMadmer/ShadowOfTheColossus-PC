@@ -333,6 +333,9 @@ void VideoOutDriver::RunPresentJob(std::function<void()> job, bool droppable) {
 
 void VideoOutDriver::PresentJobThread(std::stop_token token) {
     Common::SetCurrentThreadName("shadPS4:Presenter");
+    if (Common::UsableCpuCount() <= 4) {
+        Common::SetCurrentThreadPriority(Common::ThreadPriority::VeryHigh); // as PresentThread
+    }
     while (!token.stop_requested()) {
         std::function<void()> job;
         {
@@ -1152,6 +1155,13 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
 
     Common::SetCurrentThreadName("shadPS4:PresentThread");
     Common::SetCurrentThreadRealtime(vblank_period);
+    // sotc: SetCurrentThreadRealtime does nothing on Windows. With 4 CPUs or fewer the GPU,
+    // loading and sound threads run above normal, and without FSR 3 the present job runs here:
+    // starved during the first load, no flip ever completed and the game waited for its flip
+    // event behind the loading screen (i5-3470, upstream #267). It mostly sleeps to a deadline.
+    if (Common::UsableCpuCount() <= 4) {
+        Common::SetCurrentThreadPriority(Common::ThreadPriority::VeryHigh);
+    }
 
     // sotc: guest vblanks fire by absolute deadline: at the end of a tick, every vblank whose
     // deadline has passed fires, so the count keeps BB_VBLANK_HZ on average after a slow flip.
