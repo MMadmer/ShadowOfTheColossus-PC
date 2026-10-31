@@ -1,5 +1,79 @@
 # Changelog
 
+## 1.1.4 — 2026-10-31 (fork Madmer)
+Junta ao fork a 0.70 do projeto original e as versões 0.60.6-C1 a C3 (abaixo), partes das pull
+requests abertas dele e correções de issues ainda abertas. Obrigado a **tabnul, Lucas-blip-png,
+HiddenUserHere, Lukto02, Oussama268, InkAurora, NathanMBR, Gabriel-TwoBits e AjncSystem**. O cache de
+shaders é refeito na primeira abertura.
+
+**Novidades**
+- **Versão americana (CUSA08034)**, do projeto original: o executável é o mesmo da europeia 1.01;
+  todos os modos valem, com saves, cache de shaders e DLCs separados por região.
+- **NVIDIA DLSS** passa a usar a implementação do projeto original (tabnul): funciona também no
+  modo PS4 Pro, em qualquer proporção de tela e em 4K, com a interface desenhada na resolução de
+  saída. O jogo renderiza na resolução de saída dividida pelo fator do modo; o DLAA é o modo de
+  fator 1. Sem placa RTX, o FSR 1 amplia a mesma imagem.
+- **Multiplicador do DLSS-G até x6 e modo Dinâmico** (GeForce RTX 50, conforme o driver), no
+  lançador e no menu do jogo (PR #314).
+- **Grama:** sombras, distância, altura, detalhe e esmaecimento da grama e do mato no lançador
+  (Gráficos > Grama) e no menu do jogo, do projeto original (tabnul).
+- **Sombras do sol** (Gráficos > Efeitos e menu do jogo): desativadas, aumentam o FPS quando o
+  processador limita o desempenho (#294).
+- **Ritmo dos quadros** com FPS ilimitado (PR #351, tabnul): cada quadro sai no ritmo do próprio
+  jogo, sem alternar entre 8 e 17 ms; menu do jogo (F1) ou `SOTC_FLIP_PACER=0`.
+- **Página Depuração** no lançador: menu de depuração da Bluepoint (F6 ou Start+Select), leituras
+  rápidas da GPU (experimental), vigia da memória de texturas e comparação DLSS/FSR 1 (F9).
+- **Texturas Máxima no modo PS4 Pro** (experimental), com a correção do alocador de páginas do jogo
+  (tabnul, `0x1a371`).
+- As notas da atualização automática aparecem no idioma do lançador quando a versão as traz.
+
+**Correções**
+- **Uso de memória:** os quadros das tarefas de comandos aninhadas nunca eram liberados (cerca de
+  44 MB por minuto, 2,6 GB por hora), parte do consumo alto de RAM relatado (Lucas-blip-png). O
+  registro mostra a cada minuto a memória do processo (`SOTC RAM`).
+- **Memória do jogo corrompida ao dividir um mapeamento flexível:** a parte direita apontava para
+  as páginas da esquerda, e liberá-la zerava páginas em uso (Lucas-blip-png). Causa provável de
+  quedas por leitura de ponteiro inválido (`0x49476`, `0x48ac5` e outras).
+- **Leituras da GPU durante as lutas** (PR #349, tabnul): uma leitura assíncrona sujada pela GPU é
+  concluída em parte e refeita sem parar o processador de comandos (engasgos nas lutas com os
+  colossos). Duas falhas que podiam gravar dados antigos na memória do jogo foram corrigidas.
+- **Tela ultralarga (21:9, 32:9) e 16:10:** a cena 3D voltou a ficar com a proporção certa (a 0.70
+  a esticava, #327, #331, #341).
+- **Logotipos de abertura, aviso de salvamento e textos do menu pretos** com o orçamento de envio de
+  texturas da 0.70 (#341, #353): uma textura espera no máximo 2 quadros, e o orçamento recomeça
+  após 100 ms sem quadro.
+- **Cache de shaders:** um arquivo mais novo que o pacote `cache.sotcpack` passa a valer sobre a
+  cópia do pacote (pipelines recusados a cada abertura); texturas pequenas modificadas pelo
+  processador são conferidas por inteiro (manchas coloridas) (PR #339, HiddenUserHere).
+- **Placas Intel:** o driver caía ao gravar o cache de pipelines enquanto pipelines eram criados
+  (#199, #211, #217); no máximo 4 compilações simultâneas; reflexos completos da água desligados por
+  padrão, como na AMD (listras nas sombras e na água).
+- **Placas AMD:** falta de memória de vídeo com orçamento livre (RX 9070 XT, #293) e formatos de
+  descritor inválidos já não fecham o jogo; uma textura MSAA inválida não interrompe o tradutor de
+  shaders (#255). `SOTC_GCN_NV=1` (teste para RX 400/500) usa as opções de shader da NVIDIA.
+- **HDR:** com FSR 1 a imagem ficava escura demais; branco de referência em 200 nits
+  (`SOTC_HDR_WHITE`).
+- **Som baixo** em saídas estéreo (#214): o som de 8 canais é mixado para estéreo pelo port, com os
+  canais frontais em volume total. Quem aumentou o volume acima de 100% para compensar deve reduzi-lo.
+- **Atualização automática:** os certificados HTTPS são verificados pelo repositório do Windows
+  (`CERTIFICATE_VERIFY_FAILED`, #359).
+- **`sotc.ini`:** a versão traz `sotc.ini.example`, copiado para `sotc.ini` só quando ele não existe;
+  extrair uma versão nova já não apaga as configurações (#136).
+- **Arquivos do jogo danificados:** a verificação inclui os arquivos da pasta de atualização e a
+  versão americana (#112). DLCs do tipo 0x1c (licenças adicionais) são reconhecidas (#137).
+- **Quedas silenciosas ao abrir:** o registro mostra o código real de saída (antes `0xffffffff`) e o
+  evento de erro do Windows; o vigia de travamento grava as pilhas das threads também antes da tela
+  título. `SotC.bat` pausa também nesses códigos.
+- **Geração de quadros:** F8 troca o modo no máximo a cada 1,5 s (queda no driver NVIDIA); a memória
+  de vídeo do FSR 1 e do FSR 3 é liberada enquanto não são usados (PR #308, Lukto02).
+- A dica de FPS no lançador cita os casos conhecidos: acima de 30 FPS, a luta contra Avion; acima de
+  60 FPS, o vídeo de abertura pode fechar o jogo (#100, #331).
+
+**Opções novas para diagnóstico:** `SOTC_POOL_FIX=0` (sem a correção do alocador de páginas),
+`SOTC_EXTRA_CVARS` e cvars no formato `NOME(ARGS)` (PR #345), `SOTC_SWAP_IMAGES` (profundidade da
+swapchain, PR #352), `SOTC_DRIVER_CACHE_LOCK`, `SOTC_SLOW_BUILD_MS`, `SOTC_WIDE_ASPECT=0`,
+`SOTC_THREAD_TIMES`.
+
 ## 1.1.3 — 2026-10-23 (fork Madmer)
 Junta ao fork a 0.60.5 e a 0.60.6 do projeto original (abaixo) e as pull requests abertas dele que
 ainda faltavam, com correções de issues ainda abertas. Obrigado a **Oussama268, JihedMrouki,

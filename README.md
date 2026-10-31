@@ -21,11 +21,12 @@ focused on performance, weak hardware and ease of use.
 - **The whole game, start to finish**, including the ending, the credits and the DLC.
 - **Smooth play on modest PCs**: the launcher picks a suitable render resolution for weak graphics
   cards, shaders are prepared once and never compiled during play.
-- **NVIDIA DLSS and DLAA** on GeForce RTX cards and **frame generation** (AMD FSR 3.1 on any card,
-  NVIDIA DLSS-G on RTX 40/50) with a sharp interface.
+- **NVIDIA DLSS and DLAA** on GeForce RTX cards, also in PS4 Pro mode and at any aspect ratio, and
+  **frame generation** (AMD FSR 3.1 on any card, NVIDIA DLSS-G on RTX 40/50, up to x6 on RTX 50)
+  with a sharp interface.
 - **30 or 60 FPS**, resolutions from 720p to 4K, widescreen 16:10, 21:9 and 32:9, a wider field of
-  view (up to 130%), PS4 Pro mode, high quality textures, 16x texture filtering, HDR
-  (experimental).
+  view (up to 130%), PS4 Pro mode, high quality textures, 16x texture filtering, grass and shadow
+  settings, HDR (experimental).
 - **Any controller or keyboard and mouse**: Xbox, DualShock 4, DualSense and others. The game shows
   the buttons of the device you use, Xbox and keyboard ones included. Keys and mouse buttons can
   be remapped, rumble strength adjusted.
@@ -48,9 +49,10 @@ focused on performance, weak hardware and ease of use.
 Keep your graphics driver up to date. Processors without AVX2 (Sandy/Ivy Bridge, AMD FX) are
 supported: a compatible build is selected automatically.
 
-**What you need from your console:** the game **CUSA08809**, preferably the European version with
-update **1.01** (60 FPS and some options need it). Either an unpacked folder (with `eboot.bin`
-inside) or the `.pkg` files of the game, the update and the DLC.
+**What you need from your console:** the game: the European version **CUSA08809** with update
+**1.01** (60 FPS and some options need the update) or the US version **CUSA08034** (1.00, the same
+executable: every option works). Either an unpacked folder (with `eboot.bin` inside) or the `.pkg`
+files of the game, the update and the DLC.
 
 ### Installation
 
@@ -95,7 +97,8 @@ connect at any time, also while playing.
 - **60 FPS** needs a noticeably stronger PC; the original game runs at 30 FPS on PS4.
 - With 2–4 GB of video memory, set **Video memory usage** to **Low** and, if needed, turn off
   **High quality textures**.
-- On a 4-thread processor, close background programs: the game uses every core.
+- On a 4-thread processor, close background programs: the game uses every core. Turning off
+  **Sun shadows** (Graphics > Effects) raises the FPS noticeably when the processor is the limit.
 
 ### Troubleshooting
 
@@ -144,9 +147,9 @@ file, so no `.sprx`/`.prx` can end up in a package by mistake.
 - [shadPS4](https://github.com/shadps4-emu/shadPS4) and
   [Pink-shadPS4](https://github.com/luizgustavs/Pink-shadPS4) (luizgustavs): the Vulkan video core
   and many game-specific fixes.
-- Community contributors: Oussama268, Lucas-blip-png, Gabriell-os, jownatan, DUDUYG, xeodeo,
-  nakaionyt / y7ngboy, tabnul, EdouardSence, Einar, KingJhoss, nosekefik, raulbezerro-dev and
-  everyone who reports problems with logs. 60 FPS patch: illusion (GoldHEN cheats).
+- Community contributors: Oussama268, Lucas-blip-png, tabnul, HiddenUserHere, Lukto02, NathanMBR,
+  InkAurora, Gabriell-os, jownatan, DUDUYG, xeodeo, nakaionyt / y7ngboy, EdouardSence, Einar,
+  KingJhoss, nosekefik, raulbezerro-dev and everyone who reports problems with logs. 60 FPS patch: illusion (GoldHEN cheats).
 
 ### License
 
@@ -177,11 +180,12 @@ source is its git tag.
 - **Игра проходится полностью**, включая финал, титры и DLC.
 - **Плавная игра на скромных компьютерах**: лаунчер подбирает подходящее разрешение рендера для
   слабых видеокарт, шейдеры подготавливаются один раз и не компилируются во время игры.
-- **NVIDIA DLSS и DLAA** на видеокартах GeForce RTX и **генерация кадров** (AMD FSR 3.1 на любой
-  видеокарте, NVIDIA DLSS-G на RTX 40/50) с чётким интерфейсом.
+- **NVIDIA DLSS и DLAA** на видеокартах GeForce RTX, в том числе в режиме PS4 Pro и при любом
+  соотношении сторон, и **генерация кадров** (AMD FSR 3.1 на любой видеокарте, NVIDIA DLSS-G на
+  RTX 40/50, до x6 на RTX 50) с чётким интерфейсом.
 - **30 или 60 FPS**, разрешения от 720p до 4K, широкие экраны 16:10, 21:9 и 32:9, расширенное поле
-  зрения (до 130%), режим PS4 Pro, текстуры высокого качества, анизотропная фильтрация 16x, HDR
-  (экспериментально).
+  зрения (до 130%), режим PS4 Pro, текстуры высокого качества, анизотропная фильтрация 16x,
+  настройки травы и теней, HDR (экспериментально).
 - **Любой геймпад или клавиатура и мышь**: Xbox, DualShock 4, DualSense и другие. Игра показывает
   кнопки используемого устройства, в том числе кнопки Xbox и клавиши клавиатуры. Клавиши и кнопки
   мыши переназначаются, сила вибрации настраивается.
@@ -205,9 +209,10 @@ source is its git tag.
 Рекомендуется использовать актуальный драйвер видеокарты. Процессоры без AVX2 (Sandy/Ivy Bridge,
 AMD FX) поддерживаются: совместимая сборка выбирается автоматически.
 
-**Что требуется с консоли:** игра **CUSA08809**, предпочтительно европейская версия с обновлением
-**1.01** (оно необходимо для 60 FPS и некоторых настроек). Подойдёт распакованная папка (с файлом
-`eboot.bin` внутри) или файлы `.pkg` игры, обновления и DLC.
+**Что требуется с консоли:** игра: европейская версия **CUSA08809** с обновлением **1.01** (оно
+необходимо для 60 FPS и некоторых настроек) или американская версия **CUSA08034** (1.00, тот же
+исполняемый файл: доступны все настройки). Подойдёт распакованная папка (с файлом `eboot.bin`
+внутри) или файлы `.pkg` игры, обновления и DLC.
 
 ### Установка
 
@@ -253,7 +258,9 @@ AMD FX) поддерживаются: совместимая сборка выб
   30 FPS.
 - При 2–4 ГБ видеопамяти установите **«Использование видеопамяти»** в значение **«Низкий»** и при
   необходимости отключите **«Текстуры высокого качества»**.
-- На процессоре с 4 потоками закройте фоновые программы: игра использует все ядра.
+- На процессоре с 4 потоками закройте фоновые программы: игра использует все ядра. Если
+  производительность ограничивает процессор, отключите **«Тени от солнца»** (Графика > Эффекты):
+  FPS заметно вырастет.
 
 ### Устранение неполадок
 
@@ -303,9 +310,9 @@ build.cmd
 - [shadPS4](https://github.com/shadps4-emu/shadPS4) и
   [Pink-shadPS4](https://github.com/luizgustavs/Pink-shadPS4) (luizgustavs) — видеоядро Vulkan и
   многие исправления для игры.
-- Участники сообщества: Oussama268, Lucas-blip-png, Gabriell-os, jownatan, DUDUYG, xeodeo,
-  nakaionyt / y7ngboy, tabnul, EdouardSence, Einar, KingJhoss, nosekefik, raulbezerro-dev и все,
-  кто сообщает о проблемах с приложенными журналами. Патч 60 FPS — illusion (GoldHEN cheats).
+- Участники сообщества: Oussama268, Lucas-blip-png, tabnul, HiddenUserHere, Lukto02, NathanMBR,
+  InkAurora, Gabriell-os, jownatan, DUDUYG, xeodeo, nakaionyt / y7ngboy, EdouardSence, Einar,
+  KingJhoss, nosekefik, raulbezerro-dev и все, кто сообщает о проблемах с приложенными журналами. Патч 60 FPS — illusion (GoldHEN cheats).
 
 ### Лицензия
 
