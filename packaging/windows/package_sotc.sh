@@ -58,6 +58,20 @@ if [[ -f "$streamline/sl.interposer.dll" ]]; then
 else
     echo "DLSS-G: no Streamline runtime in $streamline (FSR 3 only)" >&2
 fi
+# FSR 3 frame generation (vk_fsrfg.cpp): AMD's signed FidelityFX runtime next to bb-probe.exe, with
+# its MIT license. Not in git: FFX_DIR (default ../SotC-deps/fidelityfx-vk-1.1.4) holds
+# amd_fidelityfx_vk.dll and LICENSE.txt of the FidelityFX SDK 1.1.4 release
+# (github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK, PrebuiltSignedDLL). Without it the
+# package offers DLSS-G only.
+ffx=${FFX_DIR:-../SotC-deps/fidelityfx-vk-1.1.4}
+if [[ -f "$ffx/amd_fidelityfx_vk.dll" ]]; then
+    cp "$ffx/amd_fidelityfx_vk.dll" "$dest/bin/"
+    mkdir -p "$dest/bin/licenses-amd"
+    cp "$ffx/LICENSE.txt" "$dest/bin/licenses-amd/FidelityFX-SDK-LICENSE.txt"
+    echo "FSR 3: AMD FidelityFX runtime included"
+else
+    echo "FSR 3: no FidelityFX runtime in $ffx (DLSS-G only)" >&2
+fi
 cp scripts/prepare.py scripts/link_libc.py scripts/link_modules.py scripts/content_profile.py \
    scripts/sotc_cpu.py scripts/sotc_modes.py "$dest/scripts/"
 cp sotc.py SotC.bat LICENSE CHANGELOG.md "$dest/"
