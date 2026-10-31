@@ -352,10 +352,15 @@ static void touch_for_write(void *buffer,uint64_t size) {
  * noticing, and the GPU keeps a stale copy (Shadow of the Colossus streams shaders, textures
  * and descriptors straight from the pak files into GPU-read memory while loading). */
 #define BOUNCE_LIMIT (UINT64_C(64) << 20)
+/* sotc: what a thread keeps between reads (idea from PR #308, Lukto02). It used to grow to
+ * BOUNCE_LIMIT and stay, 64 MiB per reading thread; a larger read now stages through a buffer of
+ * its own, freed after it (bounce_release). */
+#define BOUNCE_KEEP (UINT64_C(8) << 20)
 static _Thread_local unsigned char *bounce;
 static _Thread_local uint64_t bounce_size;
 static unsigned char *bounce_buffer(uint64_t size) {
     if (size>BOUNCE_LIMIT) return NULL;
+    if (size>BOUNCE_KEEP) return malloc(size);
     if (bounce_size<size) {
         uint64_t want=size<UINT64_C(1)<<20 ? UINT64_C(1)<<20 : size;
         unsigned char *next=realloc(bounce,want);
@@ -364,14 +369,17 @@ static unsigned char *bounce_buffer(uint64_t size) {
     }
     return bounce;
 }
+static void bounce_release(unsigned char *staging) { if (staging!=bounce) free(staging); }
 static int64_t do_read(int fd,void *buffer,uint64_t size) {
     int h=host_fd(fd);
     if (h<0) return -EBADF;
     unsigned char *staging=bounce_buffer(size);
     if (staging) {
         ssize_t n=TIMED_READ(host_read(h,staging,size));
-        if (n<0) return -errno;
-        memcpy(buffer,staging,(size_t)n);
+        const int error=errno;
+        if (n>0) memcpy(buffer,staging,(size_t)n);
+        bounce_release(staging);
+        if (n<0) return -error;
         __atomic_add_fetch(&reads,1,__ATOMIC_RELAXED); __atomic_add_fetch(&bytes_read,(uint64_t)n,__ATOMIC_RELAXED);
         return n;
     }
@@ -387,8 +395,10 @@ static int64_t do_pread(int fd,void *buffer,uint64_t size,int64_t offset) {
     unsigned char *staging=bounce_buffer(size);
     if (staging) {
         ssize_t n=TIMED_READ(pread(h,staging,size,offset));
-        if (n<0) return -errno;
-        memcpy(buffer,staging,(size_t)n);
+        const int error=errno;
+        if (n>0) memcpy(buffer,staging,(size_t)n);
+        bounce_release(staging);
+        if (n<0) return -error;
         __atomic_add_fetch(&reads,1,__ATOMIC_RELAXED); __atomic_add_fetch(&bytes_read,(uint64_t)n,__ATOMIC_RELAXED);
         return n;
     }
