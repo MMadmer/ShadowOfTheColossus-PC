@@ -49,9 +49,9 @@ focused on performance, weak hardware and ease of use.
 Keep your graphics driver up to date. Processors without AVX2 (Sandy/Ivy Bridge, AMD FX) are
 supported: a compatible build is selected automatically.
 
-**What you need from your console:** the game: the European version **CUSA08809** with update
-**1.01** (60 FPS and some options need the update) or the US version **CUSA08034** (1.00, the same
-executable: every option works). Either an unpacked folder (with `eboot.bin` inside) or the `.pkg`
+**What you need from your console:** the game: the European version **CUSA08809** (with or without
+update **1.01**) or the US version **CUSA08034**; both run the same executable and every option
+works. Either an unpacked folder (with `eboot.bin` inside) or the `.pkg`
 files of the game, the update and the DLC.
 
 ### Installation
@@ -209,9 +209,9 @@ source is its git tag.
 Рекомендуется использовать актуальный драйвер видеокарты. Процессоры без AVX2 (Sandy/Ivy Bridge,
 AMD FX) поддерживаются: совместимая сборка выбирается автоматически.
 
-**Что требуется с консоли:** игра: европейская версия **CUSA08809** с обновлением **1.01** (оно
-необходимо для 60 FPS и некоторых настроек) или американская версия **CUSA08034** (1.00, тот же
-исполняемый файл: доступны все настройки). Подойдёт распакованная папка (с файлом `eboot.bin`
+**Что требуется с консоли:** игра: европейская версия **CUSA08809** (с обновлением **1.01** или без
+него) или американская версия **CUSA08034**; обе используют один исполняемый файл, доступны все
+настройки. Подойдёт распакованная папка (с файлом `eboot.bin`
 внутри) или файлы `.pkg` игры, обновления и DLC.
 
 ### Установка

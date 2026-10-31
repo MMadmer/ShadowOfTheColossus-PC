@@ -217,7 +217,7 @@ TEXTS = {
         'Sombras del sol',
         'Тени от солнца',
         '太阳阴影',
-        '太陽光の影',
+        '太陽の影',
         '태양 그림자',
     ),
     'Desativar aumenta o FPS quando o processador limita o desempenho.': (
@@ -2406,14 +2406,14 @@ TEXTS = {
     ),
     'Distância do mato': (
         'Distancia de la maleza',
-        'Дальность кустарника',
+        'Дальность высокой травы',
         '杂草距离',
         '雑草の描画距離',
         '잡초 거리',
     ),
     'Altura do mato': (
         'Altura de la maleza',
-        'Высота кустарника',
+        'Высота высокой травы',
         '杂草高度',
         '雑草の高さ',
         '잡초 높이',

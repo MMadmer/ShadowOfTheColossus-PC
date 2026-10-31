@@ -118,7 +118,14 @@ def run_role(argv):
     try:
         runpy.run_path(path, run_name='__main__')
     except SystemExit as stop:
-        return stop.code if isinstance(stop.code, int) else (0 if stop.code is None else 1)
+        if isinstance(stop.code, int):
+            return stop.code
+        if stop.code is not None:
+            # As the Python executable does: the message of SystemExit('...') goes to stderr
+            # (a cvar sotc_modes rejects, a missing file), or the game stopped with no reason.
+            print(stop.code, file=sys.stderr)
+            return 1
+        return 0
     return 0
 
 
@@ -693,7 +700,8 @@ def start_event_log(log_dir, settings, env):
         _('Windows {} | jogo: {}', 'Windows {} | game: {}').format(platform.version(), settings.get('game_dir') or '?'),
         _('Saída: {} | Upscaler: {} | Nitidez: {} | DLSS: {}', 'Output: {} | Upscaler: {} | Sharpening: {} | DLSS: {}').format(
             words(OUTPUTS, 'output_res', '1920x1080'), words(UPSCALERS, 'upscaler', 'fsr1'),
-            words(SHARPNESS, 'sharpness', '250'), (dlss_mode(settings) or 'off') if env.get('SOTC_UPSCALER') else 'off'),
+            words(SHARPNESS, 'sharpness', '250'),
+            words(DLSS_MODES, 'dlss', 'off') if env.get('SOTC_UPSCALER') else _(*dict(DLSS_MODES)['off'])),
         _('FPS: {} | Texturas: {} | Filtro 16x: {} | Modo PS4 Pro: {} | Campo de visão: {}',
           'FPS: {} | Textures: {} | 16x filtering: {} | PS4 Pro mode: {} | Field of view: {}').format(
             words(FPS_MODES, 'fps_mode', '30'), words(TEXTURES, 'textures', 'high'), on_off(settings.get('af16')),
@@ -788,6 +796,12 @@ def migrate_settings(s):
         s['skip_intro'] = 'off'
     if s.pop('button_icons', None) == 'xbox' and not s.get('pad_glyphs'):
         s['pad_glyphs'] = 'xbox'
+    # The upstream launcher (0.70) chose DLSS as an upscaler with its own mode key; here DLSS has
+    # a choice of its own, FSR 1 stays the upscaler of frames without the game's scene.
+    if s.get('upscaler') == 'dlss':
+        s['upscaler'] = 'fsr1'
+        if s.get('dlss', 'off') == 'off':
+            s['dlss'] = s.get('dlss_mode') if s.get('dlss_mode') in DLSS_FACTORS else 'quality'
     # Older launchers copied shadPS4's sound modules into user/sys_modules on their own; that copy
     # is dropped for the port's own sound library (a folder chosen by hand stays).
     if not s.get('own_sound_default'):
@@ -1045,11 +1059,26 @@ def dlss_render(output, mode):
         w, h = map(int, output.split('x'))
     except ValueError:
         return output
-    target = h / DLSS_FACTORS.get(mode, 1.5)
-    exact = [rh for rh in range(360, h + 1, 8) if rh * w % (h * 8) == 0 and abs(rh - target) <= target * 0.06]
-    rh = min(exact, key=lambda rh: abs(rh - target)) if exact else max(360, round(target / 8) * 8)
-    rw = max(640, round(rh * w / h / 8) * 8)
-    return f'{rw}x{rh}'
+    factor = DLSS_FACTORS.get(mode, 1.5)
+    if factor == 1.0 and 1152 < w <= 1280:
+        factor = w / 1152  # sotc_modes.py would widen it past the output (row pitch 1280)
+    target = h / factor
+
+    def width(rh):
+        return max(640, round(rh * w / h / 8) * 8)
+
+    sizes = [rh for rh in range(360, h + 1, 8) if not 1152 < width(rh) <= 1280]
+    exact = [rh for rh in sizes if rh * w % (h * 8) == 0]
+    rh = max(360, round(target / 8) * 8)
+    near = [s for s in exact if abs(s - target) <= target * 0.06]
+    if 1152 < width(rh) <= 1280:
+        # Widths of 1153 to 1280 are widened by sotc_modes.py with a height rounded to 8, a shape
+        # off the output's (1920x1080 Quality: 1296x728, one black row): the exact aspect within
+        # 15% of the target outside them, the larger one on a tie, else the nearest allowed size.
+        near = near or [s for s in exact if abs(s - target) <= target * 0.15] or sizes
+    if near:
+        rh = min(near, key=lambda s: (abs(s - target), -s))
+    return f'{width(rh)}x{rh}'
 
 
 def is_wide(size):
@@ -1596,7 +1625,8 @@ class Launcher:
         self.render_note = self.state_note(f)
         self.dlss_box = self.choice(f, 'dlss', DLSS_MODES)
         self.row(f, 'NVIDIA DLSS', self.dlss_box,
-                 _('Substitui a resolução de render.', 'Replaces the render resolution.'))
+                 _('Substitui a resolução de render; no modo PS4 Pro, amplia a imagem do próprio Pro.',
+                   'Replaces the render resolution; in PS4 Pro mode it upscales the Pro\'s own image.'))
         self.dlss_note = self.state_note(f)
         self.row(f, _('Resolução de saída', 'Output resolution'), self.choice(f, 'output_res', OUTPUTS),
                  _('Em telas ultralargas, menus e vídeos podem aparecer esticados.',
@@ -1775,8 +1805,10 @@ class Launcher:
         self.section(f, _('Teclas no jogo', 'In-game keys'))
         for key, text in (('F5', _('Salva as texturas do quadro atual em user/log/texcap_N.',
                                     'Saves the textures of the current frame to user/log/texcap_N.')),
-                          ('F9', _('Recarrega as texturas da memória do jogo.',
-                                   'Reloads the textures from game memory.'))):
+                          ('F9', _('Recarrega as texturas da memória do jogo (com a comparação do DLSS: '
+                                   'alterna entre DLSS e FSR 1).',
+                                   'Reloads the textures from game memory (with the DLSS comparison: switches '
+                                   'between DLSS and FSR 1).'))):
             self.row(f, key, self.ttk.Label(f, text=text))
 
     def build_advanced(self):
@@ -2730,6 +2762,16 @@ def play_without_window(settings):
         write_key_bindings(settings.get('keys'), settings.get('mouse_buttons'))
     except OSError:
         pass
+    # The in-game menu replaces only keys already in the settings file: the ones added since the
+    # file was last written by the launcher window go in first, or their changes were lost.
+    saved = load_json(settings_in_use, {})
+    if saved and any(key not in saved for key in Launcher.LIVE_KEYS):
+        try:
+            missing = {key: settings[key] for key in Launcher.LIVE_KEYS if key not in saved}
+            settings_in_use.write_text(json.dumps({**saved, **missing}, indent=2, ensure_ascii=False),
+                                       encoding='utf-8')
+        except OSError:
+            pass
     with open_session_log(log_dir) as log:
         env = game_environment(settings)
         env['SOTC_EVENT_LOG'] = start_event_log(log_dir, settings, env)

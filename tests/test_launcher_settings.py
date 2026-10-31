@@ -57,7 +57,7 @@ class GpuChoiceTests(unittest.TestCase):
 
     def test_dlss_modes(self):
         # The render size is the output divided by the mode's factor; DLAA renders at the output.
-        for mode, render in (('dlaa', '1920x1080'), ('quality', '1280x720'), ('balanced', '1152x648'),
+        for mode, render in (('dlaa', '1920x1080'), ('quality', '1408x792'), ('balanced', '1152x648'),
                              ('performance', '968x544'), ('ultra', '640x360')):
             env = self.env(dlss=mode, render_res='res900', gpu_name=RTX_3070)
             self.assertEqual(env['SOTC_UPSCALER'], 'dlss')

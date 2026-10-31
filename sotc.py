@@ -26,8 +26,8 @@ start makes it from sotc.ini.example):
                       res720/res810/res900/res960 (render below 1080p, the game scales up; a
                       render size of another shape, SOTC_RENDER_RES, takes their place);
                       res360/res540/res630 are the DLSS modes' sizes
-    SOTC_DLSS         off, quality, balanced, performance, ultra or dlaa: NVIDIA DLSS Super
-                      Resolution upscales the render (GeForce RTX; with a res<height> mode)
+    SOTC_UPSCALER     dlss: NVIDIA DLSS Super Resolution upscales the render (GeForce RTX; the
+                      launcher sets SOTC_RENDER_RES to the output divided by the mode's factor)
     SOTC_PROBE_COMPAT 1 starts bb-probe-compat.exe (x86-64-v2), 0 bb-probe.exe (x86-64-v3); by
                       default the one the CPU runs
     SOTC_RENDER_RES   optional: the game renders at WxH instead of 1920x1080 (e.g. 2560x1080 for

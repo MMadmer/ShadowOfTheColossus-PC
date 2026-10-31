@@ -14,8 +14,8 @@ Writes two files for the loader:
                    res720, res810, res900, res960  render resolution below the 1080p output
                           (the engine scales the frame up, as the Pro does from 1440p to 4K);
                           not with --render, whose size takes their place. res360, res540 and
-                          res630 are the DLSS Ultra Performance, Performance and Balanced sizes
-                          (res720: Quality; SOTC_DLSS upscales the scene in the GPU library)
+                          res630 are 1080p's Ultra Performance, Performance and Balanced sizes
+                          (res720: Quality; DLSS itself is SOTC_UPSCALER=dlss in the GPU library)
                    --render WxH (e.g. 3840x1600)  the game renders at this size instead of
                           1920x1080, with its aspect for the cameras (Hor+: a wider view, not a
                           stretched one); PS4 mode only, the PS4 Pro path keeps its sizes
@@ -170,7 +170,7 @@ VERSION_CHECKS = [(CMDLINE_LEA, bytes.fromhex('488d352debad00')), (0x01390090, b
                   RENDER_WIDTH, RENDER_HEIGHT]
 # NAME=VALUE, NAME(ARGS) or a flag such as nointro. A vector value takes the parentheses form: a
 # value after '=' cannot hold commas (tabnul, PR #345).
-CVAR = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*((=[-+.0-9A-Za-z_%]+)|(\([-+.0-9A-Za-z_,% ]*\)))?$')
+CVAR = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*((=[-+.0-9A-Za-z_%]+)|(\([-+.0-9A-Za-z_,%]*\)))?$')
 
 
 def image_bytes(elf, ph, vaddr, length):
