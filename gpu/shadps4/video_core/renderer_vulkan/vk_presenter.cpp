@@ -509,6 +509,7 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
         Dlssg::Enabled() || FrameGen::AskedAtStart() ? std::max(num_images, 4u) : num_images;
     present_frames.resize(num_frames);
     hudless_frames.resize(num_frames);
+    rasterizer->SetHudlessUiFrames(num_frames);
     for (u32 i = 0; i < num_frames; i++) {
         Frame& frame = present_frames[i];
         frame.id = i;
@@ -549,6 +550,7 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
     SotcStats::warmup_finished.store(true, std::memory_order_relaxed);
     warming.store(false, std::memory_order_relaxed);
     painter.join();
+    window.RequestRaise();
 }
 
 Presenter::~Presenter() {

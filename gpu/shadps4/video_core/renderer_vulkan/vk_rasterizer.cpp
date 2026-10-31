@@ -174,6 +174,9 @@ Rasterizer::~Rasterizer() {
     for (auto& [address, image] : hudless_images) {
         DestroyHudless(image);
     }
+    for (auto& slot : hudless_ui) {
+        DestroyHudless(slot.copy);
+    }
     DestroyHudless(hudless_clear);
     DestroyHudless(ui_shadow);
 }
@@ -1071,6 +1074,15 @@ vk::ImageView Rasterizer::HudlessUi(VAddr address, u32& width, u32& height) {
     width = slot.copy.width;
     height = slot.copy.height;
     return slot.copy.rt_view;
+}
+
+void Rasterizer::SetHudlessUiFrames(u32 frames) {
+    // A composite's copy is read when the present thread composes its frame. Ahead of it: the
+    // other queued presentation frames and the composite being drawn, which copies before its
+    // flip waits for a free frame. With 4 copies and 4 frames the newest one overwrote the copy
+    // still to be read once the queue was full (GPU bound, 1440p): another frame's UI alpha
+    // mixed the real frame into generated ones, a dark lagging rectangle (1.2.0).
+    hudless_ui.resize(std::max<size_t>(hudless_ui.size(), frames + 2));
 }
 
 vk::ImageView Rasterizer::TakeHudless(VAddr address, vk::Format format) {

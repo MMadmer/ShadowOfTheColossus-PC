@@ -712,13 +712,20 @@ vk::Image Generate(vk::CommandBuffer cmdbuf, u32 frame_id, vk::Image frame_image
         .pImageMemoryBarriers = post.data(),
     });
     // sotc: the frame without the HUD (Rasterizer::TakeHudless): FSR 3.1 interpolates only the
-    // scene, and PutHudBack lays the real frame's HUD over it, instead of moving the HUD with
-    // the scene (text and bars smeared, the stamina circle doubled). The SDK's own HUD-less
-    // composition (it adds the difference of the two frames, in 8x8 blocks of its motion) is
-    // not used. Same conversion as the game frame.
+    // scene instead of moving the HUD with it (text and bars smeared, the stamina circle
+    // doubled). The SDK composes the HUD itself, as in Dead Air Refined: the HUD-less frame is
+    // its interpolation source and the HUD the difference to the real frame
+    // (currentBackBuffer_HUDLess, gpu/CMakeLists.txt). SOTC_FG_HUD_PASS=1: PutHudBack lays the
+    // real frame's HUD over the generated scene by the UI layer's alpha instead; it showed a dark
+    // rectangle trailing the camera where that alpha did not match the frame (1.2.0). Same
+    // conversion as the game frame.
+    static const bool own_hud_pass = [] {
+        const char* v = std::getenv("SOTC_FG_HUD_PASS");
+        return v && v[0] == '1';
+    }();
     sotc_fsrfg_hudless = {};
-    const bool hud_pass = hudless_image && hud_pipeline;
-    if (hud_pass) {
+    const bool hud_pass = hudless_image && own_hud_pass && hud_pipeline;
+    if (hudless_image) {
         const std::array hudless_pre{
             Barrier(hudless_image, vk::PipelineStageFlagBits2::eAllCommands,
                     vk::AccessFlagBits2::eMemoryWrite, vk::ImageLayout::eGeneral,
@@ -753,6 +760,10 @@ vk::Image Generate(vk::CommandBuffer cmdbuf, u32 frame_id, vk::Image frame_image
 
     const auto color_in = FgImage(hud_pass ? hudless_color.image : color.image, kColorFormat,
                                   width, height, vk::ImageLayout::eGeneral, kImageUsage);
+    if (hudless_image && !hud_pass) {
+        sotc_fsrfg_hudless = FgImage(hudless_color.image, kColorFormat, width, height,
+                                     vk::ImageLayout::eGeneral, kImageUsage);
+    }
     FfxVkFsr3_3_1_6FrameGenerationPrepareInfo prepare{};
     prepare.commandBuffer = static_cast<VkCommandBuffer>(cmdbuf);
     prepare.color = color_in;

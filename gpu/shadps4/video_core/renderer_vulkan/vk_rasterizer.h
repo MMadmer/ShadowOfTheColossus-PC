@@ -154,6 +154,9 @@ public:
     /// layout ShaderReadOnlyOptimal, kept for the next few composites), its alpha composes the
     /// HUD over generated frames; a null view when there is none.
     vk::ImageView HudlessUi(VAddr address, u32& width, u32& height);
+    /// sotc: the presenter's number of presentation frames, before the first frame: sizes the
+    /// ring of UI copies (HudlessUi).
+    void SetHudlessUiFrames(u32 frames);
 
 private:
     void PrepareRenderState(const GraphicsPipeline* pipeline);
@@ -352,12 +355,12 @@ private:
     };
     void DestroyHudless(HudlessImage& image);
     /// sotc: copies of the composite's UI layer (HudlessUi), a ring: the present thread reads one
-    /// a frame or two after the composite.
+    /// when it composes that frame, after every queued presentation frame (SetHudlessUiFrames).
     struct HudlessUiCopy {
         HudlessImage copy;
         VAddr address{};
     };
-    std::array<HudlessUiCopy, 4> hudless_ui{};
+    std::vector<HudlessUiCopy> hudless_ui = std::vector<HudlessUiCopy>(4);
     u32 hudless_ui_next{};
     s32 hudless_ui_taken{-1}; ///< the copy of the last TakeHudless, -1 none
     std::unordered_map<VAddr, HudlessImage> hudless_images; ///< by video out address
