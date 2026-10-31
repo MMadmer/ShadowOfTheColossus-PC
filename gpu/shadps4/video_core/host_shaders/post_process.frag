@@ -124,13 +124,15 @@ void main() {
         }
         color_linear = vec4(clamp(color_linear.rgb, 0.0, 1.0) * (1.0 - ui.a) + ui.rgb, 1.0);
     }
+    // sotc: alpha 1 always. An unscaled frame (render size = output, FSR 1 skipped) carries the
+    // game's own alpha, and NVIDIA's DXGI-layered present blends a borderless window with the
+    // desktop by it despite the opaque swapchain (see-through, flickering with frame generation).
     if (pp.hdr) {
         // sotc: the game's own BT.2020 PQ output has its white at about 100 nits, too dim next
         // to the desktop; scaled to the paper white.
-        color = vec4(pqEncode(pqDecode(color_linear.rgb) * (pp.hdr_white / 100.0)),
-                     color_linear.a);
+        color = vec4(pqEncode(pqDecode(color_linear.rgb) * (pp.hdr_white / 100.0)), 1.0);
     } else {
         if (pp.srgb_input) color_linear.rgb = degamma(color_linear.rgb);
-        color = vec4(gamma(color_linear.rgb), color_linear.a);
+        color = vec4(gamma(color_linear.rgb), 1.0);
     }
 }

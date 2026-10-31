@@ -52,6 +52,9 @@ shaders é refeito na primeira abertura.
 - **Placas AMD:** falta de memória de vídeo com orçamento livre (RX 9070 XT, #293) e formatos de
   descritor inválidos já não fecham o jogo; uma textura MSAA inválida não interrompe o tradutor de
   shaders (#255). `SOTC_GCN_NV=1` (teste para RX 400/500) usa as opções de shader da NVIDIA.
+- **Janela transparente e piscando** em tela cheia em janela com placas NVIDIA quando o jogo
+  renderiza na resolução de saída (padrão da 0.70 acima de 1080p): o canal alfa do próprio jogo
+  chegava à tela e a área de trabalho aparecia através da imagem, mais com a geração de quadros.
 - **HDR:** com FSR 1 a imagem ficava escura demais; branco de referência em 200 nits
   (`SOTC_HDR_WHITE`).
 - **Som baixo** em saídas estéreo (#214): o som de 8 canais é mixado para estéreo pelo port, com os
