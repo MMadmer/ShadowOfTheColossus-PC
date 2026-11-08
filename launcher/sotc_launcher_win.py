@@ -1656,7 +1656,7 @@ class Launcher(sotc_search.SearchMixin, sotc_pad.PadMixin):
         self.build_log()
         self.root.bind_all('<MouseWheel>', self.wheel)
         for key in ('dlss', 'upscaler', 'fsr4_mode', 'output_res', 'neo'):
-            self.vars[key].trace_add('write', lambda *_a: self.refresh_upscaling())
+            self.var(key).trace_add('write', lambda *_a: self.refresh_upscaling())
         self.vars['dlss'].trace_add('write', lambda *_a: self.refresh_status())
         self.refresh_gpu_choices()
         self.page_titles['log'] = _('Registro do jogo', 'Game log')
