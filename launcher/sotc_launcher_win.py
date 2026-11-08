@@ -2554,9 +2554,9 @@ class Launcher(sotc_search.SearchMixin, sotc_pad.PadMixin):
                'the game on an SSD or NVMe drive: on a hard disk area changes stutter far more.'), []),
             (_('FPS baixo', 'Low frame rate'),
              _('Escolha o Modo de jogo Normal ou Pro, ou 30 FPS. Feche programas por cima do jogo (OBS, RTSS, '
-               'Afterburner, gravação do Windows). Em placas com pouca memória, use "Uso de memória de vídeo" Econômico.',
+               'Afterburner, gravação do Windows). Em placas com pouca memória, use "Uso de memória de vídeo" Baixo.',
                'Choose the Normal or Pro play mode, or 30 FPS. Close programs over the game (OBS, RTSS, Afterburner, '
-               'Windows recording). On cards with little memory, set "Video memory use" to Economy.'),
+               'Windows recording). On cards with little memory, set "Video memory use" to Low.'),
              [(_('Modo de jogo', 'Play mode'), lambda: self.jump_key('play_mode'), False),
               (_('Memória de vídeo', 'Video memory'), lambda: self.jump_key('vram_use'), False)]),
             (_('Texturas coloridas (mosaico) ou borradas', 'Coloured (mosaic) or blurry textures'),
