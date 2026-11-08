@@ -2279,6 +2279,7 @@ void BufferCache::ReleaseMemory(VAddr device_addr, u64 size) {
     ProcessPendingReleases();
     // The work recorded so far may still use the range: released once the GPU did it.
     pending_releases.push_back({first_block, end_block, scheduler.CurrentTick()});
+    ++resident_version; // sotc: a reused bind (TryReuseBindings) skips EnsureResident's guard
     SotcStats::release_queued.fetch_add(1, std::memory_order_relaxed);
     SotcStats::release_pending_blocks.fetch_add(end_block - first_block, std::memory_order_relaxed);
 }
