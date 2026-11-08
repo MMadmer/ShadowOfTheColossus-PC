@@ -386,9 +386,15 @@ public:
     /// Updates image contents if it was modified by CPU.
     void UpdateImage(ImageId image_id) {
         std::unique_lock lk{mutex, std::defer_lock};
-        LockCounted(lk);
+        {
+            const SotcStats::SplitTimer lock_split{SotcStats::SplitTexLock};
+            LockCounted(lk);
+        }
         Image& image = slot_images[image_id];
-        TrackImage(image_id);
+        {
+            const SotcStats::SplitTimer track_split{SotcStats::SplitTexTrack};
+            TrackImage(image_id);
+        }
         TouchImage(image);
         RefreshImage(image);
     }
@@ -566,6 +572,11 @@ public:
         }
     }
 
+    /// sotc: SOTC_RB_TEX_WATCH=1: a GPU readback about to be written over a block-compressed
+    /// texture the GPU never wrote (a material texture) is logged: the colour garbage after loads.
+    static bool ReadbackWatchEnabled();
+    void NoteReadbackOverTexture(VAddr addr, u64 size, bool hot);
+
 private:
     /// Iterate over all page indices in a range
     template <typename Func>
@@ -645,6 +656,11 @@ private:
     /// sotc: SOTC_POOL_WATCH=1: logs game page pool pages freed under images still in use.
     void PoolWatch();
     static bool PoolWatchEnabled();
+    /// sotc: SOTC_POOL_FREEZE=1: images the game freed pool pages under while drawing them keep
+    /// their uploaded contents for SOTC_POOL_FREEZE_TICKS (T51).
+    void PoolFreeze();
+    /// sotc: SOTC_POOL_WATCH: an image the game freed pages under is looked up again (drawn).
+    void PoolWatchLookup(ImageId image_id, const Image& image, const ImageViewInfo& view);
 
     /// sotc: mip-tail images (SOTC_MIP_TAIL), see DecideRebase.
     bool IsSafeToDelete(const Image& image) const;

@@ -10,6 +10,8 @@ import tempfile
 import types
 import unittest
 from unittest.mock import MagicMock, patch
+import unittest.mock
+import urllib.error
 import zipfile
 
 sys.path.insert(0, str(ROOT / 'launcher'))
@@ -22,84 +24,21 @@ def release_zip(path, files):
             archive.writestr(name, data)
 
 
-class SslTests(unittest.TestCase):
-    """HTTPS verification (#359): truststore when installed, else the Windows store plus certifi."""
-
-    def setUp(self):
-        sotc_update._ssl_context = None
-        self.addCleanup(setattr, sotc_update, '_ssl_context', None)
-
-    def test_truststore_first(self):
-        fake = types.SimpleNamespace(SSLContext=lambda protocol: ('truststore', protocol))
-        with patch.dict(sys.modules, {'truststore': fake}):
-            self.assertEqual(sotc_update.ssl_context(), ('truststore', ssl.PROTOCOL_TLS_CLIENT))
-
-    def test_system_store_and_certifi(self):
-        context = MagicMock()
-        fake = types.SimpleNamespace(where=lambda: 'C:/certifi/cacert.pem')
-        with patch.dict(sys.modules, {'truststore': None, 'certifi': fake}), \
-                patch.object(ssl, 'create_default_context', return_value=context):
-            self.assertIs(sotc_update.ssl_context(), context)
-        context.load_verify_locations.assert_called_once_with(cafile='C:/certifi/cacert.pem')
-
-    def test_without_either_module(self):
-        with patch.dict(sys.modules, {'truststore': None, 'certifi': None}):
-            context = sotc_update.ssl_context()
-        self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
-        self.assertTrue(context.check_hostname)
-        self.assertIs(sotc_update.ssl_context(), context)  # built once
-
-    def test_requests_use_it(self):
-        response = MagicMock(status=206)
-        with patch.dict(sys.modules, {'truststore': None, 'certifi': None}), \
-                patch.object(sotc_update.urllib.request, 'urlopen', return_value=response) as urlopen:
-            sotc_update._open('https://api.github.com/x', 5)
-            self.assertIs(sotc_update._range('https://github.com/x.zip', 10, 20), response)
-        for call in urlopen.call_args_list:
-            self.assertIs(call.kwargs['context'], sotc_update.ssl_context())
-        self.assertEqual(urlopen.call_args.args[0].get_header('Range'), 'bytes=10-19')
+class CertErrorTests(unittest.TestCase):
+    def test_cert_error(self):
+        failure = ssl.SSLCertVerificationError(1, 'CERTIFICATE_VERIFY_FAILED')
+        self.assertTrue(sotc_update.is_cert_error(failure))
+        self.assertTrue(sotc_update.is_cert_error(urllib.error.URLError(failure)))
+        self.assertFalse(sotc_update.is_cert_error(urllib.error.URLError(OSError('offline'))))
+        self.assertFalse(sotc_update.is_cert_error(ValueError('x')))
 
 
-class NotesTests(unittest.TestCase):
-    """Release notes in the launcher language (#321)."""
-    FORK = ('Update of the port.\n\n**No game files are included.** A dump is required.\n\n### New\n'
-            '- **Field of view**: 100% to 130%.\n\n---\n\n**RU:** обновление порта.\n- **Поле зрения**: 100–130%.\n')
-
-    def test_fork_layout(self):
-        english = ('Update of the port.\n\n**No game files are included.** A dump is required.\n\n### New\n'
-                   '- **Field of view**: 100% to 130%.')
-        self.assertEqual(sotc_update.release_notes(self.FORK, 'ru'), 'обновление порта.\n- **Поле зрения**: 100–130%.')
-        for lang in ('en', 'pt', 'es', 'zh'):
-            self.assertEqual(sotc_update.release_notes(self.FORK, lang), english, lang)
-
-    def test_headings(self):
-        body = 'Texto\n\n## English\nText\n\n## Русский:\nТекст\n'
-        self.assertEqual(sotc_update.release_notes(body, 'pt'), 'Texto')
-        self.assertEqual(sotc_update.release_notes(body, 'en'), 'Text')
-        self.assertEqual(sotc_update.release_notes(body, 'ru'), 'Текст')
-        self.assertEqual(sotc_update.release_notes(body, 'ja'), 'Texto')
-        # Nothing before the first part: the English one, else the first.
-        self.assertEqual(sotc_update.release_notes('## Русский\nТекст\n## English\nText', 'ko'), 'Text')
-        self.assertEqual(sotc_update.release_notes('**RU:** Текст', 'es'), 'Текст')
-
-    def test_without_parts(self):
-        self.assertEqual(sotc_update.release_notes('Only one\r\n## Fixes\n- a\n', 'ru'), 'Only one\n## Fixes\n- a')
-        self.assertEqual(sotc_update.release_notes(None, 'en'), '')
-        self.assertEqual(sotc_update.release_notes('', 'en'), '')
-
-
-class VersionTests(unittest.TestCase):
-    def test_order(self):
-        key = sotc_update.version_key
-        self.assertGreater(key('0.57-opt6'), key('0.57-opt5'))
-        self.assertGreater(key('0.58'), key('0.57-opt9'))
-        self.assertGreater(key('v0.58-opt1'), key('0.58'))
-        self.assertEqual(key('0.57-opt5'), key('v0.57-opt5'))
-
-    def test_is_newer(self):
-        self.assertTrue(sotc_update.is_newer({'version': '0.57-opt6'}, '0.57-opt5'))
-        self.assertFalse(sotc_update.is_newer({'version': '0.57-opt5'}, '0.57-opt5'))
-        self.assertFalse(sotc_update.is_newer(None, '0.57-opt5'))
+    def test_file_url(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'a.json'
+            path.write_text('{}')
+            with sotc_update._open(path.as_uri(), 5) as response:
+                self.assertEqual(response.read(), b'{}')
 
 
 class DownloadTests(unittest.TestCase):

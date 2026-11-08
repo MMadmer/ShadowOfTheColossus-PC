@@ -46,6 +46,37 @@ std::mutex m_request{};
 mz_zip_archive zip_ar{};
 bool ar_is_read_only{true};
 
+// sotc: the test switches that change how shaders are translated, which the cache keys do not
+// see: with any of them set the cache goes to a folder of its own ("_t" and a hash of their
+// values), so switching a test on or off never reuses shaders of the other setting and needs no
+// "Clear shader cache".
+std::string ShaderTestTag() {
+    static constexpr const char* switches[] = {
+        "SOTC_NAN_GUARD", "SOTC_AMD_AS_NV", "SOTC_MANUAL_INTERP", "SOTC_NO_EXPLICIT_VERTEX",
+        "SOTC_NO_RTZ", "SOTC_CLIP_EMU", "SOTC_WAVE64_UNIFORM", "SOTC_WAVE64_IDENTITY",
+        "SOTC_LDS_BARRIERS", "SOTC_LDS_SMALL", "SOTC_AMD64_LDS", "SHADPS4_IEEE_MINMAX", "SOTC_WQM_COPY"};
+    u64 hash = 1469598103934665603ULL;
+    bool any = false;
+    for (const char* name : switches) {
+        const char* value = std::getenv(name);
+        if (!value) {
+            continue;
+        }
+        any = true;
+        for (const char* p : {name, "=", value, ";"}) {
+            for (; *p; ++p) {
+                hash = (hash ^ u8(*p)) * 1099511628211ULL;
+            }
+        }
+    }
+    if (!any) {
+        return {};
+    }
+    char tag[24];
+    std::snprintf(tag, sizeof(tag), "_t%08x", static_cast<u32>(hash ^ (hash >> 32)));
+    return tag;
+}
+
 } // namespace
 
 namespace Storage {
@@ -145,7 +176,8 @@ void DataBase::Open() {
                       (Libraries::Kernel::sceKernelIsNeoMode() ? "_neo" : "") +
                       (Shader::Optimization::Wave64UniformBranchesEnabled() ? "" : "_w64off") +
                       (SotcStats::vertex_input_static.load(std::memory_order_relaxed) ? "_novid" : "") +
-                      (SotcStats::gcn_nv_paths.load(std::memory_order_relaxed) ? "_gcnnv" : ""));
+                      (SotcStats::gcn_nv_paths.load(std::memory_order_relaxed) ? "_gcnnv" : "") +
+                      ShaderTestTag());
         if (!std::filesystem::exists(cache_path)) {
             std::filesystem::create_directories(cache_path);
         }
@@ -374,7 +406,7 @@ void DataBase::Prefetch() {
     }
     std::vector<std::filesystem::path> files;
     std::error_code ec;
-    size_t in_pack = 0, listed = 0;
+    size_t in_pack = 0, listed = 0, newer = 0;
     // sotc: a loose file written after the pack (a shader translated again in a later session,
     // e.g. after a ShaderBinaryVersion change) holds the current data: it wins over the pack's
     // copy, and the pack is rewritten with it below. Taking the pack's copy left those entries
@@ -395,6 +427,7 @@ void DataBase::Prefetch() {
             if (!entry_ec && entry_time > pack_time) {
                 packed.erase(it);
                 it = packed.end();
+                ++newer;
             }
         }
         if (it != packed.end()) {
@@ -458,8 +491,10 @@ void DataBase::Prefetch() {
         // sotc: joined by Close (and so by Reset, which renames the folder it writes into).
         pack_writer = std::jthread{WriteCachePack, pack_path, std::move(copy)};
     }
-    std::fprintf(stderr, "SOTC shader cache: %zu files, %zu from the pack, %zu read one by one\n",
-                 listed, in_pack, files.size());
+    std::fprintf(stderr,
+                 "SOTC shader cache: %zu files, %zu from the pack, %zu read one by one (%zu newer "
+                 "than the pack)\n",
+                 listed, in_pack, files.size(), newer);
     LOG_INFO(Render, "Prefetched {} cache files ({} MiB) in {} ms with {} threads",
              prefetched.size(), bytes >> 20,
              std::chrono::duration_cast<std::chrono::milliseconds>(

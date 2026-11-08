@@ -153,6 +153,12 @@ public:
         return gpu_modified_ranges.Intersects(addr, size);
     }
 
+    /// sotc: IsRangeGpuWritten for any thread (the guest's fault handler).
+    [[nodiscard]] bool IsRangeGpuWrittenLocked(VAddr addr, size_t size) {
+        std::shared_lock lock{gpu_modified_mutex};
+        return gpu_modified_ranges.Intersects(addr, size);
+    }
+
     /// Reads [addr, addr + size) from the backing when no byte of it is GPU-written, through a
     /// cache of pages holding their backing pointer and the hull of their GPU-written bytes.
     /// From Pink-shadPS4 (luizgustavs). Command processor thread only.
@@ -171,6 +177,8 @@ public:
 
     /// Releases the arena memory backing a range the guest unmapped. GPU thread only.
     void ReleaseMemory(VAddr device_addr, u64 size);
+    /// sotc: SOTC_RELEASE_DEFER=1: releases whose GPU work is done (TickFrame, each release).
+    void ProcessPendingReleases();
 
     /// sotc: gives back arena allocations whose blocks were not bound for a while and hold no
     /// GPU-written data, once resident arena memory passes SOTC_ARENA_EVICT_MB. Called between
@@ -258,6 +266,7 @@ private:
         const u8* download_mapped{};
         Buffer* download_buffer{};
         u64 download_size{};
+        bool data_ready{}; ///< sotc (SOTC_RB_AGE): its last GPU write had completed when asked
         boost::container::small_vector<ReadbackItem, 16> pending;
     };
     void BeginAsyncReadback(AsyncReadback& readback);
@@ -310,6 +319,22 @@ private:
     /// sotc: gpu_modified_ranges is changed on the GPU side (the draw thread, see
     /// Liverpool::IsBackThreaded) and read by the command processor's SRT walkers (ReadClean).
     std::shared_mutex gpu_modified_mutex;
+    /// sotc (SOTC_RB_AGE): the tick of the last GPU write per 64 KiB page, under
+    /// gpu_modified_mutex.
+    struct WriteMark {
+        u64 tick, addr, size, program;
+    };
+    std::unordered_map<u64, WriteMark> write_ticks;
+
+public:
+    /// sotc (SOTC_RB_AGE): the last GPU write that marked this 64 KiB page.
+    WriteMark LastWriteMark(VAddr addr) {
+        std::shared_lock lock{gpu_modified_mutex};
+        const auto it = write_ticks.find(addr >> 16);
+        return it == write_ticks.end() ? WriteMark{} : it->second;
+    }
+
+private:
 
     std::unique_ptr<FaultManager> fault_manager;
     std::unique_ptr<Buffer> bda_pagetable_buffer;
@@ -334,6 +359,18 @@ private:
         }
     };
     IntervalList<Backing> resident_ranges;
+    /// sotc: SOTC_RELEASE_DEFER: unmapped block ranges released once the GPU passed `tick`
+    /// (the work recorded before the unmap), or at once when a bind uses them again.
+    struct PendingRelease {
+        u64 first_block;
+        u64 end_block;
+        u64 tick;
+    };
+    std::vector<PendingRelease> pending_releases;
+    /// The release itself; finish: wait for all the GPU work first (the old way).
+    void ReleaseBlocks(u64 first_block, u64 end_block, bool finish);
+    /// Releases now the pending ones that overlap [first_block, end_block).
+    void ForcePendingReleases(u64 first_block, u64 end_block);
     /// sotc: bumped at every resident_ranges.Add/Subtract. SynchronizeDmaBuffers rebuilds its
     /// merged runs only when this (or the arena count) changed since the last rebuild.
     u64 resident_version{};

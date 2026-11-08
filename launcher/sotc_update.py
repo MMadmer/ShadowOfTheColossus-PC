@@ -42,6 +42,7 @@ import zipfile
 import zlib
 
 RELEASES_URL = 'https://api.github.com/repos/MMadmer/ShadowOfTheColossus-PC/releases/latest'
+RELEASES_PAGE = 'https://github.com/MMadmer/ShadowOfTheColossus-PC/releases'
 ASSET_NAME = 'SotC-PC.zip'
 # The fork's releases name the zip by version (SotC-PC-1.0.1.zip).
 ASSET_PATTERN = re.compile(r'SotC-PC(?:-[\w.]+)?\.zip')
@@ -83,6 +84,12 @@ def ssl_context():
                 pass
             _ssl_context = context
     return _ssl_context
+
+
+def is_cert_error(error):
+    """True when the error (or the URLError wrapping it) is a failed certificate check."""
+    return isinstance(error, ssl.SSLCertVerificationError) or \
+        isinstance(getattr(error, 'reason', None), ssl.SSLCertVerificationError)
 
 
 def _open(url, timeout):

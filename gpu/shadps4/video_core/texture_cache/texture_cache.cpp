@@ -37,6 +37,9 @@
 #include "video_core/sotc_stats.h"
 #include "video_core/texture_cache/tile_manager.h"
 
+// sotc: src/probe.c (SOTC_WRITE_TRACE): the write faults recorded inside a range.
+extern "C" void runtime_write_fault_dump(uintptr_t start, uint64_t size) __attribute__((weak));
+
 namespace VideoCore {
 
 void ReentrantMutex::AsymmetricBarrier() {
@@ -868,6 +871,9 @@ ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_fmt) {
         Image& image = slot_images[memo_id];
         image.tick_accessed_last = scheduler.CurrentTick();
         TouchImage(image);
+        if (PoolWatchEnabled()) {
+            PoolWatchLookup(memo_id, image, desc.view_info);
+        }
         if (tail_candidate) {
             SetMipTailView(desc, -1);
         }
@@ -984,6 +990,9 @@ ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_fmt) {
     Image& image = slot_images[image_id];
     image.tick_accessed_last = scheduler.CurrentTick();
     TouchImage(image);
+    if (PoolWatchEnabled()) {
+        PoolWatchLookup(image_id, image, desc.view_info);
+    }
 
     // If the image requested is a subresource of the image from cache record its location.
     if (tail_candidate) {
@@ -1040,6 +1049,7 @@ ImageView& TextureCache::FindTexture(ImageId image_id, const ImageDesc& desc) {
         }
     }
     UpdateImage(image_id);
+    const SotcStats::SplitTimer make_view_split{SotcStats::SplitTexMakeView};
     return image.FindView(desc.view_info);
 }
 
@@ -1127,9 +1137,33 @@ ImageView& TextureCache::FindDepthTarget(ImageId image_id, const ImageDesc& desc
     return image.FindView(desc.view_info, false);
 }
 
+namespace {
+// sotc: T51. At the end of the game the texture streaming gives the page pool back pages under
+// textures it goes on drawing for 6-323 ticks (all their mips in ~1 in 5); once another texture
+// takes the pages, the CPU-dirty refresh uploads that one's bytes into the image still drawn:
+// stretched textures, flicker, and the game's memory spoilt soon after. SOTC_POOL_FREEZE=1 holds
+// such a refresh back for SOTC_POOL_FREEZE_TICKS (default 400); the image is refreshed after.
+const bool kPoolFreeze = [] {
+    const char* v = std::getenv("SOTC_POOL_FREEZE");
+    return v && v[0] == '1';
+}();
+const u64 kPoolFreezeTicks = [] {
+    const char* v = std::getenv("SOTC_POOL_FREEZE_TICKS");
+    return v ? std::strtoull(v, nullptr, 10) : u64{400};
+}();
+std::atomic<u64> g_freeze_marked{0}, g_freeze_held{0};
+} // namespace
+
 void TextureCache::RefreshImage(Image& image) {
     if (False(image.flags & ImageFlagBits::Dirty) || image.info.num_samples > 1) {
         return;
+    }
+    if (image.sotc_freeze_until && False(image.flags & ImageFlagBits::GpuDirty)) {
+        if (scheduler.CurrentTick() < image.sotc_freeze_until) {
+            g_freeze_held.fetch_add(1, std::memory_order_relaxed);
+            return; // stays dirty: refreshed once the freeze ends
+        }
+        image.sotc_freeze_until = 0;
     }
     const SotcStats::FrameTimer frame_timer{SotcStats::FrameUpload};
     const SotcStats::SplitTimer refresh_split{SotcStats::SplitTexRefresh};
@@ -1261,11 +1295,24 @@ void TextureCache::RefreshImage(Image& image) {
             budget_reset = now;
         }
     }
+    // sotc: SOTC_UPLOAD_EXPIRED_MB (default 128, 0 = no cap): images past kMaxDeferFlips went up
+    // all in the same frame: at the forest entrance (5 Nov) the deferred textures of one frame
+    // expired together and the next-but-one frame copied 1.1 GB (200 ms). Expired images now go
+    // up, in the order the draws ask for them, until the frame has uploaded this much; one that
+    // has waited kMaxDeferHard flips goes up whatever the cap.
+    constexpr u64 kMaxDeferHard = 8;
+    static const u64 expired_cap = [] {
+        const char* v = std::getenv("SOTC_UPLOAD_EXPIRED_MB");
+        return (v ? std::strtoull(v, nullptr, 10) : 128ull) << 20;
+    }();
+    const bool waiting = image.sotc_deferred_flip != ~0ull;
+    const u64 waited = waiting ? budget_flip - image.sotc_deferred_flip : 0;
+    const bool expired_held = waiting && waited >= kMaxDeferFlips && waited < kMaxDeferHard &&
+                              expired_cap && budget_used + image.info.guest_size > expired_cap;
     if (upload_budget && !image.sotc_has_data && !is_gpu_modified && budget_used &&
         image.info.guest_size >= 256_KB && budget_used + image.info.guest_size > upload_budget &&
         image.aspect_mask == vk::ImageAspectFlagBits::eColor &&
-        (image.sotc_deferred_flip == ~0ull ||
-         budget_flip - image.sotc_deferred_flip < kMaxDeferFlips)) {
+        (!waiting || waited < kMaxDeferFlips || expired_held)) {
         constexpr u64 ZeroBytes = 64_MB;
         bool fits = true;
         auto zero_copies = image_copies;
@@ -1333,6 +1380,10 @@ void TextureCache::RefreshImage(Image& image) {
                                  vk::to_string(image.info.pixel_format).c_str(),
                                  image.info.resources.levels, image.info.sotc_first_mip,
                                  image.sotc_uploads, u32(image.flags));
+                    // sotc: SOTC_WRITE_TRACE=1: the CPU writes that reached it (src/probe.c)
+                    if (runtime_write_fault_dump) {
+                        runtime_write_fault_dump(image.info.guest_address, bytes);
+                    }
                 }
                 image.sotc_first_hash = h; // report each change once
             }
@@ -2033,12 +2084,171 @@ void TextureCache::GarbageCollectSamplers() {
 // over it was used a moment ago means the game gave away memory a texture on screen still
 // reads: that texture shows whatever lands there next. Logged with the image (SOTC_POOL_WATCH=1;
 // =2 also counts allocations).
+bool TextureCache::ReadbackWatchEnabled() {
+    static const bool on = [] {
+        const char* v = std::getenv("SOTC_RB_TEX_WATCH");
+        return v && v[0] == '1';
+    }();
+    return on;
+}
+
+void TextureCache::NoteReadbackOverTexture(VAddr addr, u64 size, bool hot) {
+    static u64 hits = 0, bytes = 0;
+    std::scoped_lock lock{mutex};
+    const u64 tick = scheduler.CurrentTick();
+    ForEachImageInRegion(addr, size, [&](ImageId, Image& image) {
+        if (!image.info.props.is_block || True(image.flags & ImageFlagBits::GpuModified)) {
+            return;
+        }
+        const VAddr lo = std::max<VAddr>(addr, image.info.guest_address);
+        const VAddr hi = std::min<VAddr>(addr + size, image.info.guest_address + image.info.guest_size);
+        if (lo >= hi) {
+            return;
+        }
+        ++hits;
+        bytes += hi - lo;
+        if (hits <= 300 || hits % 1000 == 0) {
+            std::fprintf(stderr,
+                         "SOTC RB OVER TEXTURE #%llu: readback %#llx+%#llx%s writes %#llx bytes of "
+                         "image %#llx+%#llx %ux%u %s mips %u (flags %#x, used %llu ticks ago); "
+                         "%llu KiB in all\n",
+                         static_cast<unsigned long long>(hits),
+                         static_cast<unsigned long long>(addr), static_cast<unsigned long long>(size),
+                         hot ? " (hot)" : "", static_cast<unsigned long long>(hi - lo),
+                         static_cast<unsigned long long>(image.info.guest_address),
+                         static_cast<unsigned long long>(image.info.guest_size),
+                         image.info.size.width, image.info.size.height,
+                         vk::to_string(image.info.pixel_format).c_str(), image.info.resources.levels,
+                         u32(image.flags),
+                         static_cast<unsigned long long>(image.tick_accessed_last
+                                                             ? tick - image.tick_accessed_last
+                                                             : 0),
+                         static_cast<unsigned long long>(bytes >> 10));
+        }
+    });
+}
+
 bool TextureCache::PoolWatchEnabled() {
     static const bool on = [] {
         const char* v = std::getenv("SOTC_POOL_WATCH");
         return v && v[0] != '0';
     }();
     return on;
+}
+
+// sotc: src/probe.c (SOTC_POOL_FREE_TRACE): the game's release of a pool page, with its stack.
+extern "C" void runtime_pool_release_dump(uintptr_t page_addr, uintptr_t image_addr)
+    __attribute__((weak));
+
+namespace {
+// sotc: SOTC_POOL_WATCH: images the game freed pages under while in use, by slot: when, and
+// their upload count then. A later lookup of the same image means the game still draws it.
+struct FreedUnder {
+    u64 tick;
+    u32 uploads;
+    VAddr address;
+    bool reused; ///< a page of it was given out again since
+    u32 freed_mips; ///< bit m: mip m overlaps a freed page
+};
+u32 MipsInPage(const Image& image, VAddr page, u64 bytes) {
+    u32 mask = 0;
+    for (u32 m = 0; m < image.info.resources.levels && m < 16; ++m) {
+        const auto& mip = image.info.mips_layout[m];
+        const VAddr start = image.info.guest_address + mip.offset;
+        if (mip.size && start < page + bytes && page < start + mip.size) {
+            mask |= 1u << m;
+        }
+    }
+    return mask;
+}
+std::mutex g_freed_under_mutex;
+std::unordered_map<u32, FreedUnder> g_freed_under;
+std::atomic<u64> g_drawn_after_free{0}, g_drawn_after_reuse{0};
+} // namespace
+
+void TextureCache::PoolWatchLookup(ImageId image_id, const Image& image,
+                                   const ImageViewInfo& view) {
+    std::scoped_lock lock{g_freed_under_mutex};
+    if (g_freed_under.empty()) {
+        return;
+    }
+    const auto it = g_freed_under.find(image_id.index);
+    if (it == g_freed_under.end() || it->second.address != image.info.guest_address) {
+        return;
+    }
+    const u64 tick = scheduler.CurrentTick();
+    if (tick <= it->second.tick + 2) {
+        return; // the frame that was being built when the game freed it
+    }
+    g_drawn_after_free.fetch_add(1, std::memory_order_relaxed);
+    if (it->second.reused) {
+        g_drawn_after_reuse.fetch_add(1, std::memory_order_relaxed);
+    }
+    static u32 logged = 0;
+    if (logged++ < 150) {
+        std::fprintf(stderr,
+                     "SOTC POOLWATCH DRAWN AFTER FREE image %#llx %ux%u %s: %llu ticks after the "
+                     "game freed pages under it, pages given out again %s, uploads since %u; "
+                     "mips %u (first %u), freed mips 0x%x, drawn mips %u..%u\n",
+                     static_cast<unsigned long long>(image.info.guest_address),
+                     image.info.size.width, image.info.size.height,
+                     vk::to_string(image.info.pixel_format).c_str(),
+                     static_cast<unsigned long long>(tick - it->second.tick),
+                     it->second.reused ? "yes" : "no", image.sotc_uploads - it->second.uploads,
+                     image.info.resources.levels, image.info.sotc_first_mip,
+                     it->second.freed_mips, u32(view.range.base.level),
+                     u32(view.range.base.level + view.range.extent.levels - 1));
+    }
+    g_freed_under.erase(it);
+}
+
+void TextureCache::PoolFreeze() {
+    if (!kPoolFreeze) {
+        return;
+    }
+    static std::vector<u64> prev;
+    std::vector<u64> now = SotcLod::PoolBitmap();
+    if (now.empty() || now.size() != prev.size()) {
+        prev = std::move(now);
+        return;
+    }
+    // As PoolWatch: bit n is the page at 0x1000300000 + n * 64 KiB.
+    constexpr VAddr PoolBase = 0x1000300000;
+    constexpr u64 PageBytes = 64_KB;
+    const u64 tick = scheduler.CurrentTick();
+    {
+        std::scoped_lock lock{mutex};
+        for (size_t w = 0; w < now.size(); ++w) {
+            for (u64 bits = now[w] & ~prev[w]; bits; bits &= bits - 1) {
+                const VAddr addr = PoolBase + (w * 64 + std::countr_zero(bits)) * PageBytes;
+                ForEachImageInRegion(addr, PageBytes, [&](ImageId, Image& image) {
+                    if (image.tick_accessed_last == 0 || tick - image.tick_accessed_last > 16 ||
+                        True(image.flags & ImageFlagBits::GpuModified)) {
+                        return;
+                    }
+                    if (image.sotc_freeze_until < tick + kPoolFreezeTicks) {
+                        if (image.sotc_freeze_until <= tick) {
+                            g_freeze_marked.fetch_add(1, std::memory_order_relaxed);
+                        }
+                        image.sotc_freeze_until = tick + kPoolFreezeTicks;
+                    }
+                });
+            }
+        }
+    }
+    prev = std::move(now);
+    static auto last = std::chrono::steady_clock::now();
+    if (std::chrono::steady_clock::now() - last >= std::chrono::seconds{5}) {
+        last = std::chrono::steady_clock::now();
+        const u64 marked = g_freeze_marked.exchange(0), held = g_freeze_held.exchange(0);
+        if (marked || held) {
+            std::fprintf(stderr,
+                         "SOTC POOL FREEZE 5 s: %llu textures freed under use kept as uploaded, "
+                         "%llu refreshes held back\n",
+                         static_cast<unsigned long long>(marked),
+                         static_cast<unsigned long long>(held));
+        }
+    }
 }
 
 void TextureCache::PoolWatch() {
@@ -2051,7 +2261,9 @@ void TextureCache::PoolWatch() {
         prev = std::move(now);
         return;
     }
-    constexpr VAddr PoolBase = 0x1000000000;
+    // Bit n is physical 0x100000 + n * 64 KiB (eboot 0x1abf0: VirtualQuery offset minus the
+    // base at eboot+0x2dfca70); the game maps physical p at 0x1000200000 + p.
+    constexpr VAddr PoolBase = 0x1000300000;
     constexpr u64 PageBytes = 64_KB;
     const u64 tick = scheduler.CurrentTick();
     static u64 freed_total = 0, alloc_total = 0, hits_total = 0, logged = 0, reused_total = 0;
@@ -2073,7 +2285,13 @@ void TextureCache::PoolWatch() {
             suspects.erase(it);
             // Allocated again: harmless if the image is gone or was not drawn lately.
             const VAddr addr = PoolBase + page * PageBytes;
-            ForEachImageInRegion(addr, PageBytes, [&](ImageId, Image& image) {
+            ForEachImageInRegion(addr, PageBytes, [&](ImageId id, Image& image) {
+                if (image.info.guest_address == image_addr) {
+                    std::scoped_lock freed_lock{g_freed_under_mutex};
+                    if (const auto f = g_freed_under.find(id.index); f != g_freed_under.end()) {
+                        f->second.reused = true;
+                    }
+                }
                 if (image.info.guest_address != image_addr || image.tick_accessed_last == 0 ||
                     tick - image.tick_accessed_last > 16) {
                     return;
@@ -2090,6 +2308,10 @@ void TextureCache::PoolWatch() {
                                  image.info.size.width, image.info.size.height,
                                  vk::to_string(image.info.pixel_format).c_str(),
                                  static_cast<unsigned long long>(tick - image.tick_accessed_last));
+                    // sotc: SOTC_POOL_FREE_TRACE=1: the game's call stack of that page's release
+                    if (runtime_pool_release_dump) {
+                        runtime_pool_release_dump(addr, image_addr);
+                    }
                 }
             });
         }
@@ -2100,7 +2322,7 @@ void TextureCache::PoolWatch() {
         for (u64 bits = became_free; bits; bits &= bits - 1) {
             const u64 page = w * 64 + std::countr_zero(bits);
             const VAddr addr = PoolBase + page * PageBytes;
-            ForEachImageInRegion(addr, PageBytes, [&](ImageId, Image& image) {
+            ForEachImageInRegion(addr, PageBytes, [&](ImageId id, Image& image) {
                 const u64 age = tick - image.tick_accessed_last;
                 if (image.tick_accessed_last == 0 || age > 16 ||
                     True(image.flags & ImageFlagBits::GpuModified)) {
@@ -2109,6 +2331,15 @@ void TextureCache::PoolWatch() {
                 ++hits;
                 if (suspects.size() < 100000) {
                     suspects[page] = image.info.guest_address;
+                }
+                {
+                    std::scoped_lock freed_lock{g_freed_under_mutex};
+                    if (g_freed_under.size() < 100000) {
+                        auto [f, fresh] = g_freed_under.try_emplace(
+                            id.index, FreedUnder{tick, image.sotc_uploads,
+                                                 image.info.guest_address, false, 0});
+                        f->second.freed_mips |= MipsInPage(image, addr, PageBytes);
+                    }
                 }
                 {
                     const VAddr a = image.info.guest_address;
@@ -2148,11 +2379,14 @@ void TextureCache::PoolWatch() {
         last = std::chrono::steady_clock::now();
         std::fprintf(stderr,
                      "SOTC POOLWATCH 5 s: %llu pages freed, %llu allocated, %llu freed under "
-                     "images in use, %llu of those given out again while the image lives\n",
+                     "images in use, %llu of those given out again while the image lives; "
+                     "freed images drawn again %llu (%llu after their pages were given out)\n",
                      static_cast<unsigned long long>(freed_total),
                      static_cast<unsigned long long>(alloc_total),
                      static_cast<unsigned long long>(hits_total),
-                     static_cast<unsigned long long>(reused_total));
+                     static_cast<unsigned long long>(reused_total),
+                     static_cast<unsigned long long>(g_drawn_after_free.load()),
+                     static_cast<unsigned long long>(g_drawn_after_reuse.load()));
         if (const u64 over = SotcStats::rb_over_cpu.exchange(0)) {
             std::fprintf(stderr, "SOTC POOLWATCH RB: %llu KB of readbacks over CPU-written pages (5 s)\n",
                          static_cast<unsigned long long>(over >> 10));
@@ -2531,6 +2765,7 @@ void TextureCache::RunGarbageCollector() {
     }
     Census();
     PoolWatch();
+    PoolFreeze();
     GarbageCollectImages();
     GarbageCollectSamplers();
     // sotc: video memory in every log, once a minute (players' logs had none of it: a GTX 1050

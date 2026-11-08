@@ -152,6 +152,18 @@ static void CopySparseSerial(VAddr source, u8* dest, u64 size) {
         // readbacks GPU-written pages are read-protected, and a fault on a copy thread or the
         // recording thread would wait for the command processor, which waits for them.
         const u8* backing = mapped ? runtime_memory_backing_pointer(source) : nullptr;
+        // sotc: the backing view's pages are mapped in one call before a large copy
+        // (SOTC_COPY_PREFETCH=0: one fault per page as before). At an area change (forest
+        // entrance, 3 Nov) texture copies of 175-215 MB per frame took 10-59 thousand page faults,
+        // one per 4 KiB page of the view; with it 311 MB took 6.5 thousand.
+        static const bool prefetch = [] {
+            const char* v = std::getenv("SOTC_COPY_PREFETCH");
+            return !v || v[0] != '0';
+        }();
+        if (backing && prefetch && n >= 256 * 1024) {
+            WIN32_MEMORY_RANGE_ENTRY range{const_cast<u8*>(backing), static_cast<SIZE_T>(n)};
+            PrefetchVirtualMemory(GetCurrentProcess(), 1, &range, 0);
+        }
         if (backing) std::memcpy(dest, backing, n);
         else if (mapped) std::memcpy(dest, reinterpret_cast<const void*>(source), n);
         else std::memset(dest, 0, n);
@@ -287,7 +299,15 @@ bool g_window_ready;
 
 u32 BbDisplayRefreshHz() {
     static const u32 hz = [] {
-        const SDL_DisplayMode* mode = SDL_GetCurrentDisplayMode(SDL_GetPrimaryDisplay());
+        // sotc: the game monitor's rate (SOTC_MONITOR_AT, window.cpp), else the primary display's
+        SDL_DisplayID display = 0;
+        if (const char* at = std::getenv("SOTC_MONITOR_AT")) {
+            SDL_Point point{};
+            if (std::sscanf(at, "%d,%d", &point.x, &point.y) == 2) {
+                display = SDL_GetDisplayForPoint(&point);
+            }
+        }
+        const SDL_DisplayMode* mode = SDL_GetCurrentDisplayMode(display ? display : SDL_GetPrimaryDisplay());
         const u32 rate = mode && mode->refresh_rate > 0 ? u32(mode->refresh_rate + 0.5f) : 60;
         std::printf("GPU: vblank follows the display refresh rate, %u Hz\n", rate);
         return std::max<u32>(rate, 60);

@@ -11,6 +11,7 @@
 #include <mutex>
 #include <semaphore>
 #include <span>
+#include <source_location>
 #include <thread>
 #include <vector>
 #include <queue>
@@ -118,7 +119,7 @@ public:
     void SendCommand(auto&& func) {
         // sotc: from the command processor itself (it forwards the queue to the draw thread).
         if (back_threaded && g_gpu_thread == 1) {
-            QueueBackFunc(Common::UniqueFunction<void>{std::move(func)}, true);
+            QueueBackFunc(Common::UniqueFunction<void>{std::move(func)}, true, 1);
             if constexpr (wait_done) {
                 DrainBack();
             }
@@ -151,13 +152,15 @@ public:
     /// sotc: a command that must run at the command processor's point of the command stream,
     /// after the work it queued so far (SendCommand runs before that work with the draw thread:
     /// readbacks for guest threads do not wait for the queue).
-    void SendOrderedCommand(Common::UniqueFunction<void>&& func) {
+    /// tag: SOTC_SLOW_OPS key of the op (3 by default; 4 flips, 5 memory releases).
+    void SendOrderedCommand(Common::UniqueFunction<void>&& func, u32 tag = 3) {
         if (!back_threaded) {
             SendCommand(std::move(func));
             return;
         }
         std::scoped_lock lk{submit_mutex};
         ordered_queue.emplace(std::move(func));
+        ordered_tags.push(tag);
         ++num_ordered;
         submit_cv.notify_one();
     }
@@ -242,7 +245,7 @@ public:
     }
     /// Command processor: runs func on the draw thread after what is queued, and waits for it.
     void RunOnBackThread(Common::UniqueFunction<void>&& func) {
-        QueueBackFunc(std::move(func), true);
+        QueueBackFunc(std::move(func), true, 2);
         DrainBack();
     }
 
@@ -366,6 +369,7 @@ private:
     std::condition_variable_any submit_cv;
     std::queue<Common::UniqueFunction<void>> command_queue{};
     std::queue<Common::UniqueFunction<void>> ordered_queue{}; // sotc: SendOrderedCommand
+    std::queue<u32> ordered_tags{};                           // sotc: their SOTC_SLOW_OPS tags
     std::atomic<u32> num_ordered{};
     std::thread::id gpu_id;
 #ifdef __linux__
@@ -406,6 +410,7 @@ private:
         /// buffers (0: never reused); see CaptureBackOp and Rasterizer::TryReuseBindings.
         u64 bind_key{};
         bool writes_memory{}; ///< sotc: published as writing guest memory (BackPublish)
+        u32 line{}; ///< sotc: SOTC_SLOW_OPS: the source line that queued a Func op (liverpool.cpp/.h)
         Common::UniqueFunction<void> func;
     };
     static constexpr u32 RegChunkDwords = 64;
@@ -413,14 +418,17 @@ private:
     static constexpr u64 BackRingSize = 512;
 
     template <typename F>
-    void BackOrRun(F&& func, bool writes_memory = true) {
+    void BackOrRun(F&& func, bool writes_memory = true,
+                   std::source_location loc = std::source_location::current()) {
         if (!back_threaded) {
             func();
             return;
         }
-        QueueBackFunc(Common::UniqueFunction<void>{std::forward<F>(func)}, writes_memory);
+        QueueBackFunc(Common::UniqueFunction<void>{std::forward<F>(func)}, writes_memory,
+                      loc.line());
     }
-    void QueueBackFunc(Common::UniqueFunction<void>&& func, bool writes_memory);
+    /// line: where it was queued (SOTC_SLOW_OPS); 1 SendCommand, 2 RunOnBackThread, 3 ordered.
+    void QueueBackFunc(Common::UniqueFunction<void>&& func, bool writes_memory, u32 line = 0);
     void SubmitDraw(bool is_indexed, u32 index_offset);
     void SubmitDrawIndirect(bool is_indexed, VAddr address, u32 offset, u32 stride, u32 max_count,
                             VAddr count_address, u16 vertex_sgpr_offset, u16 instance_sgpr_offset);

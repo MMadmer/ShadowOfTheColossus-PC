@@ -39,6 +39,28 @@ u64 RoundAllocationSize(u64 size) {
     return Common::AlignUp(size, step);
 }
 
+// sotc: SOTC_STAGING_LARGE_POW2 (default on, =0 off; HiddenUserHere, upstream PR #339). Large
+// uploads (streaming bursts) come in many sizes: matched within 1.25x they seldom found a free
+// buffer and allocated a new one inside the frame that needed it (6 allocations, 240 MiB, 7-19 ms
+// per 5 s while an area loads). With the switch they get power-of-two size classes and reuse any
+// free buffer up to twice the request, and idle ones are kept up to SOTC_STAGING_LARGE_KEEP_MB
+// (default 256) per memory type instead of being freed after 120 idle frames.
+bool StagingLargePow2() {
+    static const bool enabled = [] {
+        const char* v = std::getenv("SOTC_STAGING_LARGE_POW2");
+        return !v || v[0] != '0';
+    }();
+    return enabled;
+}
+
+u64 StagingLargeKeepBytes() {
+    static const u64 bytes = [] {
+        const char* v = std::getenv("SOTC_STAGING_LARGE_KEEP_MB");
+        return (v ? std::strtoull(v, nullptr, 10) : 256ULL) << 20;
+    }();
+    return bytes;
+}
+
 } // Anonymous namespace
 
 StagingBufferPool::StagingBufferPool(const Instance& instance_, Scheduler& scheduler_)
@@ -76,7 +98,10 @@ StagingBufferRef StagingBufferPool::RequestFromRing(Ring& ring, u64 size, u64 al
             best_offset = 0;
         } else {
             const SotcStats::FrameTimer frame_timer{SotcStats::FrameAlloc};
-            const SotcStats::AllocTrace alloc_trace{SotcStats::AllocStagingBlock, BlockSize()};
+            const SotcStats::AllocTrace alloc_trace{type == MemoryType::DeviceLocal
+                                                        ? SotcStats::AllocStagingBlockDevice
+                                                        : SotcStats::AllocStagingBlock,
+                                                    BlockSize()};
             best = &ring.blocks.emplace_back(Block{
                 .buffer = std::make_unique<VideoCore::StreamBuffer>(instance, scheduler, type,
                                                                     BlockSize()),
@@ -109,9 +134,12 @@ StagingBufferRef StagingBufferPool::RequestLarge(u64 size, MemoryType type, bool
     // come in slightly different sizes; matched within 1.25x they rarely found a free buffer and
     // allocated a new one ~1,100 times in a 6-minute attract run. They get power-of-two sizes
     // instead, and reuse any free buffer of that size class.
+    const bool pow2 = deferred || StagingLargePow2();
     const u64 alloc_size =
-        deferred ? std::bit_ceil(std::max(size, LARGE_MIN_GRANULARITY)) : RoundAllocationSize(size);
-    const u64 max_size = deferred ? alloc_size : std::max(size + size / 4, RoundAllocationSize(size));
+        pow2 ? std::bit_ceil(std::max(size, LARGE_MIN_GRANULARITY)) : RoundAllocationSize(size);
+    const u64 max_size = deferred ? alloc_size
+                         : pow2   ? alloc_size * 2
+                                  : std::max(size + size / 4, RoundAllocationSize(size));
 
     LargeBuffer* best{};
     for (LargeBuffer& entry : cache) {
@@ -166,16 +194,36 @@ void StagingBufferPool::FreeDeferred(const StagingBufferRef& ref) {
 
 void StagingBufferPool::TickFrame() {
     ++frame;
-    // sotc: the first SOTC_STAGING_KEEP_MB (default 0) of each host-memory ring stay allocated.
-    // Trimmed after 300 idle frames, they were allocated again (~2 ms each) by the next
-    // streaming burst, inside the frame that needed them: 115 allocations in a 6-minute attract
-    // run. The device-local ring is still trimmed (video memory is short on 6 GB cards).
+    // sotc: the first SOTC_STAGING_KEEP_MB (default 128) of each host-memory ring and the first
+    // SOTC_STAGING_KEEP_VRAM_MB (default 64; 0 on GPUs with a video memory budget under 4 GB) of
+    // the device-local one stay allocated. Trimmed after 300 idle frames, they were allocated
+    // again by the next area change inside the frames that needed them: 11 blocks in 95 ms in
+    // one 5 s window (3 Nov, Pro + Maximum, video memory near its budget). The reserve is also
+    // made ahead, one block per frame, so the first area change finds it too.
     static const size_t keep_host_blocks = [] {
         const char* v = std::getenv("SOTC_STAGING_KEEP_MB");
-        return static_cast<size_t>((v ? std::strtoull(v, nullptr, 10) : 0ull) / (BlockSize() >> 20));
+        return static_cast<size_t>((v ? std::strtoull(v, nullptr, 10) : 128ull) /
+                                   (BlockSize() >> 20));
+    }();
+    static const size_t keep_device_blocks = [this] {
+        const char* v = std::getenv("SOTC_STAGING_KEEP_VRAM_MB");
+        const u64 fallback = instance.GetTotalMemoryBudget() >= (4ull << 30) ? 64ull : 0ull;
+        return static_cast<size_t>((v ? std::strtoull(v, nullptr, 10) : fallback) /
+                                   (BlockSize() >> 20));
     }();
     for (size_t type = 0; type < rings.size(); ++type) {
-        TrimRing(rings[type], type == u32(MemoryType::DeviceLocal) ? 0 : keep_host_blocks);
+        const size_t keep =
+            type == u32(MemoryType::DeviceLocal) ? keep_device_blocks : keep_host_blocks;
+        TrimRing(rings[type], keep);
+        Ring& ring = rings[type];
+        if (ring.blocks.size() < keep && frame > 60) {
+            const SotcStats::AllocTrace alloc_trace{SotcStats::AllocStagingKept, BlockSize()};
+            ring.blocks.emplace_back(Block{
+                .buffer = std::make_unique<VideoCore::StreamBuffer>(instance, scheduler,
+                                                                    MemoryType(type), BlockSize()),
+                .last_used_frame = frame,
+            });
+        }
     }
     for (auto& cache : large_caches) {
         TrimLarge(cache);
@@ -204,9 +252,25 @@ void StagingBufferPool::TrimRing(Ring& ring, size_t keep_blocks) {
 }
 
 void StagingBufferPool::TrimLarge(std::vector<LargeBuffer>& cache) {
-    std::erase_if(cache, [this](const LargeBuffer& entry) {
-        return !entry.held && frame - entry.last_used_frame >= LARGE_IDLE_FRAMES &&
-               scheduler.IsFree(entry.tick);
+    // sotc: SOTC_STAGING_LARGE_POW2: idle buffers are kept up to SOTC_STAGING_LARGE_KEEP_MB,
+    // the most recently used first.
+    u64 keep = StagingLargePow2() ? StagingLargeKeepBytes() : 0;
+    if (keep != 0) {
+        std::ranges::sort(cache, [](const LargeBuffer& a, const LargeBuffer& b) {
+            return a.last_used_frame > b.last_used_frame;
+        });
+    }
+    std::erase_if(cache, [this, &keep](const LargeBuffer& entry) {
+        if (entry.held || frame - entry.last_used_frame < LARGE_IDLE_FRAMES ||
+            !scheduler.IsFree(entry.tick)) {
+            return false;
+        }
+        const u64 bytes = entry.buffer->SizeBytes();
+        if (bytes <= keep) {
+            keep -= bytes;
+            return false;
+        }
+        return true;
     });
 }
 
