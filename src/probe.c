@@ -1472,6 +1472,24 @@ static struct fault_entry *fault_ring_add(const EXCEPTION_POINTERS *info) {
     e->region=(uintptr_t)tib->StackLimit; e->below=(uintptr_t)tib->StackBase; e->outcome=0;
     return e;
 }
+/* With Control Flow Guard enforced, ntdll's RtlRestoreContext fast-fails (int 0x29, code 13) when the
+ * context's RSP is outside the TEB stack limits, which a guest fiber stack always is: the process
+ * vanished right after 'Resource Loading' on those PCs (#322, #282, #309). NtContinue is the system
+ * call behind it and has no such check. NULL where CFG is not enforced: the normal return path.
+ * SOTC_TEST_NTCONTINUE=1 takes this path everywhere, to test it on a PC without CFG. */
+typedef LONG (NTAPI *NtContinueFn)(CONTEXT *,BOOLEAN);
+typedef BOOLEAN (NTAPI *CfgEnforcedFn)(void);
+static NtContinueFn guest_stack_continue;
+static void guest_stack_continue_init(void) {
+    const HMODULE ntdll=GetModuleHandleA("ntdll.dll");
+    if (!ntdll) return;
+    const CfgEnforcedFn enforced=(CfgEnforcedFn)(void *)GetProcAddress(ntdll,"LdrControlFlowGuardEnforced");
+    const int cfg=enforced && enforced();
+    const char *const test=getenv("SOTC_TEST_NTCONTINUE");
+    if (cfg || (test && test[0]=='1')) guest_stack_continue=(NtContinueFn)(void *)GetProcAddress(ntdll,"NtContinue");
+    fprintf(stderr,"Windows: Control Flow Guard %s, guest stacks resume through %s\n",cfg ? "enforced" : "not enforced",
+            guest_stack_continue ? "NtContinue" : "the normal return");
+}
 /* Which handler path resolved the current exception (fault ring diagnostics). */
 static _Thread_local int fault_path;
 static LONG CALLBACK vectored_fault(EXCEPTION_POINTERS *info) {
@@ -1493,6 +1511,7 @@ static LONG CALLBACK vectored_fault(EXCEPTION_POINTERS *info) {
     tib->StackBase=base;
     tib->StackLimit=limit;
     if (entry) entry->outcome=((uint64_t)fault_path<<8)|(result==EXCEPTION_CONTINUE_EXECUTION)|0x10000;
+    if (result==EXCEPTION_CONTINUE_EXECUTION && guest_stack_continue) guest_stack_continue(info->ContextRecord,FALSE);
     return result;
 }
 static LONG vectored_fault_impl(EXCEPTION_POINTERS *info) {
@@ -1944,6 +1963,7 @@ int main(int argc, char **argv) {
     bbgpu_register_kernel();
 #ifdef _WIN32
     SYSTEM_INFO system_info; GetSystemInfo(&system_info); page_size = system_info.dwPageSize;
+    guest_stack_continue_init();
     AddVectoredExceptionHandler(1, vectored_fault);
     if (getenv("BB_FAULT_RING")) fault_ring_open(getenv("BB_FAULT_RING"));
     if (getenv("BB_STACKS_TRIGGER")) CreateThread(NULL,0,stacks_watcher,(void *)getenv("BB_STACKS_TRIGGER"),0,NULL);
