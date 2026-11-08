@@ -96,14 +96,17 @@ static int32_t ensure_mutex(GuestMutex **mutex) {
 /* sotc: SOTC_MUTEX_SPIN_US=<us> (default 20; 0 = off, the old path): a contended guest mutex retries
  * trylock with a pause between tries for up to this many us before the kernel-timed wait. The game's job
  * scheduler relocks in a loop without pausing and convoyed on the kernel wait (HiddenUserHere, upstream
- * PR #339: 145 -> 17 thread-ms of mutex waits per slow frame). Clamped to MUTEX_SPIN_MAX_US; ignored on
- * machines with 2 or fewer logical CPUs, where a spinning waiter can only delay the owner. */
+ * PR #339: 145 -> 17 thread-ms of mutex waits per slow frame). Clamped to MUTEX_SPIN_MAX_US; ignored with
+ * 4 or fewer usable logical CPUs, where a spinning waiter takes a core from the owner or the GPU threads. */
 #define MUTEX_SPIN_MAX_US 1000
 #define MUTEX_SPIN_UNREAD UINT64_MAX
 #ifdef _WIN32
 static uint64_t spin_now(void) { LARGE_INTEGER c; QueryPerformanceCounter(&c); return (uint64_t)c.QuadPart; }
 static uint64_t spin_clock_hz(void) { LARGE_INTEGER f; QueryPerformanceFrequency(&f); return f.QuadPart > 0 ? (uint64_t)f.QuadPart : 1; }
-static unsigned spin_cpu_count(void) { SYSTEM_INFO si; GetSystemInfo(&si); return si.dwNumberOfProcessors; }
+static unsigned spin_cpu_count(void) {
+    DWORD_PTR process, system;
+    return GetProcessAffinityMask(GetCurrentProcess(), &process, &system) && process ? (unsigned)__builtin_popcountll(process) : 1;
+}
 #else
 static uint64_t spin_now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (uint64_t)t.tv_sec * 1000000000u + (uint64_t)t.tv_nsec; }
 static uint64_t spin_clock_hz(void) { return 1000000000u; }
@@ -124,8 +127,8 @@ static uint64_t mutex_spin_us_get(void) {
     long long signed_v = env ? strtoll(env, NULL, 10) : 20; /* negative = off */
     unsigned long long v = signed_v > 0 ? (unsigned long long)signed_v : 0;
     if (v > MUTEX_SPIN_MAX_US) v = MUTEX_SPIN_MAX_US;
-    if (v && spin_cpu_count() <= 2) {
-        fprintf(stderr, "Runtime: SOTC_MUTEX_SPIN_US ignored on a machine with 2 or fewer CPUs\n");
+    if (v && spin_cpu_count() <= 4) {
+        fprintf(stderr, "Runtime: SOTC_MUTEX_SPIN_US ignored with 4 or fewer usable CPUs\n");
         v = 0;
     }
     us = (uint64_t)v;
