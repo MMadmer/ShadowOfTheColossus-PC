@@ -1,6 +1,7 @@
 """Launcher settings: DLSS and frame generation by graphics card, vibration, mouse button bindings
 in sotc.ini, exit codes, and the update folder search."""
 from paths import ROOT
+import json
 import os
 import struct
 import subprocess
@@ -8,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(ROOT / 'launcher'))
 try:
@@ -208,6 +210,47 @@ class FindUpdateTests(unittest.TestCase):
         self.folder(self.root / 'update', title='CUSA00001')     # another game's patch
         (self.root / 'patch').mkdir()                             # no param.sfo
         self.assertEqual(sotc_discovery.find_update(self.game), '')
+
+
+@unittest.skipUnless(launcher, 'no Tkinter')
+class SettingsUpgradeTests(unittest.TestCase):
+    def load(self, saved):
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.object(launcher, 'CONFIG_DIR', Path(folder)), \
+                patch.object(launcher, 'CONFIG_FILE', Path(folder) / 'launcher_settings.json'), \
+                patch.object(launcher, 'LEGACY_CONFIG_FILE', Path(folder) / 'legacy.json'):
+            launcher.CONFIG_FILE.write_text(json.dumps({'user_dir': folder, **saved}), encoding='utf-8')
+            return launcher.load_settings()
+
+    def test_older_settings_get_the_improvements_once(self):
+        self.assertIs(self.load({'rb_hot': False})['rb_hot'], True)
+        self.assertEqual(self.load({'rb_hot': False})['settings_version'], launcher.VERSION)
+        self.assertIs(self.load({'rb_hot': False, 'settings_version': launcher.VERSION})['rb_hot'], False)
+
+    def test_upstream_intro_boxes(self):
+        self.assertEqual(self.load({'skip_film': True})['skip_intro'], 'all')
+        self.assertEqual(self.load({'skip_logos': True})['skip_intro'], 'logos')
+
+    def test_fsr4_replaces_the_render_resolution(self):
+        env = launcher.game_environment({**launcher.APP_DEFAULTS, 'upscaler': 'fsr4', 'fsr4_mode': 'dlaa',
+                                         'render_res': 'res810'})
+        self.assertNotIn('res810', env['SOTC_MODES'])
+
+    def test_light_cards_keep_the_measured_mips_off(self):
+        env = launcher.game_environment({**launcher.APP_DEFAULTS, 'gpu_vram_mb': 2048})
+        self.assertNotIn('SOTC_LOD_FEEDBACK', env)
+        env = launcher.game_environment({**launcher.APP_DEFAULTS, 'gpu_vram_mb': 8192})
+        self.assertEqual(env['SOTC_LOD_FEEDBACK'], '1')
+
+    def test_whats_new_reads_this_versions_entry(self):
+        class Window:
+            pass
+        with patch.object(launcher, 'PORT_DIR', ROOT):
+            for lang in ('en', 'ru'):
+                with patch.object(launcher, 'LANG', lang):
+                    items = launcher.Launcher.news_items(Window())
+                self.assertGreater(len(items), 3, lang)
+                self.assertFalse(any('**Fixes**' in item or '**Исправления**' in item for item in items), lang)
 
 
 if __name__ == '__main__':

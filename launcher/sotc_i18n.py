@@ -3860,6 +3860,13 @@ TEXTS = {
         '\n{}\nに eboot.bin が見つかりましたが、このゲームのバージョンはサポートされていないか、ファイルが暗号化されています。\n\nCUSA08809 (1.01) または CUSA08034 (1.00) の復号済みダンプを使用してください。',
         '\n{}\n에서 eboot.bin을 찾았지만 이 게임 버전은 지원되지 않거나 파일이 암호화되어 있습니다.\n\nCUSA08809 (1.01) 또는 CUSA08034 (1.00)의 복호화된 덤프를 사용하세요.',
     ),
+    'Feche o jogo primeiro: os saves só podem ser importados com o jogo fechado.': (
+        'Cierre primero el juego: las partidas guardadas solo se pueden importar con el juego cerrado.',
+        'Сначала закройте игру: импорт сохранений возможен только при закрытой игре.',
+        '请先关闭游戏：只有在游戏关闭时才能导入存档。',
+        '先にゲームを終了してください。セーブデータはゲームを閉じているときのみインポートできます。',
+        '먼저 게임을 종료하세요. 저장 데이터는 게임이 닫혀 있을 때만 가져올 수 있습니다.',
+    ),
 }
 
 # One language's texts by the Portuguese text: TRANSLATIONS['es'][pt].

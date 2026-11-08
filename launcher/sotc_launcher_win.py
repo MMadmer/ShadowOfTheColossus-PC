@@ -1089,7 +1089,7 @@ def game_environment(s):
         modes.append('fps60game')
     # DLSS renders at the output size divided by its mode's factor (SOTC_RENDER_RES below) in place of
     # the render resolution choice.
-    if not dlss_mode(s) and s.get('render_res') in {key for key, _t in RENDER_RES if key}:
+    if not dlss_mode(s) and not fsr4_mode(s) and s.get('render_res') in {key for key, _t in RENDER_RES if key}:
         modes.append(s['render_res'])
     # At this resolution the grass overflows the game's grass buffers: the farthest grass then pops
     # in and out in patches, in a band ahead with longer grass distances. grassbuf makes them 4x larger.
@@ -1165,6 +1165,7 @@ def game_environment(s):
     env['SOTC_VRAM_GC_PERCENT'], env['SOTC_ARENA_EVICT_MB'] = VRAM_LIMITS.get(vram_use, VRAM_LIMITS['normal'])
     if light:
         env.setdefault('SOTC_STAGING_KEEP_VRAM_MB', '0')
+        env.setdefault('SOTC_STAGING_LARGE_KEEP_MB', '0')
     env['SOTC_VOLUME'] = str(s.get('volume') or '100')
     # The in-game menu's quick settings are written back here (bbport_overlay.cpp).
     env['SOTC_LAUNCHER_SETTINGS'] = str(settings_in_use)
@@ -1190,7 +1191,9 @@ def game_environment(s):
         # tested on 3 Nov (Time Attack, every colossus, Maximum + PS4 Pro, no crash nor mosaic):
         # the measured mips, finer mips (High 1, Maximum 0, both were 2) and, on Maximum, banks
         # kept sampled for 3 s (they had exhausted the pool, 0x1a371).
-        env.setdefault('SOTC_LOD_FEEDBACK', '1')
+        # Cards under 8 GB stay as measured on the GTX 1050 (no measurement with it there).
+        if not light:
+            env.setdefault('SOTC_LOD_FEEDBACK', '1')
         # sotc: 0.72.2: the finer mips (High 1, Maximum 0) and Maximum's 3 s linger without the
         # page pool switch brought back the hard FPS drop at area changes that 0.70 had removed:
         # texture copies of up to 1.1 GB in one frame, worst frames 134-293 ms at the forest
@@ -1218,6 +1221,8 @@ def game_environment(s):
     if 'SOTC_MAX_IN_PRO=0' in str(s.get('extra_env', '')) and textures == 'max' and env['SOTC_NEO'] == '1':
         textures = 'high'
         env['SOTC_NOTE'] = 'Texture quality Maximum is not used in PS4 Pro mode: High'
+    if textures == 'max':
+        env.setdefault('SOTC_LOD_POOL_LOW', '0')
     env['SOTC_UI_LANG'] = s.get('ui_language') or windows_language()  # overlay and F7/F8 texts
     # The game renders at the output size. 720p renders at 1080p, as on PS4; the PS4 Pro path keeps
     # its own sizes.
@@ -2472,6 +2477,11 @@ class Launcher(sotc_search.SearchMixin, sotc_pad.PadMixin):
             settings_in_use = LEGACY_CONFIG_FILE
 
     def import_save(self):
+        if self.process:
+            self.messagebox.showwarning('Shadow of the Colossus', _(
+                'Feche o jogo primeiro: os saves só podem ser importados com o jogo fechado.',
+                'Close the game first: saves can only be imported while the game is closed.'))
+            return
         serial = game_serial(self.var('game_dir').get())
         found = shadps4_saves(serial)
         initial = str(found[0]) if found else str(PORT_DIR.parent)
@@ -2721,7 +2731,7 @@ class Launcher(sotc_search.SearchMixin, sotc_pad.PadMixin):
     def write_saves_zip(self, target, names):
         """`names` with their port folders into the .zip `target`, below <title id>/."""
         serial = self.saves_folder().name
-        with zipfile.ZipFile(target, 'w', zipfile.ZIP_DEFLATED) as archive:
+        with zipfile.ZipFile(target, 'w', zipfile.ZIP_DEFLATED, strict_timestamps=False) as archive:
             for name in names:
                 for part in self.save_parts(name):
                     for file in part.rglob('*'):
@@ -2844,7 +2854,7 @@ class Launcher(sotc_search.SearchMixin, sotc_pad.PadMixin):
             'Summary: ' + self.summary(),
         ])
         try:
-            with zipfile.ZipFile(target, 'w', zipfile.ZIP_DEFLATED) as archive:
+            with zipfile.ZipFile(target, 'w', zipfile.ZIP_DEFLATED, strict_timestamps=False) as archive:
                 archive.writestr('report.txt', summary + '\n')
                 archive.writestr('launcher_settings.json', json.dumps(settings, indent=2, ensure_ascii=False))
                 for file in files:
@@ -2885,7 +2895,8 @@ class Launcher(sotc_search.SearchMixin, sotc_pad.PadMixin):
         folder = self.backups_folder()
         target = folder / f'saves-{self.saves_folder().name}-{time.strftime("%Y-%m-%d_%H-%M-%S")}{suffix}.zip'
         self.write_saves_zip(target, names)
-        for old in sorted(folder.glob('saves-*.zip'), key=lambda p: p.stat().st_mtime)[:-SAVE_BACKUPS_KEPT]:
+        same_kind = [p for p in folder.glob('saves-*.zip') if p.name.endswith('-exit.zip') == bool(suffix)]
+        for old in sorted(same_kind, key=lambda p: p.stat().st_mtime)[:-SAVE_BACKUPS_KEPT]:
             try:
                 old.unlink()
             except OSError:
@@ -2898,6 +2909,11 @@ class Launcher(sotc_search.SearchMixin, sotc_pad.PadMixin):
     def import_save_folders(self, saves):
         """Copies save folders (each with sce_sys/param.sfo) into the game's saves, with their port
         folders when they come along; backs up everything first."""
+        if self.process:
+            self.messagebox.showwarning('Shadow of the Colossus', _(
+                'Feche o jogo primeiro: os saves só podem ser importados com o jogo fechado.',
+                'Close the game first: saves can only be imported while the game is closed.'))
+            return
         if not saves:
             self.messagebox.showerror('Shadow of the Colossus', _(
                 'Nenhum save encontrado aí (um save é uma pasta com sce_sys/param.sfo).',
@@ -3005,7 +3021,7 @@ class Launcher(sotc_search.SearchMixin, sotc_pad.PadMixin):
         skip = tk.Label(rail, text=_('Pular: eu configuro sozinho', 'Skip: I set it up myself'), bg=BG, fg=MUTED,
                         font=(ui_font(), 9, 'underline'), cursor='hand2')
         skip.pack(pady=(0, px(20)))
-        skip.bind('<Button-1>', lambda _e: self.finish_setup())
+        skip.bind('<Button-1>', lambda _e: self.setup_busy or self.finish_setup())
         right = tk.Frame(frame, bg=PANEL)
         right.pack(side='left', fill='both', expand=True)
         bar = tk.Frame(right, bg=BG, height=px(72))
@@ -3030,6 +3046,7 @@ class Launcher(sotc_search.SearchMixin, sotc_pad.PadMixin):
         self.setup_body = tk.Frame(right, bg=PANEL)
         self.setup_body.pack(fill='both', expand=True, padx=px(40), pady=(px(10), 0))
         self.setup_step, self.setup_found_game, self.setup_hw = 0, None, None
+        self.setup_busy = False  # unpacking or configuring: the guide's page stays as it is
         self.setup_found_packages = None
         self.setup_show(0)
         # Meanwhile: the game on this PC (offered with one click) and the PC check.
@@ -3049,7 +3066,7 @@ class Launcher(sotc_search.SearchMixin, sotc_pad.PadMixin):
                                                           if p['kind'] == 'game'), None)
                     except Exception:  # never stop the launcher over a search problem
                         self.setup_found_packages = None
-                self.ui_calls.put(lambda: self.setup_step == 1 and self.setup_show(1))
+                self.ui_calls.put(lambda: self.setup_step == 1 and not self.setup_busy and self.setup_show(1))
             threading.Thread(target=work, daemon=True).start()
 
     def setup_paint_rail(self):
@@ -3322,6 +3339,7 @@ class Launcher(sotc_search.SearchMixin, sotc_pad.PadMixin):
             return True
         self.setup_button.configure(state='disabled')
         self.setup_hint.unbind('<Button-1>')
+        self.setup_busy = True
         self.setup_back.configure(state='disabled')
         self.setup_hint.configure(text=_('Desempacotando…', 'Unpacking…'), foreground=MUTED)
 
@@ -3336,7 +3354,8 @@ class Launcher(sotc_search.SearchMixin, sotc_pad.PadMixin):
                 places = unpack(packages, folder, PORT_DIR, progress)
             except Exception as error:  # shown to the player, the setup stays open
                 message = str(error)
-                self.ui_calls.put(lambda: (self.setup_button.configure(state='normal'),
+                self.ui_calls.put(lambda: (setattr(self, 'setup_busy', False),
+                                           self.setup_button.configure(state='normal'),
                                            self.setup_back.configure(state='normal'),
                                            self.setup_hint.configure(text='', foreground=MUTED),
                                            self.messagebox.showerror('Shadow of the Colossus', _(
@@ -3372,6 +3391,7 @@ class Launcher(sotc_search.SearchMixin, sotc_pad.PadMixin):
 
     def configure_from_game(self, game, chosen=None):
         """Game chosen: DLC from the game folder, saves, sound — in the background."""
+        self.setup_busy = True
         self.setup_button.configure(state='disabled')
         self.setup_hint.unbind('<Button-1>')
         self.setup_hint.configure(text=_('Configurando…', 'Setting up…'), foreground=MUTED)
@@ -3462,6 +3482,8 @@ class Launcher(sotc_search.SearchMixin, sotc_pad.PadMixin):
             self.setup_line(card, mark, text)
         self.setup_button.configure(state='normal', text=_('Trocar a pasta do jogo…', 'Change the game folder…'))
         self.setup_next.configure(state='normal')
+        self.setup_back.configure(state='normal')
+        self.setup_busy = False
         self.collect()
 
     def choose_sound_for_setup(self):
@@ -3480,6 +3502,7 @@ class Launcher(sotc_search.SearchMixin, sotc_pad.PadMixin):
                 'That folder does not have libSceNgs2.sprx and libSceUlt.sprx.'))
 
     def finish_setup(self):
+        self.setup_step = -1
         self.app['setup_done'] = True
         self.collect()
         self.setup_frame.destroy()
@@ -3707,8 +3730,17 @@ class Launcher(sotc_search.SearchMixin, sotc_pad.PadMixin):
         self.refresh_gpu_choices()
 
     def drain_output(self):
+        try:
+            self.drain_queues()
+        finally:
+            self.root.after(100, self.drain_output)
+
+    def drain_queues(self):
         while not self.ui_calls.empty():
-            self.ui_calls.get_nowait()()
+            try:
+                self.ui_calls.get_nowait()()
+            except self.tk.TclError:  # a setup widget closed before its background work ended
+                pass
         try:
             for _i in range(500):
                 item = self.output.get_nowait()
@@ -3728,7 +3760,6 @@ class Launcher(sotc_search.SearchMixin, sotc_pad.PadMixin):
                     self.append(item)
         except queue.Empty:
             pass
-        self.root.after(100, self.drain_output)
 
     def stop(self):
         if self.job:

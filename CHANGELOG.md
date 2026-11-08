@@ -7,8 +7,8 @@
 ### 1.3.0 — 2026-11-09 (fork Madmer)
 Brings into the fork versions 0.71 to 0.72.2 of the original project, parts of its open pull
 requests and fixes for new issues. Thanks to **AjncSystem, Lucas-blip-png, Oussama268,
-HiddenUserHere, Scuilion and InkAurora**. Saves and the shader cache are kept. An update turns the
-improvements marked below on in existing settings once.
+HiddenUserHere, Scuilion and InkAurora**. Saves are kept; on cards with 8 GB of video memory or more the shader cache is rebuilt on the first
+start. An update turns the improvements marked below on in existing settings once.
 
 **New**
 - **New launcher look** based on the bloodborne_pc launcher: the game's night stone and gold, search
@@ -1118,8 +1118,8 @@ heaviest section ~17 → **29–34 FPS**.
 ### 1.3.0 — 2026-11-09 (форк Madmer)
 Включает в форк версии 0.71–0.72.2 исходного проекта, часть его открытых pull requests и
 исправления новых issues. Благодарим **AjncSystem, Lucas-blip-png, Oussama268, HiddenUserHere,
-Scuilion и InkAurora**. Сохранения и кэш шейдеров сохраняются. Обновление один раз включает в
-существующих настройках улучшения, отмеченные ниже.
+Scuilion и InkAurora**. Сохранения не затрагиваются; на видеокартах с объёмом памяти 8 ГБ и более кэш шейдеров создаётся
+заново при первом запуске. Обновление один раз включает в существующих настройках улучшения, отмеченные ниже.
 
 **Новое**
 - **Новое оформление лаунчера** на основе лаунчера bloodborne_pc: ночной камень и золото игры, поиск
