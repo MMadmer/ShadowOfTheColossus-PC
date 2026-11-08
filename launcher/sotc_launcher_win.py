@@ -215,7 +215,7 @@ APP_DEFAULTS = {'ui_language': '', 'game_dir': str(DEFAULT_GAME_DIR), 'sys_modul
                 'output_res': '1920x1080', 'render_res': '', 'upscaler': 'fsr1', 'sharpness': '250', 'mouse': True,
                 'mouse_sens': '1.0', 'mouse_invert': False, 'neo': False, 'fx_vignette': True,
                 'fx_fog': True, 'fx_ssao': True, 'fx_shadows': True, 'fx_motionblur': False, 'engine_cvars': '', 'perf_culling': True,
-                'perf_record_thread': True, 'perf_dma': True, 'gpu_submit': 'auto', 'vram_use': 'normal', 'vram_profile': 'auto', 'gpu_vram_mb': 0,
+                'perf_record_thread': True, 'perf_dma': True, 'amd_gcn_compat': False, 'gpu_submit': 'auto', 'vram_use': 'normal', 'vram_profile': 'auto', 'gpu_vram_mb': 0,
                 'volume': '100', 'shadow_reuse': '0',
                 'grass_shadows': '2', 'grass_distance': '1', 'grass_height': '1', 'weed_distance': '1', 'weed_height': '1',
                 'grass_fade': '1', 'grass_detail': '1', 'library_dirs': [], 'keys': {},
@@ -588,6 +588,8 @@ def fsr4_mode(s):
 UPSCALERS = [('fsr1', ('AMD FSR 1', 'AMD FSR 1')),
              ('fsr4', ('AMD FSR 4.1 (RX 6000+; FSR 3.1 nas outras)', 'AMD FSR 4.1 (RX 6000+; FSR 3.1 on others)')),
              ('bilinear', ('Bilinear', 'Bilinear'))]
+if not (PORT_DIR / 'bin' / 'amd_fidelityfx_loader_vk.dll').is_file():
+    UPSCALERS = [item for item in UPSCALERS if item[0] != 'fsr4']
 # Frame rate: 30 (the game's cap, as on PS4), 60 (the game's own 60 FPS mode, that of the PS4 Pro
 # Performance mode, at most one frame per two 120 Hz vblanks: SOTC_FPS_LIMIT=60) or unlimited.
 FPS_MODES = [('30', ('30 FPS (como no PS4)', '30 FPS (as on PS4)')),
@@ -906,6 +908,10 @@ def migrate_settings(s):
     # becomes the selector, off.
     if isinstance(s.get('skip_intro'), bool):
         s['skip_intro'] = 'off'
+    # The upstream launcher's two boxes; +nointro broke saving (#378) and is not offered here.
+    film, logos = s.pop('skip_film', False), s.pop('skip_logos', False)
+    if (film or logos) and s.get('skip_intro', 'off') == 'off':
+        s['skip_intro'] = 'all' if film else 'logos'
     if s.pop('button_icons', None) == 'xbox' and not s.get('pad_glyphs'):
         s['pad_glyphs'] = 'xbox'
     # The upstream launcher (0.70) chose DLSS as an upscaler with its own mode key; here DLSS has
@@ -947,32 +953,6 @@ def _shortcut_script(play, frozen, executable, port_dir, game_icon):
             + (f'$s.Arguments={_ps_quote(arguments)};' if arguments else '') + '$s.Save()')
 
 
-def clear_shader_cache_after_update(settings):
-    """sotc: 0.72.2: a port update clears the shader cache once. Shaders and pipelines built by the
-    previous port can conflict with the new one (wrong or missing effects, crashes when one is
-    loaded); the game builds them again, with some stutter at the start. The port version that
-    built the cache is kept next to it (user/cache/port_version.txt; the --play path never saves
-    the settings, so they cannot hold it)."""
-    data = user_dir(settings)
-    marker = data / 'cache' / 'port_version.txt'
-    try:
-        built_by = marker.read_text(encoding='utf-8').strip()
-    except OSError:
-        built_by = ''
-    if built_by == VERSION:
-        return
-    # A first start (no cache yet) has nothing to clear; an older cache without the marker was
-    # built by a port before 0.72.2.
-    if (data / 'cache').exists() or (data / 'shader').exists():
-        for name in ('cache', 'shader'):
-            shutil.rmtree(data / name, ignore_errors=True)
-    try:
-        marker.parent.mkdir(parents=True, exist_ok=True)
-        marker.write_text(VERSION + '\n', encoding='utf-8')
-    except OSError:
-        pass
-
-
 def load_settings():
     """Saved settings over the defaults, migrated (migrate_settings). Older settings that turned
     DLSS-G on with SOTC_DLSSG=1 in the extra variables get the frame generation setting instead."""
@@ -1009,7 +989,6 @@ def load_settings():
             if before < sotc_update.version_key(version):
                 settings.update(values)
     settings['settings_version'] = VERSION
-    clear_shader_cache_after_update(settings)
     if 'framegen' not in saved:
         extra = str(settings.get('extra_env', '')).split()
         if 'SOTC_DLSSG=1' in extra:
@@ -1168,6 +1147,10 @@ def game_environment(s):
     env['SOTC_GRASS'] = ' '.join(str(s.get(k) or '1') for k in
                                  ('grass_distance', 'grass_height', 'weed_distance', 'weed_height', 'grass_detail'))
     env['SOTC_RECORD_THREAD'] = '1' if s.get('perf_record_thread', True) else '0'
+    # RX 470-590 and Vega, opt-in for testers: 32-lane shaders stop the white flicker, the NVIDIA
+    # shader options the device loss (#340, #375, #41).
+    if s.get('amd_gcn_compat'):
+        env['SOTC_AMD_WAVE32'], env['SOTC_GCN_NV'] = '1', '1'
     if not s.get('perf_dma', True):
         env['BB_DIRECT_MEMORY_ACCESS'] = '0'
     # Periodic submits and readbacks ahead: by default only with NVIDIA (vk_rasterizer.cpp).
@@ -1229,13 +1212,6 @@ def game_environment(s):
     # sotc: 0.72.2: images of 2048x2048 and more get memory of their own: the shared 64 MiB
     # blocks kept up to 1.8 GB free after an area's textures went (over the budget on 8 GB cards).
     env.setdefault('SOTC_IMAGE_DEDICATED', '1')
-    # sotc: 0.72.2 (T48): new textures read by the GPU in the game's memory (no CPU copy at the
-    # first entry of an area; forest 14 -> 9-10 slow frames). The game's 10 GB are imported at
-    # boot (~2.6 s) and stay pinned in RAM: only with 24 GB or more.
-    if (sotc_hardware.memory_gb() or 0) >= 24:
-        env.setdefault('SOTC_PC_MEMORY', '1')
-        env.setdefault('SOTC_PC_MEMORY_PREIMPORT', '1')
-        env.setdefault('SOTC_TEX_DIRECT', '1')
     # sotc: "Maximum" in PS4 Pro mode exhausted the game's page pool within minutes at the Shrine
     # (0x1a371, 22 Oct) until tabnul's page allocator fix (PR #288, sotc_modes.py POOL_FIX): an
     # hour without a crash with it (26 Oct). Experimental there; SOTC_MAX_IN_PRO=0 brings back High.
@@ -2062,13 +2038,21 @@ class Launcher(sotc_search.SearchMixin, sotc_pad.PadMixin):
         self.dlss_box = self.choice(f, 'dlss', DLSS_MODES)
         self.row(f, 'NVIDIA DLSS', self.dlss_box,
                  _('Substitui a resolução de render; no modo PS4 Pro, amplia a imagem do próprio Pro.',
-                   'Replaces the render resolution; in PS4 Pro mode it upscales the Pro\'s own image.'))
+                   'Replaces the render resolution; in PS4 Pro mode it upscales the Pro\'s own image.') + '\n' +
+                 _('No painel da NVIDIA, mantenha o "Modo de baixa latência" em Desligado ou Ligado, não em Ultra: '
+                   'com Ultra o DLSS perde FPS.',
+                   'In the NVIDIA control panel, keep "Low Latency Mode" at Off or On, not Ultra: with Ultra, DLSS '
+                   'loses FPS.'))
         self.dlss_note = self.state_note(f)
         self.row(f, _('Resolução de saída', 'Output resolution'), self.choice(f, 'output_res', OUTPUTS),
                  _('Em telas ultralargas, menus e vídeos podem aparecer esticados.',
                    'On ultrawide screens, menus and videos may appear stretched.'))
         self.row(f, _('Upscaler', 'Upscaler'), self.choice(f, 'upscaler', UPSCALERS),
                  _('Usado em resoluções de saída acima de 1080p.', 'Used for output resolutions above 1080p.'))
+        if any(key == 'fsr4' for key, _t in UPSCALERS):
+            self.row(f, _('Modo do FSR 4', 'FSR 4 mode'), self.choice(f, 'fsr4_mode', FSR4_MODES),
+                     _('Usado quando o upscaler é o AMD FSR 4.1. Substitui a resolução de render.',
+                       'Used when the upscaler is AMD FSR 4.1. Replaces the render resolution.'))
         self.row(f, _('Nitidez', 'Sharpening'), self.choice(f, 'sharpness', SHARPNESS))
         self.section(f, _('Modo PS4 Pro', 'PS4 Pro mode'))
         self.check(f, 'neo', _('Ativar o modo PS4 Pro', 'Enable PS4 Pro mode'),
@@ -2082,6 +2066,13 @@ class Launcher(sotc_search.SearchMixin, sotc_pad.PadMixin):
         self.check(f, 'perf_dma', _('Reflexos completos da água', 'Full water reflections'),
                    _('Desativar melhora o desempenho; não é usado em placas AMD e Intel.',
                      'Turning it off improves performance; not used on AMD and Intel graphics cards.'))
+        if not re.search('nvidia|intel', str(self.gpu_name), re.I):
+            self.check(f, 'amd_gcn_compat', _('Compatibilidade AMD GCN (RX 470–590, Vega; em teste)',
+                                              'AMD GCN compatibility (RX 470–590, Vega; testing)'),
+                       _('Para placas AMD antigas com objetos brancos piscando ou perda do dispositivo. Os shaders são '
+                         'compilados novamente na primeira abertura. Se o resultado piorar, desative a opção.',
+                         'For older AMD cards with flickering white objects or a lost device. Shaders are rebuilt on '
+                         'the first start. If the result is worse, turn this option off.'))
         self.row(f, _('Otimização de envio à GPU', 'GPU submission optimization'), self.choice(f, 'gpu_submit', GPU_SUBMIT),
                  _('Experimental em placas AMD e Intel; se a tela ficar preta, selecione "Automático".',
                    'Experimental on AMD and Intel graphics cards; if the screen turns black, select "Automatic".'))
@@ -3364,6 +3355,13 @@ class Launcher(sotc_search.SearchMixin, sotc_pad.PadMixin):
         from sotc_discovery import find_game_in
         game = find_game_in(chosen)
         if not game and self.unpack_for_setup(chosen):
+            return
+        if not game and next(Path(chosen).glob('eboot.bin'), None) or not game and next(Path(chosen).glob('*/eboot.bin'), None):
+            self.messagebox.showerror('Shadow of the Colossus', _(
+                'Há um eboot.bin em\n{}\nmas esta versão do jogo não é compatível ou o arquivo está criptografado.\n\n'
+                'Use o dump decriptado de CUSA08809 (1.01) ou CUSA08034 (1.00).',
+                'An eboot.bin was found in\n{}\nbut this game version is not supported or the file is encrypted.\n\n'
+                'Use the decrypted dump of CUSA08809 (1.01) or CUSA08034 (1.00).').format(chosen))
             return
         if not game:
             self.messagebox.showerror('Shadow of the Colossus', _(
