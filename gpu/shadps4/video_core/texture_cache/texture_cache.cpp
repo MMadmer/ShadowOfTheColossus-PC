@@ -1310,7 +1310,7 @@ void TextureCache::RefreshImage(Image& image) {
     const bool expired_held = waiting && waited >= kMaxDeferFlips && waited < kMaxDeferHard &&
                               expired_cap && budget_used + image.info.guest_size > expired_cap;
     if (upload_budget && !image.sotc_has_data && !is_gpu_modified && budget_used &&
-        image.info.guest_size >= 256_KB && budget_used + image.info.guest_size > upload_budget &&
+        image.info.guest_size >= 256_KB && budget_used >= upload_budget &&
         image.aspect_mask == vk::ImageAspectFlagBits::eColor &&
         (!waiting || waited < kMaxDeferFlips || expired_held)) {
         constexpr u64 ZeroBytes = 64_MB;
