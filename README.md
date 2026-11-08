@@ -32,6 +32,7 @@ focused on performance, weak hardware and ease of use.
   be remapped, rumble strength adjusted.
 - **A launcher that sets everything up**: it finds the game on your drives, unpacks `.pkg` dumps
   (game, update and DLC), imports shadPS4 saves and updates itself.
+  A five-step first setup checks your PC and picks a play mode; saves can be backed up, exported and imported.
 - **An in-game menu** (Insert, F1 or L3+R3) to change FPS, frame generation, DLSS, textures and
   volume while playing.
 - Launcher and in-game menu in English, Russian, Spanish, Portuguese, Chinese, Japanese and Korean.
@@ -144,6 +145,9 @@ file, so no `.sprx`/`.prx` can end up in a package by mistake.
   original port this fork is based on.
 - [bloodborne_pc](https://github.com/Supermedo/bloodborne_pc) (Supermedo, deadinside28): the loader,
   native runtime and launcher the port grew from.
+- The launcher's look comes from bloodborne_pc's 1.9 launcher theme, with the
+  [Cinzel](https://github.com/NDISCOVER/Cinzel) and [Inter](https://github.com/rsms/inter) fonts
+  (SIL Open Font License).
 - [shadPS4](https://github.com/shadps4-emu/shadPS4) and
   [Pink-shadPS4](https://github.com/luizgustavs/Pink-shadPS4) (luizgustavs): the Vulkan video core
   and many game-specific fixes.
@@ -191,6 +195,7 @@ source is its git tag.
   мыши переназначаются, сила вибрации настраивается.
 - **Лаунчер, который всё настраивает сам**: находит игру на дисках, распаковывает дампы `.pkg`
   (игру, обновление и DLC), импортирует сохранения shadPS4 и обновляется самостоятельно.
+  Первоначальная настройка в пять шагов проверяет компьютер и подбирает игровой режим; сохранения можно копировать, экспортировать и импортировать.
 - **Меню в игре** (Insert, F1 или L3+R3) для изменения FPS, генерации кадров, DLSS, текстур и
   громкости во время игры.
 - Лаунчер и меню в игре на русском, английском, испанском, португальском, китайском, японском и
@@ -307,6 +312,9 @@ build.cmd
   оригинальный порт, на котором основан этот форк.
 - [bloodborne_pc](https://github.com/Supermedo/bloodborne_pc) (Supermedo, deadinside28) —
   загрузчик, нативная среда выполнения и лаунчер, из которых вырос порт.
+- Оформление программы запуска основано на теме программы запуска bloodborne_pc 1.9 и использует шрифты
+  [Cinzel](https://github.com/NDISCOVER/Cinzel) и [Inter](https://github.com/rsms/inter)
+  (SIL Open Font License).
 - [shadPS4](https://github.com/shadps4-emu/shadPS4) и
   [Pink-shadPS4](https://github.com/luizgustavs/Pink-shadPS4) (luizgustavs) — видеоядро Vulkan и
   многие исправления для игры.

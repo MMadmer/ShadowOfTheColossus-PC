@@ -37,6 +37,9 @@ repeated only when the game or the modules change. Saves and the shader cache ar
 
 Without the launcher, `SotC.bat` does the same by reading `sotc.ini`. `SotC.exe --play` starts the
 game directly with the launcher's last options, which is useful for shortcuts and for Steam.
+The launcher's Advanced page has a button that creates this shortcut on the desktop; it can be added to Steam as a non-Steam game.
+
+If the connection to GitHub cannot be verified (a certificate error, common with an antivirus or proxy that inspects HTTPS, or a Windows without up-to-date root certificates), the launcher says so and shows where to download the new version: https://github.com/MMadmer/ShadowOfTheColossus-PC/releases
 
 ## Image and performance
 

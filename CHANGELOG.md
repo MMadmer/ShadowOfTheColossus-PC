@@ -4,6 +4,56 @@
 
 ## English
 
+### 1.3.0 — 2026-11-09 (fork Madmer)
+Brings into the fork versions 0.71 to 0.72.2 of the original project, parts of its open pull
+requests and fixes for new issues. Thanks to **AjncSystem, Lucas-blip-png, Oussama268,
+HiddenUserHere, Scuilion and InkAurora**. Saves and the shader cache are kept. An update turns the
+improvements marked below on in existing settings once.
+
+**New**
+- **New launcher look** based on the bloodborne_pc launcher: the game's night stone and gold, search
+  across all settings (Ctrl+F), its own title bar and an expert view switch.
+- **First setup in five steps:** language, the game (folders and `.pkg` dumps are both found), a
+  check of the PC that picks a play mode, controls and a summary.
+- **Play modes** on the Play page: Normal, Pro, Extreme and Custom.
+- **Saves page:** a list with progress and dates, export and import as `.zip`, backups, and an
+  automatic backup when the game closes, also after a crash.
+- **Help page** with the most common problems and buttons that open the right setting; a **Report**
+  button makes a `.zip` of the logs for an issue; a **What's new** window opens once per version.
+- **Card memory** in the quick settings: cards with less than 8 GB get a lighter profile
+  automatically (Automatic, Light or Full).
+- **Controller test**, a **game monitor** choice with two or more monitors, **minimize to tray**, and
+  a desktop shortcut that starts the game directly (it can be added to Steam).
+- **Motion blur** option under Effects, off by default: it left a trail behind shadows in dark areas.
+- **AMD GCN compatibility** (RX 470–590, Vega), a test option on the Graphics page. It does not change
+  anything unless it is turned on.
+- The window title shows the port version and the play time.
+
+**Fixes**
+- **Coloured mosaic textures and crashes after loads** (worst in Time Attack): the game's 64 KiB page
+  pool freed pages twice. Every Time Attack colossus on Maximum ran without a mosaic or a crash.
+- **The ending:** no more stretched textures, flicker or closing between the ending and the intro.
+- **The game closing silently after "Resource Loading"** on PCs where Windows enforces Control Flow
+  Guard (AjncSystem #322, #282, #309).
+- **Black textures for moments at the Shrine** (AjncSystem #380, #377): an upload is now deferred only
+  after the frame has used its budget.
+- **DLSS with HDR output:** the game's TAA and vignette are no longer lost when FSR 1 takes over.
+- **Smoother area changes:** a staging reserve, fewer page faults in large texture copies, no global
+  lock for buffers past the mapped area, at most 128 MB per frame of overdue textures, and memory
+  releases that no longer wait for all the GPU work.
+- **Less video memory held:** images of 2048×2048 or more have memory of their own, which goes back to
+  the driver when they leave. Before, up to 1.8 GB stayed reserved and empty after an area change.
+- **Fast GPU readbacks are on by default** (about 25% more FPS at the Shrine), safe since the page
+  pool fix. Applied once to existing settings; the Debug page still turns them off.
+- **DLSS:** preset E by default and more weight on the current frame remove the trail behind shadows
+  in dark areas; no upscaling when the input is not smaller than the output.
+- **Integrated GPUs (AMD, Intel):** the video memory budget is at least the memory the driver reports,
+  not 2 GB.
+- **60 FPS mode** on CPUs with more than 4 threads no longer alternates 16.7 and 25 ms frames at
+  120 Hz, and the flip pacer never exceeds 120 FPS, above which the game's movement timing breaks.
+- The updater explains certificate failures and shows where to download the new version; a folder
+  with an unsupported or encrypted `eboot.bin` is reported as such instead of "not found".
+
 ### 1.2.0 — 2026-10-31 (fork Madmer)
 Brings into the fork version 0.70 of the original project and versions 0.60.6-C1 to C3 (below), parts
 of its open pull requests and fixes for issues that are still open. Thanks to **tabnul,
@@ -1064,6 +1114,62 @@ heaviest section ~17 → **29–34 FPS**.
 ---
 
 ## Русский
+
+### 1.3.0 — 2026-11-09 (форк Madmer)
+Включает в форк версии 0.71–0.72.2 исходного проекта, часть его открытых pull requests и
+исправления новых issues. Благодарим **AjncSystem, Lucas-blip-png, Oussama268, HiddenUserHere,
+Scuilion и InkAurora**. Сохранения и кэш шейдеров сохраняются. Обновление один раз включает в
+существующих настройках улучшения, отмеченные ниже.
+
+**Новое**
+- **Новое оформление лаунчера** на основе лаунчера bloodborne_pc: ночной камень и золото игры, поиск
+  по всем настройкам (Ctrl+F), собственная строка заголовка и переключатель расширенного вида.
+- **Первоначальная настройка в пять шагов:** язык, игра (обнаруживаются и папки, и дампы `.pkg`),
+  проверка компьютера с выбором игрового режима, управление и итоговая сводка.
+- **Игровые режимы** на странице «Играть»: «Обычный», «Pro», «Экстремальный» и «Пользовательский».
+- **Страница «Сохранения»:** список с прогрессом и датами, экспорт и импорт в формате `.zip`, резервные
+  копии, а также автоматическое резервное копирование при закрытии игры, в том числе после вылета.
+- **Страница «Справка»** с наиболее частыми проблемами и кнопками перехода к нужной настройке; кнопка
+  **«Отчёт»** создаёт архив `.zip` с журналами для issue; окно **«Что нового»** открывается один раз для
+  каждой версии.
+- **«Память видеокарты»** в быстрых настройках: для видеокарт с объёмом памяти менее 8 ГБ автоматически
+  применяется облегчённый профиль («Автоматически», «Облегчённый» или «Полный»).
+- **Проверка контроллера**, **выбор монитора** для игры при наличии двух и более мониторов,
+  **сворачивание в область уведомлений** и ярлык на рабочем столе для прямого запуска игры (его можно
+  добавить в Steam).
+- **Параметр «Размытие в движении»** в разделе «Эффекты», по умолчанию отключён: размытие оставляло
+  шлейф за тенями в тёмных областях.
+- **Совместимость с AMD GCN** (RX 470–590, Vega) — тестовый параметр на странице «Графика». Пока параметр
+  не включён, он ни на что не влияет.
+- В заголовке окна отображаются версия порта и время игры.
+
+**Исправления**
+- **Цветная мозаика на текстурах и вылеты после загрузок** (сильнее всего в Time Attack): пул страниц
+  игры по 64 КиБ освобождал страницы дважды. Все колоссы Time Attack на максимальном качестве
+  пройдены без мозаики и вылетов.
+- **Финал игры:** устранены растянутые текстуры, мерцание и закрытие игры при переходе от финала к
+  вступлению.
+- **Закрытие игры без сообщения после «Resource Loading»** на компьютерах, где Windows принудительно
+  применяет Control Flow Guard (AjncSystem #322, #282, #309).
+- **Кратковременно чёрные текстуры в святилище** (AjncSystem #380, #377): загрузка теперь откладывается
+  только после того, как кадр израсходовал свой бюджет.
+- **DLSS при выводе в HDR:** при переходе на FSR 1 больше не теряются TAA и виньетка игры.
+- **Более плавная смена областей:** резерв временной памяти, меньше ошибок страниц при крупном
+  копировании текстур, отсутствие глобальной блокировки для буферов за границей отображённой
+  области, не более 128 МБ просроченных текстур на кадр, освобождение памяти без ожидания всей работы GPU.
+- **Меньше удерживаемой видеопамяти:** изображения от 2048×2048 получают собственную память, которая
+  возвращается драйверу при их удалении. Ранее после смены области до 1,8 ГБ оставались
+  зарезервированными и пустыми.
+- **Быстрое чтение из GPU включено по умолчанию** (примерно на 25% больше FPS в святилище) и безопасно
+  после исправления пула страниц. Один раз применяется к существующим настройкам; отключить его можно
+  на странице «Отладка».
+- **DLSS:** пресет E по умолчанию и больший вес текущего кадра устраняют шлейф за тенями в тёмных
+  областях; масштабирование не выполняется, если входное изображение не меньше выходного.
+- **Встроенные GPU (AMD, Intel):** бюджет видеопамяти не меньше объёма, заявленного драйвером, а не 2 ГБ.
+- **Режим 60 FPS** на процессорах с числом потоков более 4 больше не чередует кадры по 16,7 и 25 мс при
+  120 Гц, а равномерная подача кадров не превышает 120 FPS, выше которых нарушается тайминг движения в игре.
+- Средство обновления объясняет ошибки сертификатов и указывает адрес для загрузки новой версии; папка с
+  неподдерживаемым или зашифрованным `eboot.bin` определяется как таковая, а не как «не найдено».
 
 ### 1.2.0 — 2026-10-31 (форк Madmer)
 Включает в форк версию 0.70 исходного проекта и версии 0.60.6-C1–C3 (см. ниже), часть открытых в
