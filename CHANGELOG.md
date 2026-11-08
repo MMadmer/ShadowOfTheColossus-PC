@@ -16,6 +16,8 @@ start. An update turns the improvements marked below on in existing settings onc
 - **First setup in five steps:** language, the game (folders and `.pkg` dumps are both found), a
   check of the PC that picks a play mode, controls and a summary.
 - **Play modes** on the Play page: Normal, Pro, Extreme and Custom.
+- **AMD FSR 4.1 upscaler** (official AMD FSR SDK 2.4, signed DLLs included, experimental): FSR 4.1 on
+  Radeon RX 6000, 7000 and 9000, FSR 3.1 on other cards. Graphics > Upscaler, with its own mode.
 - **Saves page:** a list with progress and dates, export and import as `.zip`, backups, and an
   automatic backup when the game closes, also after a crash.
 - **Help page** with the most common problems and buttons that open the right setting; a **Report**
@@ -1127,6 +1129,9 @@ Scuilion и InkAurora**. Сохранения не затрагиваются; �
 - **Первоначальная настройка в пять шагов:** язык, игра (обнаруживаются и папки, и дампы `.pkg`),
   проверка компьютера с выбором игрового режима, управление и итоговая сводка.
 - **Игровые режимы** на странице «Играть»: «Обычный», «Pro», «Экстремальный» и «Пользовательский».
+- **Масштабирование AMD FSR 4.1** (официальный AMD FSR SDK 2.4, подписанные DLL входят в комплект,
+  экспериментальная функция): FSR 4.1 на Radeon RX 6000, 7000 и 9000, FSR 3.1 на остальных видеокартах.
+  Графика > Upscaler, с отдельным режимом.
 - **Страница «Сохранения»:** список с прогрессом и датами, экспорт и импорт в формате `.zip`, резервные
   копии, а также автоматическое резервное копирование при закрытии игры, в том числе после вылета.
 - **Страница «Справка»** с наиболее частыми проблемами и кнопками перехода к нужной настройке; кнопка

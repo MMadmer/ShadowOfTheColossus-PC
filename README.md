@@ -24,6 +24,7 @@ focused on performance, weak hardware and ease of use.
 - **NVIDIA DLSS and DLAA** on GeForce RTX cards, also in PS4 Pro mode and at any aspect ratio, and
   **frame generation** (AMD FSR 3.1 on any card, NVIDIA DLSS-G on RTX 40/50, up to x6 on RTX 50)
   with a sharp interface.
+- **AMD FSR 4.1** upscaling on Radeon RX 6000 and newer, FSR 3.1 on other cards (experimental).
 - **30 or 60 FPS**, resolutions from 720p to 4K, widescreen 16:10, 21:9 and 32:9, a wider field of
   view (up to 130%), PS4 Pro mode, high quality textures, 16x texture filtering, grass and shadow
   settings, HDR (experimental).
@@ -187,6 +188,7 @@ source is its git tag.
 - **NVIDIA DLSS и DLAA** на видеокартах GeForce RTX, в том числе в режиме PS4 Pro и при любом
   соотношении сторон, и **генерация кадров** (AMD FSR 3.1 на любой видеокарте, NVIDIA DLSS-G на
   RTX 40/50, до x6 на RTX 50) с чётким интерфейсом.
+- **Масштабирование AMD FSR 4.1** на Radeon RX 6000 и новее, FSR 3.1 на остальных видеокартах (экспериментальная функция).
 - **30 или 60 FPS**, разрешения от 720p до 4K, широкие экраны 16:10, 21:9 и 32:9, расширенное поле
   зрения (до 130%), режим PS4 Pro, текстуры высокого качества, анизотропная фильтрация 16x,
   настройки травы и теней, HDR (экспериментально).
