@@ -74,6 +74,10 @@ bool SuperResolution();
 /// the output: PS4 Pro Cinematic mode at 1080p).
 bool SuperResolutionUpscaling();
 
+/// sotc: the game's own HDR output is on: super resolution declines the frames (TAA and the
+/// vignette stay in the game's hands, FSR 1 upscales).
+void SetHdr(bool hdr);
+
 /// DLSS Super Resolution works on this device, also while F9 has it switched off.
 bool SuperResolutionAvailable();
 

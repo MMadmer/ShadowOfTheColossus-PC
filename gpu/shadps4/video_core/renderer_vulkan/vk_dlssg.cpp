@@ -1125,6 +1125,12 @@ bool SuperResolution() {
 // sotc: the last frame's input was not smaller than the output (Upscale), so DLSS took no frame.
 std::atomic<bool> sr_declined{false};
 
+std::atomic<bool> sr_hdr{false};
+
+void SetHdr(bool hdr) {
+    sr_hdr.store(hdr, std::memory_order_relaxed);
+}
+
 bool SuperResolutionUpscaling() {
     return SuperResolution() && !sr_declined.load(std::memory_order_relaxed);
 }
@@ -1513,6 +1519,11 @@ Upscaled Upscale(u32 frame_id, Scheduler& scheduler, VideoCore::TextureCache& te
     }
     if (!SuperResolution() || frame_id >= kMaxFrames) {
         sr_prev = false;
+        return {};
+    }
+    if (sr_hdr.load(std::memory_order_relaxed)) {
+        sr_prev = false;
+        sr_declined.store(true, std::memory_order_relaxed);
         return {};
     }
     out_width = width;
