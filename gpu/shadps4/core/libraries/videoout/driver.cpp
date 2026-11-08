@@ -1312,6 +1312,14 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
     auto last_flip_time = Clock::now();
     auto prev_arrival = last_flip_time;
     std::chrono::nanoseconds arrival_ema = vblank_period;
+    // sotc: above 120 FPS the game's movement timing breaks; the vblank grid used to prevent it.
+    constexpr std::chrono::nanoseconds kMinFlip{1'000'000'000 / 120};
+    // sotc: the capped path (launcher 60 FPS) on subticks too: waiting for whole vblanks showed
+    // frames under 60 FPS as alternating 16.7 and 25 ms at 120 Hz (AjncSystem#351). limit_next is
+    // the deadline of the next capped flip. Not on 4 usable CPUs or fewer: extra wakeups.
+    const bool pace_capped = Common::UsableCpuCount() > 4;
+    const auto subtick = std::chrono::duration_cast<std::chrono::nanoseconds>(vblank_period) / flip_subticks;
+    auto limit_next = last_flip_time;
 
     const auto receive_request = [this] -> Request {
         std::scoped_lock lk{mutex};
@@ -1324,18 +1332,22 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
     };
 
     // sotc: the front request once the pacer releases it; `held` while one waits for its time.
-    const auto receive_paced = [&](Clock::time_point now, bool& held) -> Request {
+    const auto receive_paced = [&](Clock::time_point now, u64 limit_vblanks, bool& held) -> Request {
         std::scoped_lock lk{mutex};
         held = false;
         if (requests.empty()) {
             return {};
         }
         const auto request = requests.front();
-        if (now < last_flip_time + arrival_ema && now < request.arrival + vblank_period) {
+        if ((limit_vblanks && now + subtick / 2 < limit_next) || now < last_flip_time + kMinFlip ||
+            (now < last_flip_time + arrival_ema && now < request.arrival + vblank_period)) {
             held = true;
             return {};
         }
         requests.pop();
+        if (limit_vblanks) {
+            limit_next = (now - limit_next < subtick ? limit_next : now) + vblank_period * limit_vblanks;
+        }
         return request;
     };
 
@@ -1372,6 +1384,7 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
         bool take_request;
         // sotc: the flip pacer applies with unlimited FPS only (no game rate, no frame limit).
         bool paced = false;
+        u64 paced_limit = 0;
         if (!flip_pacing) {
             take_request = vblank_status.count % (flip_rate + 1) == 0;
         } else if (!flipped) {
@@ -1380,7 +1393,9 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
             const int live_limit = SotcFpsCap::limit_fps.load(std::memory_order_relaxed);
             const u64 limit_vblanks = live_limit >= 0 ? vblanks_for(live_limit) : start_limit_vblanks;
             take_request = limit_vblanks == 0 || vblank_status.count - last_flip_vblank >= limit_vblanks;
-            paced = limit_vblanks == 0 && SotcFpsCap::flip_pacer.load(std::memory_order_relaxed);
+            paced = (limit_vblanks == 0 || pace_capped) &&
+                    SotcFpsCap::flip_pacer.load(std::memory_order_relaxed);
+            paced_limit = limit_vblanks;
         } else {
             const u64 interval = u64(flip_rate + 1) * vblanks_per_60hz;
             take_request = vblank_status.count - last_flip_vblank >= interval;
@@ -1388,7 +1403,7 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
         Request request{};
         if (paced) {
             bool held;
-            request = receive_paced(tick, held);
+            request = receive_paced(tick, paced_limit, held);
             // An empty queue still redraws on vblank ticks, as on the grid.
             take_request = !held;
         } else {
